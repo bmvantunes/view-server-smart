@@ -8,6 +8,7 @@ import {
   defineViewServerConfig,
   type KafkaMappingInput,
   type KafkaMessageMetadata,
+  type KafkaTopicDefinition,
   type LiveSubscription,
   type LiveTransportAdapter,
   type ProtobufEsGeneratedMessageDescriptor,
@@ -16,6 +17,7 @@ import {
   type StatusEvent,
   type ViewServerBackpressureError,
   type ViewServerHealth,
+  type ViewServerInMemoryProviderOptions,
   type ViewServerInMemoryRuntime,
   type ViewServerRuntimeError,
   type ViewServerTransportError,
@@ -412,13 +414,141 @@ const assertCompileTimeContracts = () => {
         status: "open",
       },
     });
+    const patchEffect = runtime.patch("orders", "order-1", {
+      price: 43,
+      status: "closed",
+    });
 
     expectTypeOf<Effect.Error<typeof publishEffect>>().toEqualTypeOf<ViewServerRuntimeError>();
     expectTypeOf<Effect.Error<typeof snapshotEffect>>().toEqualTypeOf<ViewServerRuntimeError>();
+    expectTypeOf<Effect.Error<typeof patchEffect>>().toEqualTypeOf<ViewServerRuntimeError>();
+
+    const invalidPublishWrongField = runtime.publish("orders", {
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      // @ts-expect-error publish rows must match the topic schema
+      updatedAt: "not-a-number",
+    });
+
+    const invalidPublishMissingField = runtime.publish("trades", {
+      id: "trade-1",
+      symbol: "AAPL",
+      quantity: 1,
+      price: 42,
+      // @ts-expect-error publish rows must include all required topic fields
+      updatedAt: 1,
+    });
+
+    const invalidPublishTopic = runtime.publish(
+      // @ts-expect-error runtime publish topics are constrained to configured topics
+      "customers",
+      {
+        id: "customer-1",
+      },
+    );
+
+    const invalidPatchField = runtime.patch("orders", "order-1", {
+      // @ts-expect-error patch fields must belong to the selected topic row
+      missing: true,
+    });
+
+    const invalidPatchValue = runtime.patch("orders", "order-1", {
+      // @ts-expect-error patch field values must match the selected topic row
+      price: "not-a-number",
+    });
+
+    const invalidSnapshotTopic = runtime.snapshot(
+      // @ts-expect-error snapshot topics are constrained to configured topics
+      "customers",
+      {},
+    );
+
+    const invalidSnapshotFilter = runtime.snapshot("orders", {
+      where: {
+        // @ts-expect-error snapshot filters must use values from the selected topic row
+        price: "not-a-number",
+      },
+    });
+
+    expectTypeOf<
+      Effect.Error<typeof invalidPublishWrongField>
+    >().toEqualTypeOf<ViewServerRuntimeError>();
+    expectTypeOf<
+      Effect.Error<typeof invalidPublishMissingField>
+    >().toEqualTypeOf<ViewServerRuntimeError>();
+    expectTypeOf<
+      Effect.Error<typeof invalidPublishTopic>
+    >().toEqualTypeOf<ViewServerRuntimeError>();
+    expectTypeOf<Effect.Error<typeof invalidPatchField>>().toEqualTypeOf<ViewServerRuntimeError>();
+    expectTypeOf<Effect.Error<typeof invalidPatchValue>>().toEqualTypeOf<ViewServerRuntimeError>();
+    expectTypeOf<
+      Effect.Error<typeof invalidSnapshotTopic>
+    >().toEqualTypeOf<ViewServerRuntimeError>();
+    expectTypeOf<
+      Effect.Error<typeof invalidSnapshotFilter>
+    >().toEqualTypeOf<ViewServerRuntimeError>();
   };
 
   expectTypeOf(assertRuntimeContracts).toBeFunction();
   expectTypeOf<ViewServerBackpressureError>().toMatchTypeOf<ViewServerRuntimeError>();
+
+  const assertProviderContracts = (
+    options: ViewServerInMemoryProviderOptions<typeof viewServer.topics>,
+  ) => {
+    type ProviderOrderSeedRow = NonNullable<NonNullable<typeof options.seed>["orders"]>[number];
+    expectTypeOf<ProviderOrderSeedRow>().toEqualTypeOf<{
+      readonly id: string;
+      readonly customerId: string;
+      readonly status: "open" | "closed" | "cancelled";
+      readonly price: number;
+      readonly region: string;
+      readonly updatedAt: number;
+    }>();
+  };
+
+  expectTypeOf(assertProviderContracts).toBeFunction();
+
+  const validProviderOptions: ViewServerInMemoryProviderOptions<typeof viewServer.topics> = {
+    seed: {
+      orders: [
+        {
+          id: "order-1",
+          customerId: "customer-1",
+          status: "open",
+          price: 42,
+          region: "usa",
+          updatedAt: 1,
+        },
+      ],
+    },
+  };
+
+  expectTypeOf(validProviderOptions.runtime).toEqualTypeOf<
+    ViewServerInMemoryRuntime<typeof viewServer.topics> | undefined
+  >();
+
+  const invalidProviderOptions: ViewServerInMemoryProviderOptions<typeof viewServer.topics> = {
+    seed: {
+      orders: [
+        {
+          id: "order-1",
+          customerId: "customer-1",
+          status: "open",
+          price: 42,
+          region: "usa",
+          // @ts-expect-error seed rows must match the topic schema
+          updatedAt: "not-a-number",
+        },
+      ],
+    },
+  };
+
+  expectTypeOf(invalidProviderOptions).toMatchTypeOf<
+    ViewServerInMemoryProviderOptions<typeof viewServer.topics>
+  >();
 
   defineViewServerConfig({
     topics: {
@@ -483,6 +613,21 @@ const assertCompileTimeContracts = () => {
   });
 
   localKafkaTopic({
+    // @ts-expect-error Kafka topic regions must be non-empty
+    regions: [],
+    protoValue: ordersValueProto,
+    viewServerTopic: "orders",
+    mapping: ({ key, value }) => ({
+      id: key,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region: "usa",
+      updatedAt: value.updatedAt,
+    }),
+  });
+
+  localKafkaTopic({
     regions: ["usa"],
     protoValue: ordersValueProto,
     // @ts-expect-error Kafka mappings must target a configured View Server topic
@@ -494,6 +639,62 @@ const assertCompileTimeContracts = () => {
       price: value.price,
       region,
       updatedAt: value.updatedAt,
+    }),
+  });
+
+  const invalidExtraKafkaTopicField: KafkaTopicDefinition<
+    typeof viewServer.topics,
+    typeof localKafkaRegions,
+    "orders",
+    typeof ordersValueProto,
+    undefined,
+    readonly ["usa"]
+  > = {
+    regions: ["usa"],
+    protoValue: ordersValueProto,
+    viewServerTopic: "orders",
+    // @ts-expect-error Kafka topic definitions reject unknown topic contract fields
+    extraTopicField: true,
+    mapping: ({ key, value, region }) => ({
+      id: key,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
+      updatedAt: value.updatedAt,
+    }),
+  };
+
+  expectTypeOf(invalidExtraKafkaTopicField.viewServerTopic).toEqualTypeOf<"orders">();
+
+  localKafkaTopic({
+    regions: ["usa"],
+    protoValue: ordersValueProto,
+    // @ts-expect-error unsupported proto key descriptors must fail instead of inferring unknown
+    protoKey: {},
+    viewServerTopic: "orders",
+    mapping: ({ key, value, region }) => ({
+      id: key,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
+      updatedAt: value.updatedAt,
+    }),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    protoValue: ordersValueProto,
+    protoKey: ordersKeyProto,
+    viewServerTopic: "orders",
+    // @ts-expect-error unannotated mapping returns must match the target View Server topic row
+    mapping: ({ key, value, region }) => ({
+      id: key.orderId,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
     }),
   });
 
@@ -582,6 +783,22 @@ const assertCompileTimeContracts = () => {
     });
 
     react.useLiveQuery("orders", {
+      where: {
+        // @ts-expect-error filter values must match the selected field type
+        price: "not-a-number",
+      },
+    });
+
+    react.useLiveQuery("orders", {
+      where: {
+        status: {
+          // @ts-expect-error filter arrays must contain selected field values
+          in: ["open", "pending"],
+        },
+      },
+    });
+
+    react.useLiveQuery("orders", {
       orderBy: [
         {
           // @ts-expect-error orderBy fields are constrained to the selected topic row
@@ -589,6 +806,27 @@ const assertCompileTimeContracts = () => {
           direction: "asc",
         },
       ],
+    });
+
+    react.useLiveQuery("orders", {
+      orderBy: [
+        {
+          field: "price",
+          // @ts-expect-error sort direction is constrained to asc or desc
+          direction: "ascending",
+        },
+      ],
+    });
+
+    react.useLiveQuery("orders", {
+      // @ts-expect-error projected fields are constrained to the selected topic row
+      fields: ["id", "missing"],
+    });
+
+    react.useLiveQuery("orders", {
+      // @ts-expect-error grouped queries reject groupBy fields not present on the topic row
+      groupBy: ["missing"],
+      aggregates: [{ type: "count", as: "count" }],
     });
 
     react.useLiveQuery("orders", {
@@ -602,6 +840,19 @@ const assertCompileTimeContracts = () => {
         },
       ],
     });
+
+    react.useLiveQuery("orders", {
+      groupBy: ["status"],
+      aggregates: [
+        {
+          type: "avg",
+          // @ts-expect-error avg aggregate fields must be numeric
+          field: "status",
+          as: "badAverage",
+        },
+      ],
+    });
+
     expectTypeOf(react.useViewServerTestRuntime()).toHaveProperty("publish");
   };
 

@@ -242,6 +242,7 @@ export type ReactHookContracts<Topics extends object> = {
 
 export type RuntimeValue<A> = A | Config.Config<A>;
 export type RuntimeRegions = Record<string, RuntimeValue<string>>;
+export type NonEmptyReadonlyArray<A> = readonly [A, ...ReadonlyArray<A>];
 
 const ProtoCodecTypeId = Symbol("@view-server/config/ProtoCodec");
 
@@ -301,7 +302,7 @@ type KafkaTopicWithoutProtoKey<
   Regions extends RuntimeRegions,
   ViewTopic extends Extract<keyof Topics, string>,
   ProtoValue,
-  TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
 > = {
   readonly regions: TopicRegions;
   readonly protoValue: SupportedProto<ProtoValue>;
@@ -317,7 +318,7 @@ type KafkaTopicWithProtoKey<
   ViewTopic extends Extract<keyof Topics, string>,
   ProtoValue,
   ProtoKey,
-  TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
 > = {
   readonly regions: TopicRegions;
   readonly protoValue: SupportedProto<ProtoValue>;
@@ -334,9 +335,8 @@ export type KafkaTopicDefinition<
   ViewTopic extends Extract<keyof Topics, string> = Extract<keyof Topics, string>,
   ProtoValue = unknown,
   ProtoKey = unknown,
-  TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>> = ReadonlyArray<
-    Extract<keyof Regions, string>
-  >,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>> =
+    NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
 > =
   | KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>
   | KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>;
@@ -346,14 +346,18 @@ type ValidateKafkaTopic<
   Regions extends RuntimeRegions,
   Candidate,
 > = Candidate extends {
-  readonly regions: infer TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>;
+  readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
+    Extract<keyof Regions, string>
+  >;
   readonly protoValue: infer ProtoValue;
   readonly protoKey: infer ProtoKey;
   readonly viewServerTopic: infer ViewTopic extends Extract<keyof Topics, string>;
 }
   ? KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>
   : Candidate extends {
-        readonly regions: infer TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>;
+        readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
+          Extract<keyof Regions, string>
+        >;
         readonly protoValue: infer ProtoValue;
         readonly viewServerTopic: infer ViewTopic extends Extract<keyof Topics, string>;
       }
@@ -630,7 +634,7 @@ export type DefineViewServerConfigInput<Topics extends object> = {
 
 export type KafkaTopicHelper<Topics extends object> = <const Regions extends RuntimeRegions>() => {
   <
-    const TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>,
+    const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
     ProtoValue,
     ProtoKey,
     const ViewTopic extends Extract<keyof Topics, string>,
@@ -638,7 +642,7 @@ export type KafkaTopicHelper<Topics extends object> = <const Regions extends Run
     topic: KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>,
   ): KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>;
   <
-    const TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>,
+    const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
     ProtoValue,
     const ViewTopic extends Extract<keyof Topics, string>,
   >(
@@ -649,7 +653,7 @@ export type KafkaTopicHelper<Topics extends object> = <const Regions extends Run
 export const defineKafkaTopic = <Topics extends object>(): KafkaTopicHelper<Topics> => {
   function forRegions<const Regions extends RuntimeRegions>() {
     function topicHelper<
-      const TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>,
+      const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
       ProtoValue,
       ProtoKey,
       const ViewTopic extends Extract<keyof Topics, string>,
@@ -657,14 +661,14 @@ export const defineKafkaTopic = <Topics extends object>(): KafkaTopicHelper<Topi
       topic: KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>,
     ): KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>;
     function topicHelper<
-      const TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>,
+      const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
       ProtoValue,
       const ViewTopic extends Extract<keyof Topics, string>,
     >(
       topic: KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>,
     ): KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>;
     function topicHelper<
-      const TopicRegions extends ReadonlyArray<Extract<keyof Regions, string>>,
+      const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
       ProtoValue,
       ProtoKey,
       const ViewTopic extends Extract<keyof Topics, string>,
