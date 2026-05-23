@@ -41,44 +41,53 @@ const Trade = Schema.Struct({
   region: Schema.String,
 });
 
-type OrderValue = {
+const ordersValueProto = defineProto<{
   readonly customerId: string;
   readonly status: "open" | "closed" | "cancelled";
   readonly price: number;
   readonly updatedAt: number;
-};
-
-type OrderKey = {
+}>();
+const ordersKeyProto = defineProto<{
   readonly orderId: string;
-};
-
-type TradeValue = {
+}>();
+const tradesValueProto = defineProto<{
   readonly symbol: string;
   readonly quantity: number;
   readonly price: number;
-};
+}>();
 
-type GeneratedOrderValue = Message<"viewserver.test.OrderValue"> & OrderValue;
-type GeneratedOrderKey = Message<"viewserver.test.OrderKey"> & OrderKey;
-
-const ordersValueProto = defineProto<OrderValue>();
-const ordersKeyProto = defineProto<OrderKey>();
-const tradesValueProto = defineProto<TradeValue>();
-
-const ordersValueSchema: ProtobufEsGeneratedMessageDescriptor<OrderValue> = {
+const ordersValueSchema: ProtobufEsGeneratedMessageDescriptor<{
+  readonly customerId: string;
+  readonly status: "open" | "closed" | "cancelled";
+  readonly price: number;
+  readonly updatedAt: number;
+}> = {
   typeName: "viewserver.test.OrderValue",
   fields: {},
   _viewServerProtoType: (value) => value,
 };
 
-const ordersKeySchema: ProtobufEsGeneratedMessageDescriptor<OrderKey> = {
+const ordersKeySchema: ProtobufEsGeneratedMessageDescriptor<{
+  readonly orderId: string;
+}> = {
   typeName: "viewserver.test.OrderKey",
   fields: {},
   _viewServerProtoType: (value) => value,
 };
 
-declare const generatedOrdersValueSchema: GenMessage<GeneratedOrderValue>;
-declare const generatedOrdersKeySchema: GenMessage<GeneratedOrderKey>;
+declare const generatedOrdersValueSchema: GenMessage<
+  Message<"viewserver.test.OrderValue"> & {
+    readonly customerId: string;
+    readonly status: "open" | "closed" | "cancelled";
+    readonly price: number;
+    readonly updatedAt: number;
+  }
+>;
+declare const generatedOrdersKeySchema: GenMessage<
+  Message<"viewserver.test.OrderKey"> & {
+    readonly orderId: string;
+  }
+>;
 
 const viewServer = defineViewServerConfig({
   topics: {
@@ -100,22 +109,6 @@ const kafkaRegions = {
 
 const kafkaTopic = viewServer.kafkaTopic<typeof kafkaRegions>();
 
-type OrdersWithKeyMapping = KafkaMappingInput<
-  typeof viewServer.topics,
-  "orders",
-  "usa" | "london",
-  typeof ordersValueProto,
-  typeof ordersKeyProto
->;
-
-type TradesStringKeyMapping = KafkaMappingInput<
-  typeof viewServer.topics,
-  "trades",
-  "usa",
-  typeof tradesValueProto,
-  undefined
->;
-
 describe("defineViewServerConfig", () => {
   it("defines topics and pure runtime option contracts without starting a runtime", () => {
     const runtimeOptions = viewServer.defineRuntimeOptions({
@@ -130,8 +123,13 @@ describe("defineViewServerConfig", () => {
             protoKey: ordersKeyProto,
             viewServerTopic: "orders",
             mapping: ({ key, value, region }) => {
-              expectTypeOf(key).toEqualTypeOf<OrderKey>();
-              expectTypeOf(value).toEqualTypeOf<OrderValue>();
+              expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
+              expectTypeOf(value).toEqualTypeOf<{
+                readonly customerId: string;
+                readonly status: "open" | "closed" | "cancelled";
+                readonly price: number;
+                readonly updatedAt: number;
+              }>();
               expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
               return {
                 id: key.orderId,
@@ -149,7 +147,11 @@ describe("defineViewServerConfig", () => {
             viewServerTopic: "trades",
             mapping: ({ key, value, region }) => {
               expectTypeOf(key).toEqualTypeOf<string>();
-              expectTypeOf(value).toEqualTypeOf<TradeValue>();
+              expectTypeOf(value).toEqualTypeOf<{
+                readonly symbol: string;
+                readonly quantity: number;
+                readonly price: number;
+              }>();
               expectTypeOf(region).toEqualTypeOf<"usa">();
               return {
                 id: key,
@@ -306,7 +308,12 @@ describe("public type surface", () => {
       viewServerTopic: "orders",
       mapping: ({ key, value, region }) => {
         expectTypeOf(key).toEqualTypeOf<string>();
-        expectTypeOf(value).toEqualTypeOf<OrderValue>();
+        expectTypeOf(value).toEqualTypeOf<{
+          readonly customerId: string;
+          readonly status: "open" | "closed" | "cancelled";
+          readonly price: number;
+          readonly updatedAt: number;
+        }>();
         expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
         return {
           id: key,
@@ -327,8 +334,13 @@ describe("public type surface", () => {
       protoKey: ordersKeySchema,
       viewServerTopic: "orders",
       mapping: ({ key, value, region }) => {
-        expectTypeOf(key).toEqualTypeOf<OrderKey>();
-        expectTypeOf(value).toEqualTypeOf<OrderValue>();
+        expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
+        expectTypeOf(value).toEqualTypeOf<{
+          readonly customerId: string;
+          readonly status: "open" | "closed" | "cancelled";
+          readonly price: number;
+          readonly updatedAt: number;
+        }>();
         expectTypeOf(region).toEqualTypeOf<"usa">();
         return {
           id: key.orderId,
@@ -356,8 +368,17 @@ const assertGeneratedSchemaContracts = () => {
     protoKey: generatedOrdersKeySchema,
     viewServerTopic: "orders",
     mapping: ({ key, value, region }) => {
-      expectTypeOf(key).toEqualTypeOf<GeneratedOrderKey>();
-      expectTypeOf(value).toEqualTypeOf<GeneratedOrderValue>();
+      expectTypeOf(key).toEqualTypeOf<
+        Message<"viewserver.test.OrderKey"> & { readonly orderId: string }
+      >();
+      expectTypeOf(value).toEqualTypeOf<
+        Message<"viewserver.test.OrderValue"> & {
+          readonly customerId: string;
+          readonly status: "open" | "closed" | "cancelled";
+          readonly price: number;
+          readonly updatedAt: number;
+        }
+      >();
       expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
       return {
         id: key.orderId,
@@ -370,7 +391,13 @@ const assertGeneratedSchemaContracts = () => {
     },
   });
 
-  expectTypeOf(keyedTopic.protoKey).toEqualTypeOf<GenMessage<GeneratedOrderKey>>();
+  expectTypeOf(keyedTopic.protoKey).toEqualTypeOf<
+    GenMessage<
+      Message<"viewserver.test.OrderKey"> & {
+        readonly orderId: string;
+      }
+    >
+  >();
 
   kafkaTopic({
     regions: ["usa", "london"],
@@ -378,7 +405,14 @@ const assertGeneratedSchemaContracts = () => {
     viewServerTopic: "orders",
     mapping: ({ key, value, region }) => {
       expectTypeOf(key).toEqualTypeOf<string>();
-      expectTypeOf(value).toEqualTypeOf<GeneratedOrderValue>();
+      expectTypeOf(value).toEqualTypeOf<
+        Message<"viewserver.test.OrderValue"> & {
+          readonly customerId: string;
+          readonly status: "open" | "closed" | "cancelled";
+          readonly price: number;
+          readonly updatedAt: number;
+        }
+      >();
       expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
       return {
         id: key,
@@ -398,17 +432,96 @@ const assertCompileTimeContracts = () => {
   };
   const localKafkaTopic = viewServer.kafkaTopic<typeof localKafkaRegions>();
 
-  expectTypeOf<OrdersWithKeyMapping["key"]>().toEqualTypeOf<OrderKey>();
-  expectTypeOf<OrdersWithKeyMapping["value"]>().toEqualTypeOf<OrderValue>();
-  expectTypeOf<OrdersWithKeyMapping["region"]>().toEqualTypeOf<"usa" | "london">();
-  expectTypeOf<OrdersWithKeyMapping["schema"]>().toEqualTypeOf<typeof Order>();
-  expectTypeOf<OrdersWithKeyMapping["metadata"]["sourceRegion"]>().toEqualTypeOf<
-    "usa" | "london"
-  >();
-  expectTypeOf<TradesStringKeyMapping["key"]>().toEqualTypeOf<string>();
-  expectTypeOf<TradesStringKeyMapping["value"]>().toEqualTypeOf<TradeValue>();
-  expectTypeOf<TradesStringKeyMapping["region"]>().toEqualTypeOf<"usa">();
-  expectTypeOf<TradesStringKeyMapping["schema"]>().toEqualTypeOf<typeof Trade>();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "orders",
+      "usa" | "london",
+      typeof ordersValueProto,
+      typeof ordersKeyProto
+    >["key"]
+  >().toEqualTypeOf<{ readonly orderId: string }>();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "orders",
+      "usa" | "london",
+      typeof ordersValueProto,
+      typeof ordersKeyProto
+    >["value"]
+  >().toEqualTypeOf<{
+    readonly customerId: string;
+    readonly status: "open" | "closed" | "cancelled";
+    readonly price: number;
+    readonly updatedAt: number;
+  }>();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "orders",
+      "usa" | "london",
+      typeof ordersValueProto,
+      typeof ordersKeyProto
+    >["region"]
+  >().toEqualTypeOf<"usa" | "london">();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "orders",
+      "usa" | "london",
+      typeof ordersValueProto,
+      typeof ordersKeyProto
+    >["schema"]
+  >().toEqualTypeOf<typeof Order>();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "orders",
+      "usa" | "london",
+      typeof ordersValueProto,
+      typeof ordersKeyProto
+    >["metadata"]["sourceRegion"]
+  >().toEqualTypeOf<"usa" | "london">();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "trades",
+      "usa",
+      typeof tradesValueProto,
+      undefined
+    >["key"]
+  >().toEqualTypeOf<string>();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "trades",
+      "usa",
+      typeof tradesValueProto,
+      undefined
+    >["value"]
+  >().toEqualTypeOf<{
+    readonly symbol: string;
+    readonly quantity: number;
+    readonly price: number;
+  }>();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "trades",
+      "usa",
+      typeof tradesValueProto,
+      undefined
+    >["region"]
+  >().toEqualTypeOf<"usa">();
+  expectTypeOf<
+    KafkaMappingInput<
+      typeof viewServer.topics,
+      "trades",
+      "usa",
+      typeof tradesValueProto,
+      undefined
+    >["schema"]
+  >().toEqualTypeOf<typeof Trade>();
 
   const assertRuntimeContracts = (runtime: ViewServerInMemoryRuntime<typeof viewServer.topics>) => {
     const publishEffect = runtime.publish("orders", {
@@ -731,8 +844,13 @@ const assertCompileTimeContracts = () => {
     protoKey: ordersKeyProto,
     viewServerTopic: "orders",
     mapping: ({ key, value, schema, metadata }) => {
-      expectTypeOf(key).toEqualTypeOf<OrderKey>();
-      expectTypeOf(value).toEqualTypeOf<OrderValue>();
+      expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
+      expectTypeOf(value).toEqualTypeOf<{
+        readonly customerId: string;
+        readonly status: "open" | "closed" | "cancelled";
+        readonly price: number;
+        readonly updatedAt: number;
+      }>();
       expectTypeOf(schema).toEqualTypeOf<typeof Order>();
       expectTypeOf(metadata.sourceRegion).toEqualTypeOf<"usa">();
       expectTypeOf(metadata.headers).toEqualTypeOf<
@@ -899,8 +1017,13 @@ const assertCompileTimeContracts = () => {
           protoKey: ordersKeyProto,
           viewServerTopic: "orders",
           mapping: ({ key, value, region }) => {
-            expectTypeOf(key).toEqualTypeOf<OrderKey>();
-            expectTypeOf(value).toEqualTypeOf<OrderValue>();
+            expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
+            expectTypeOf(value).toEqualTypeOf<{
+              readonly customerId: string;
+              readonly status: "open" | "closed" | "cancelled";
+              readonly price: number;
+              readonly updatedAt: number;
+            }>();
             expectTypeOf(region).toEqualTypeOf<"usa">();
             return {
               id: key.orderId,
@@ -918,7 +1041,11 @@ const assertCompileTimeContracts = () => {
           viewServerTopic: "trades",
           mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<string>();
-            expectTypeOf(value).toEqualTypeOf<TradeValue>();
+            expectTypeOf(value).toEqualTypeOf<{
+              readonly symbol: string;
+              readonly quantity: number;
+              readonly price: number;
+            }>();
             expectTypeOf(region).toEqualTypeOf<"usa">();
             return {
               id: key,
