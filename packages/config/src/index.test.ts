@@ -16,6 +16,7 @@ import {
   type ReactHookContracts,
   type SnapshotEvent,
   type StatusEvent,
+  type TopicRuntimeHealth,
   type ViewServerBackpressureError,
   type ViewServerHealth,
   type ViewServerInMemoryProviderOptions,
@@ -202,6 +203,7 @@ describe("public type surface", () => {
       topic: "orders",
       queryId: "query-1",
       version: 1,
+      keys: ["order-1"],
       rows: [{ id: "order-1" }],
     };
 
@@ -214,31 +216,34 @@ describe("public type surface", () => {
       headers: {},
     };
 
-    const health: ViewServerHealth = {
+    const topicHealth: TopicRuntimeHealth = {
+      status: "ready",
+      rowCount: 1,
+      liveRowCount: 1,
+      deletedRowCount: 0,
+      version: 1,
+      lastMutationAt: null,
+      mutationsPerSecond: 0,
+      rowsPerSecond: 0,
+      pendingMutationBatches: 0,
+      activeViews: 0,
+      activeSubscriptions: 0,
+      queuedEvents: 0,
+      maxQueueDepth: 0,
+      memoryBytes: 0,
+      tombstoneCount: 0,
+      compactionPending: false,
+    };
+
+    const health: ViewServerHealth<typeof viewServer.topics> = {
       status: "ready",
       version: 1,
       uptimeMs: 100,
       engine: {
         topics: {
-          orders: {
-            status: "ready",
-            topic: "orders",
-            rowCount: 1,
-            liveRowCount: 1,
-            deletedRowCount: 0,
-            version: 1,
-            lastMutationAt: null,
-            mutationsPerSecond: 0,
-            rowsPerSecond: 0,
-            pendingMutationBatches: 0,
-            activeViews: 0,
-            activeSubscriptions: 0,
-            queuedEvents: 0,
-            maxQueueDepth: 0,
-            memoryBytes: 0,
-            tombstoneCount: 0,
-            compactionPending: false,
-          },
+          orders: topicHealth,
+          trades: topicHealth,
+          positions: topicHealth,
         },
       },
       transport: {
@@ -267,7 +272,7 @@ describe("public type surface", () => {
 
     expect(snapshot.rows[0]?.id).toBe("order-1");
     expect(metadata.sourceRegion).toBe("usa");
-    expect(health.engine.topics["orders"]?.rowCount).toBe(1);
+    expect(health.engine.topics["orders"].rowCount).toBe(1);
     expect(backpressure.code).toBe("BackpressureExceeded");
     expectTypeOf<LiveTransportAdapter>().toHaveProperty("subscribe");
     expectTypeOf<Effect.Success<ReturnType<LiveTransportAdapter["subscribe"]>>>().toEqualTypeOf<
@@ -1239,6 +1244,16 @@ const assertCompileTimeContracts = () => {
         },
       ],
     });
+
+    const health = react.useViewServerHealth();
+    expectTypeOf<typeof health>().toEqualTypeOf<ViewServerHealth<typeof viewServer.topics>>();
+    expectTypeOf<typeof health.engine.topics.orders>().toEqualTypeOf<TopicRuntimeHealth>();
+    expectTypeOf<typeof health.engine.topics.trades>().toEqualTypeOf<TopicRuntimeHealth>();
+    expectTypeOf<typeof health.engine.topics.positions>().toEqualTypeOf<TopicRuntimeHealth>();
+    // @ts-expect-error health topics preserve configured topic keys.
+    expectTypeOf<typeof health.engine.topics.missing>().toEqualTypeOf<TopicRuntimeHealth>();
+    // @ts-expect-error the map key is the topic identity; values do not duplicate it.
+    expectTypeOf<typeof health.engine.topics.orders.topic>().toEqualTypeOf<"orders">();
 
     expectTypeOf(react.useViewServerTestRuntime()).toHaveProperty("publish");
   };

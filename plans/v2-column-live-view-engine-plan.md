@@ -70,6 +70,8 @@ If required environment variables are missing, startup should fail loudly throug
 
 Date/time rule:
 
+- Domain timestamps should be represented as `bigint` nanoseconds or numeric fields, not JavaScript `Date` values.
+- The query DSL does not need Date-specific filters, sorting, or serialization semantics; UIs can convert timestamp fields to Temporal values for display.
 - Do not call `Date.now()`, `new Date()`, or direct timer APIs in product logic.
 - Use Effect `Clock` so tests can control time.
 - Direct performance timers are allowed only in benchmark/instrumentation code where explicitly isolated.

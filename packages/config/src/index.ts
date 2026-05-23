@@ -306,7 +306,7 @@ export type ViewServerInMemoryRuntime<Topics extends object> = {
     LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ViewServerRuntimeError
   >;
-  readonly health: () => Effect.Effect<ViewServerHealth, ViewServerRuntimeError>;
+  readonly health: () => Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
   readonly reset: () => Effect.Effect<void, ViewServerRuntimeError>;
 };
 
@@ -321,7 +321,7 @@ export type ViewServerInMemoryProviderOptions<Topics extends object> = {
 
 export type ReactHookContracts<Topics extends object> = {
   readonly useLiveQuery: UseLiveQuery<Topics>;
-  readonly useViewServerHealth: () => ViewServerHealth;
+  readonly useViewServerHealth: () => ViewServerHealth<Topics>;
   readonly useViewServerTestRuntime: () => ViewServerInMemoryRuntime<Topics>;
 };
 
@@ -585,7 +585,6 @@ export type RuntimeEnvironmentConfig = {
 
 export type TopicRuntimeHealth = {
   readonly status: TopicHealthStatus;
-  readonly topic: string;
   readonly rowCount: number;
   readonly liveRowCount: number;
   readonly deletedRowCount: number;
@@ -648,12 +647,14 @@ export type TransportHealth = {
   readonly lastError: string | null;
 };
 
-export type ViewServerHealth = {
+export type ViewServerHealth<Topics extends object = Record<string, object>> = {
   readonly status: RuntimeStatus;
   readonly version: number;
   readonly uptimeMs: number;
   readonly engine: {
-    readonly topics: Record<string, TopicRuntimeHealth>;
+    readonly topics: {
+      readonly [Topic in Extract<keyof Topics, string>]: TopicRuntimeHealth;
+    };
   };
   readonly kafka?: {
     readonly regions: Record<string, KafkaRegionHealth>;
@@ -667,6 +668,7 @@ export type SnapshotEvent<Row> = {
   readonly topic: string;
   readonly queryId: string;
   readonly version: number;
+  readonly keys: ReadonlyArray<string>;
   readonly rows: ReadonlyArray<Row>;
   readonly totalRows?: number;
 };

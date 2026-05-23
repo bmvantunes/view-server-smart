@@ -46,6 +46,31 @@ importers:
         specifier: 'catalog:'
         version: 0.1.22(@vitest/coverage-v8@4.1.6)(typescript@6.0.3)(vite@8.0.14(yaml@2.9.0))(yaml@2.9.0)
 
+  packages/column-live-view-engine:
+    dependencies:
+      '@view-server/config':
+        specifier: workspace:*
+        version: link:../config
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70(@voidzero-dev/vite-plus-test@0.1.22)(effect@4.0.0-beta.70)
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 4.1.6(@voidzero-dev/vite-plus-test@0.1.22)
+      '@vitest/runner':
+        specifier: 'catalog:'
+        version: 4.1.6
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@latest
+        version: '@voidzero-dev/vite-plus-test@0.1.22(@vitest/coverage-v8@4.1.6)(typescript@6.0.3)(vite@8.0.14(yaml@2.9.0))(yaml@2.9.0)'
+
   packages/config:
     dependencies:
       '@bufbuild/protobuf':
