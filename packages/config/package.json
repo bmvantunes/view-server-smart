@@ -18,7 +18,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "vitest run --coverage && tsc -p tsconfig.json --noEmit"
+    "test": "vp test run --coverage && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.12.0",

@@ -17,7 +17,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 
 ## Agent Skills
 
-- Use `.agents/skills/effect-ts/SKILL.md` for all Effect-related implementation and review work. The repository has `.repos/effect` available for source-level checks.
+- Use `.agents/skills/effect-ts/SKILL.md` for all Effect-related implementation and review work. When `.repos/effect` exists locally, use it for source-level checks; otherwise use the Effect skill's setup guidance before deep Effect work.
 - Use `.agents/skills/vitest/SKILL.md` for tests, coverage, fixtures, and especially type tests. For type-heavy packages, read `.agents/skills/vitest/references/advanced-type-testing.md` before reviewing or writing tests.
 - Use `.agents/skills/vite/SKILL.md` for `vite.config.ts`, build, library packaging, and Vite/Vite+ integration work.
 - Use `.agents/skills/improve-codebase-architecture/SKILL.md` for architecture reviews. Use its vocabulary: Module, Interface, Implementation, Depth, Seam, Adapter, Leverage, Locality.
