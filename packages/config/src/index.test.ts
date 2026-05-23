@@ -386,6 +386,18 @@ const assertCompileTimeContracts = () => {
   };
   const localKafkaTopic = viewServer.kafkaTopic<typeof localKafkaRegions>();
 
+  expectTypeOf<OrdersWithKeyMapping["key"]>().toEqualTypeOf<OrderKey>();
+  expectTypeOf<OrdersWithKeyMapping["value"]>().toEqualTypeOf<OrderValue>();
+  expectTypeOf<OrdersWithKeyMapping["region"]>().toEqualTypeOf<"usa" | "london">();
+  expectTypeOf<OrdersWithKeyMapping["schema"]>().toEqualTypeOf<typeof Order>();
+  expectTypeOf<OrdersWithKeyMapping["metadata"]["sourceRegion"]>().toEqualTypeOf<
+    "usa" | "london"
+  >();
+  expectTypeOf<TradesStringKeyMapping["key"]>().toEqualTypeOf<string>();
+  expectTypeOf<TradesStringKeyMapping["value"]>().toEqualTypeOf<TradeValue>();
+  expectTypeOf<TradesStringKeyMapping["region"]>().toEqualTypeOf<"usa">();
+  expectTypeOf<TradesStringKeyMapping["schema"]>().toEqualTypeOf<typeof Trade>();
+
   const assertRuntimeContracts = (runtime: ViewServerInMemoryRuntime<typeof viewServer.topics>) => {
     const publishEffect = runtime.publish("orders", {
       id: "order-1",
@@ -470,6 +482,45 @@ const assertCompileTimeContracts = () => {
     }),
   });
 
+  localKafkaTopic({
+    regions: ["usa"],
+    protoValue: ordersValueProto,
+    // @ts-expect-error Kafka mappings must target a configured View Server topic
+    viewServerTopic: "customers",
+    mapping: ({ key, value, region }) => ({
+      id: key,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
+      updatedAt: value.updatedAt,
+    }),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    protoValue: ordersValueProto,
+    protoKey: ordersKeyProto,
+    viewServerTopic: "orders",
+    mapping: ({ key, value, schema, metadata }) => {
+      expectTypeOf(key).toEqualTypeOf<OrderKey>();
+      expectTypeOf(value).toEqualTypeOf<OrderValue>();
+      expectTypeOf(schema).toEqualTypeOf<typeof Order>();
+      expectTypeOf(metadata.sourceRegion).toEqualTypeOf<"usa">();
+      expectTypeOf(metadata.headers).toEqualTypeOf<
+        Readonly<Record<string, string | Uint8Array | ReadonlyArray<string | Uint8Array>>>
+      >();
+      return {
+        id: key.orderId,
+        customerId: value.customerId,
+        status: value.status,
+        price: value.price,
+        region: metadata.sourceRegion,
+        updatedAt: value.updatedAt,
+      };
+    },
+  });
+
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
     tcpPublishPort: 8081,
@@ -484,6 +535,32 @@ const assertCompileTimeContracts = () => {
           protoKey: ordersKeyProto,
           viewServerTopic: "orders",
           // @ts-expect-error mapping return must match the target View Server topic row type
+          mapping: ({ key, value, region }: OrdersWithKeyMapping) => ({
+            id: key.orderId,
+            customerId: value.customerId,
+            status: value.status,
+            price: value.price,
+            region,
+          }),
+        }),
+      },
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
+    kafka: {
+      regions: {
+        usa: "broker-a:9092",
+      },
+      topics: {
+        orders: localKafkaTopic({
+          regions: ["usa"],
+          protoValue: ordersValueProto,
+          protoKey: ordersKeyProto,
+          viewServerTopic: "orders",
+          // @ts-expect-error raw runtime topic mappings must return the target topic row
           mapping: ({ key, value, region }: OrdersWithKeyMapping) => ({
             id: key.orderId,
             customerId: value.customerId,
