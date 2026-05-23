@@ -129,26 +129,36 @@ describe("defineViewServerConfig", () => {
             protoValue: ordersValueProto,
             protoKey: ordersKeyProto,
             viewServerTopic: "orders",
-            mapping: ({ key, value, region }) => ({
-              id: key.orderId,
-              customerId: value.customerId,
-              status: value.status,
-              price: value.price,
-              region,
-              updatedAt: value.updatedAt,
-            }),
+            mapping: ({ key, value, region }) => {
+              expectTypeOf(key).toEqualTypeOf<OrderKey>();
+              expectTypeOf(value).toEqualTypeOf<OrderValue>();
+              expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
+              return {
+                id: key.orderId,
+                customerId: value.customerId,
+                status: value.status,
+                price: value.price,
+                region,
+                updatedAt: value.updatedAt,
+              };
+            },
           }),
           trades: kafkaTopic({
             regions: ["usa"],
             protoValue: tradesValueProto,
             viewServerTopic: "trades",
-            mapping: ({ key, value, region }) => ({
-              id: key,
-              symbol: value.symbol,
-              quantity: value.quantity,
-              price: value.price,
-              region,
-            }),
+            mapping: ({ key, value, region }) => {
+              expectTypeOf(key).toEqualTypeOf<string>();
+              expectTypeOf(value).toEqualTypeOf<TradeValue>();
+              expectTypeOf(region).toEqualTypeOf<"usa">();
+              return {
+                id: key,
+                symbol: value.symbol,
+                quantity: value.quantity,
+                price: value.price,
+                region,
+              };
+            },
           }),
         },
       },
@@ -890,6 +900,8 @@ const assertCompileTimeContracts = () => {
           viewServerTopic: "orders",
           mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<OrderKey>();
+            expectTypeOf(value).toEqualTypeOf<OrderValue>();
+            expectTypeOf(region).toEqualTypeOf<"usa">();
             return {
               id: key.orderId,
               customerId: value.customerId,
@@ -906,6 +918,8 @@ const assertCompileTimeContracts = () => {
           viewServerTopic: "trades",
           mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<string>();
+            expectTypeOf(value).toEqualTypeOf<TradeValue>();
+            expectTypeOf(region).toEqualTypeOf<"usa">();
             return {
               id: key,
               symbol: value.symbol,
