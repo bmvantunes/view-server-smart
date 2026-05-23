@@ -244,6 +244,15 @@ export type RuntimeValue<A> = A | Config.Config<A>;
 export type RuntimeRegions = Record<string, RuntimeValue<string>>;
 export type NonEmptyReadonlyArray<A> = readonly [A, ...ReadonlyArray<A>];
 
+type RejectExtraKeys<Candidate, Shape> = {
+  readonly [Key in Exclude<keyof Candidate, keyof Shape>]: never;
+};
+
+type ExactObject<Candidate, Shape> = Candidate & RejectExtraKeys<Candidate, Shape>;
+
+type ExactMappingReturn<Input, Row, Mapping extends (input: Input) => Row> = Mapping &
+  ((input: Input) => ExactObject<ReturnType<Mapping>, Row>);
+
 const ProtoCodecTypeId = Symbol("@view-server/config/ProtoCodec");
 
 export type ProtoCodec<T> = {
@@ -303,13 +312,20 @@ type KafkaTopicWithoutProtoKey<
   ViewTopic extends Extract<keyof Topics, string>,
   ProtoValue,
   TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  Mapping extends (
+    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, undefined>,
+  ) => TopicRow<Topics, ViewTopic> = (
+    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, undefined>,
+  ) => TopicRow<Topics, ViewTopic>,
 > = {
   readonly regions: TopicRegions;
   readonly protoValue: SupportedProto<ProtoValue>;
   readonly viewServerTopic: ViewTopic;
-  readonly mapping: (
-    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, undefined>,
-  ) => TopicRow<Topics, ViewTopic>;
+  readonly mapping: ExactMappingReturn<
+    KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, undefined>,
+    TopicRow<Topics, ViewTopic>,
+    Mapping
+  >;
 };
 
 type KafkaTopicWithProtoKey<
@@ -319,14 +335,21 @@ type KafkaTopicWithProtoKey<
   ProtoValue,
   ProtoKey,
   TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  Mapping extends (
+    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+  ) => TopicRow<Topics, ViewTopic> = (
+    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+  ) => TopicRow<Topics, ViewTopic>,
 > = {
   readonly regions: TopicRegions;
   readonly protoValue: SupportedProto<ProtoValue>;
   readonly protoKey: SupportedProto<ProtoKey>;
   readonly viewServerTopic: ViewTopic;
-  readonly mapping: (
-    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
-  ) => TopicRow<Topics, ViewTopic>;
+  readonly mapping: ExactMappingReturn<
+    KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+    TopicRow<Topics, ViewTopic>,
+    Mapping
+  >;
 };
 
 export type KafkaTopicDefinition<
@@ -337,9 +360,14 @@ export type KafkaTopicDefinition<
   ProtoKey = unknown,
   TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>> =
     NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  Mapping extends (
+    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+  ) => TopicRow<Topics, ViewTopic> = (
+    input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+  ) => TopicRow<Topics, ViewTopic>,
 > =
   | KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>
-  | KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>;
+  | KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions, Mapping>;
 
 type ValidateKafkaTopic<
   Topics extends object,
@@ -352,16 +380,34 @@ type ValidateKafkaTopic<
   readonly protoValue: infer ProtoValue;
   readonly protoKey: infer ProtoKey;
   readonly viewServerTopic: infer ViewTopic extends Extract<keyof Topics, string>;
+  readonly mapping: infer Mapping;
 }
-  ? KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>
+  ? Mapping extends (
+      input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+    ) => TopicRow<Topics, ViewTopic>
+    ? KafkaTopicWithProtoKey<
+        Topics,
+        Regions,
+        ViewTopic,
+        ProtoValue,
+        ProtoKey,
+        TopicRegions,
+        Mapping
+      >
+    : never
   : Candidate extends {
         readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
           Extract<keyof Regions, string>
         >;
         readonly protoValue: infer ProtoValue;
         readonly viewServerTopic: infer ViewTopic extends Extract<keyof Topics, string>;
+        readonly mapping: infer Mapping;
       }
-    ? KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>
+    ? Mapping extends (
+        input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, undefined>,
+      ) => TopicRow<Topics, ViewTopic>
+      ? KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions, Mapping>
+      : never
     : never;
 
 type ValidateKafkaTopics<
@@ -409,10 +455,6 @@ export type RuntimeOptionsDefinition<Topics extends object, Options> = ValidateR
   Topics,
   Options
 >;
-
-type RejectExtraKeys<Candidate, Shape> = {
-  readonly [Key in Exclude<keyof Candidate, keyof Shape>]: never;
-};
 
 type RejectExtraRuntimeKafkaKeys<Options, Shape> = Options extends {
   readonly kafka: infer CandidateKafka;
@@ -638,16 +680,38 @@ export type KafkaTopicHelper<Topics extends object> = <const Regions extends Run
     ProtoValue,
     ProtoKey,
     const ViewTopic extends Extract<keyof Topics, string>,
+    Mapping extends (
+      input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+    ) => TopicRow<Topics, ViewTopic>,
   >(
-    topic: KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>,
-  ): KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>;
+    topic: KafkaTopicWithProtoKey<
+      Topics,
+      Regions,
+      ViewTopic,
+      ProtoValue,
+      ProtoKey,
+      TopicRegions,
+      Mapping
+    >,
+  ): KafkaTopicWithProtoKey<
+    Topics,
+    Regions,
+    ViewTopic,
+    ProtoValue,
+    ProtoKey,
+    TopicRegions,
+    Mapping
+  >;
   <
     const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
     ProtoValue,
     const ViewTopic extends Extract<keyof Topics, string>,
+    Mapping extends (
+      input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, undefined>,
+    ) => TopicRow<Topics, ViewTopic>,
   >(
-    topic: KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>,
-  ): KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>;
+    topic: KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions, Mapping>,
+  ): KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions, Mapping>;
 };
 
 export const defineKafkaTopic = <Topics extends object>(): KafkaTopicHelper<Topics> => {
@@ -657,16 +721,45 @@ export const defineKafkaTopic = <Topics extends object>(): KafkaTopicHelper<Topi
       ProtoValue,
       ProtoKey,
       const ViewTopic extends Extract<keyof Topics, string>,
+      Mapping extends (
+        input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, ProtoKey>,
+      ) => TopicRow<Topics, ViewTopic>,
     >(
-      topic: KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>,
-    ): KafkaTopicWithProtoKey<Topics, Regions, ViewTopic, ProtoValue, ProtoKey, TopicRegions>;
+      topic: KafkaTopicWithProtoKey<
+        Topics,
+        Regions,
+        ViewTopic,
+        ProtoValue,
+        ProtoKey,
+        TopicRegions,
+        Mapping
+      >,
+    ): KafkaTopicWithProtoKey<
+      Topics,
+      Regions,
+      ViewTopic,
+      ProtoValue,
+      ProtoKey,
+      TopicRegions,
+      Mapping
+    >;
     function topicHelper<
       const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
       ProtoValue,
       const ViewTopic extends Extract<keyof Topics, string>,
+      Mapping extends (
+        input: KafkaMappingInput<Topics, ViewTopic, TopicRegions[number], ProtoValue, undefined>,
+      ) => TopicRow<Topics, ViewTopic>,
     >(
-      topic: KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>,
-    ): KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions>;
+      topic: KafkaTopicWithoutProtoKey<
+        Topics,
+        Regions,
+        ViewTopic,
+        ProtoValue,
+        TopicRegions,
+        Mapping
+      >,
+    ): KafkaTopicWithoutProtoKey<Topics, Regions, ViewTopic, ProtoValue, TopicRegions, Mapping>;
     function topicHelper<
       const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
       ProtoValue,

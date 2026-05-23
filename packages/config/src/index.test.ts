@@ -129,7 +129,7 @@ describe("defineViewServerConfig", () => {
             protoValue: ordersValueProto,
             protoKey: ordersKeyProto,
             viewServerTopic: "orders",
-            mapping: ({ key, value, region }: OrdersWithKeyMapping) => ({
+            mapping: ({ key, value, region }) => ({
               id: key.orderId,
               customerId: value.customerId,
               status: value.status,
@@ -142,7 +142,7 @@ describe("defineViewServerConfig", () => {
             regions: ["usa"],
             protoValue: tradesValueProto,
             viewServerTopic: "trades",
-            mapping: ({ key, value, region }: TradesStringKeyMapping) => ({
+            mapping: ({ key, value, region }) => ({
               id: key,
               symbol: value.symbol,
               quantity: value.quantity,
@@ -703,6 +703,23 @@ const assertCompileTimeContracts = () => {
     protoValue: ordersValueProto,
     protoKey: ordersKeyProto,
     viewServerTopic: "orders",
+    // @ts-expect-error unannotated mapping returns reject extra fields outside the target row
+    mapping: ({ key, value, region }) => ({
+      id: key.orderId,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
+      updatedAt: value.updatedAt,
+      ze: true,
+    }),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    protoValue: ordersValueProto,
+    protoKey: ordersKeyProto,
+    viewServerTopic: "orders",
     mapping: ({ key, value, schema, metadata }) => {
       expectTypeOf(key).toEqualTypeOf<OrderKey>();
       expectTypeOf(value).toEqualTypeOf<OrderValue>();
@@ -736,7 +753,7 @@ const assertCompileTimeContracts = () => {
           protoKey: ordersKeyProto,
           viewServerTopic: "orders",
           // @ts-expect-error mapping return must match the target View Server topic row type
-          mapping: ({ key, value, region }: OrdersWithKeyMapping) => ({
+          mapping: ({ key, value, region }) => ({
             id: key.orderId,
             customerId: value.customerId,
             status: value.status,
@@ -762,7 +779,7 @@ const assertCompileTimeContracts = () => {
           protoKey: ordersKeyProto,
           viewServerTopic: "orders",
           // @ts-expect-error raw runtime topic mappings must return the target topic row
-          mapping: ({ key, value, region }: OrdersWithKeyMapping) => ({
+          mapping: ({ key, value, region }) => ({
             id: key.orderId,
             customerId: value.customerId,
             status: value.status,
@@ -871,7 +888,7 @@ const assertCompileTimeContracts = () => {
           protoValue: ordersValueProto,
           protoKey: ordersKeyProto,
           viewServerTopic: "orders",
-          mapping: ({ key, value, region }: OrdersWithKeyMapping) => {
+          mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<OrderKey>();
             return {
               id: key.orderId,
@@ -887,7 +904,7 @@ const assertCompileTimeContracts = () => {
           regions: ["usa"],
           protoValue: tradesValueProto,
           viewServerTopic: "trades",
-          mapping: ({ key, value, region }: TradesStringKeyMapping) => {
+          mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<string>();
             return {
               id: key,
