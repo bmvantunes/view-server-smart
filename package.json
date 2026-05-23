@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "ready": "vp check && vp run -r test && vp run -r build",
-    "prepare": "vp config"
+    "prepare": "vp config && effect-language-service patch"
   },
   "devDependencies": {
+    "@effect/language-service": "catalog:",
+    "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "engines": {

@@ -25,3 +25,7 @@ dist-ssr
 
 # AI agent worktrees
 .claude/worktrees/
+.repos/effect/
+
+# Typescript
+*.tsbuildinfo

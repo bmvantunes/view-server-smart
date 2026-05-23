@@ -6,10 +6,15 @@ packages:
 catalogMode: prefer
 
 catalog:
-  "@types/node": ^24
-  typescript: ^5
+  "@effect/language-service": 0.86.2
+  "@effect/vitest": 4.0.0-beta.70
+  "@types/node": 25.9.1
+  "@vitest/coverage-v8": 4.1.4
+  "@vitest/runner": 4.1.4
+  effect: 4.0.0-beta.70
+  typescript: 6.0.3
   vite: npm:@voidzero-dev/vite-plus-core@latest
-  vitest: npm:@voidzero-dev/vite-plus-test@latest
+  vitest: 4.1.4
   vite-plus: latest
 overrides:
   vite: "catalog:"

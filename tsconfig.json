@@ -4,6 +4,47 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "refactors": true,
+        "diagnostics": true,
+        "diagnosticSeverity": {
+          "floatingEffect": "warning"
+        },
+        "diagnosticsName": true,
+        "missingDiagnosticNextLine": "warning",
+        "includeSuggestionsInTsc": true,
+        "ignoreEffectWarningsInTscExitCode": false,
+        "ignoreEffectErrorsInTscExitCode": false,
+        "ignoreEffectSuggestionsInTscExitCode": true,
+        "skipDisabledOptimization": false,
+        "quickinfo": true,
+        "quickinfoEffectParameters": "whenTruncated",
+        "quickinfoMaximumLength": -1,
+        "completions": true,
+        "goto": true,
+        "inlays": true,
+        "allowedDuplicatedPackages": [],
+        "barrelImportPackages": [],
+        "namespaceImportPackages": ["effect", "@effect/*"],
+        "topLevelNamedReexports": "ignore",
+        "importAliases": {
+          "Array": "Arr"
+        },
+        "noExternal": false,
+        "keyPatterns": [
+          {
+            "target": "service",
+            "pattern": "default",
+            "skipLeadingPath": ["src/"]
+          }
+        ],
+        "effectFn": ["span"],
+        "layerGraphFollowDepth": 0,
+        "mermaidProvider": "mermaid.live"
+      }
+    ]
   }
 }
