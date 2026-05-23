@@ -157,9 +157,7 @@ type AggregateResultValue<Row, Agg> = Agg extends { readonly type: "count" | "co
     ? Field extends keyof Row
       ? Row[Field] extends bigint
         ? bigint
-        : Row[Field] extends BigDecimal.BigDecimal
-          ? BigDecimal.BigDecimal
-          : number
+        : BigDecimal.BigDecimal
       : never
     : Agg extends { readonly type: "avg" }
       ? BigDecimal.BigDecimal
@@ -181,11 +179,16 @@ type UnionToIntersection<Union> = (Union extends unknown ? (value: Union) => voi
   ? Intersection
   : never;
 
+type Simplify<T> = { readonly [Key in keyof T]: T[Key] };
+
 type GroupedResult<Row, Query> = Query extends {
   readonly groupBy: ReadonlyArray<infer GroupField>;
   readonly aggregates: ReadonlyArray<infer Agg>;
 }
-  ? Pick<Row, Extract<GroupField, keyof Row>> & UnionToIntersection<AggregateResultObject<Row, Agg>>
+  ? Simplify<
+      Pick<Row, Extract<GroupField, keyof Row>> &
+        UnionToIntersection<AggregateResultObject<Row, Agg>>
+    >
   : never;
 
 export type LiveQueryRow<Row, Query> =
@@ -197,12 +200,22 @@ export type LiveQueryResult<Row> = {
   readonly version: number;
 };
 
+type RejectBroadAggregateAliases<Query> = Query extends {
+  readonly aggregates: ReadonlyArray<infer Agg>;
+}
+  ? Agg extends { readonly as: infer Alias extends string }
+    ? string extends Alias
+      ? { readonly aggregates: never }
+      : unknown
+    : unknown
+  : unknown;
+
 export type UseLiveQuery<Topics extends object> = <
   Topic extends Extract<keyof Topics, string>,
   const Query extends LiveQuery<TopicRow<Topics, Topic>>,
 >(
   topic: Topic,
-  query: Query,
+  query: Query & RejectBroadAggregateAliases<Query>,
 ) => LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;
 
 export type ViewServerProviderOptions = {

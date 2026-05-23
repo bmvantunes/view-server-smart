@@ -306,10 +306,10 @@ describe("public type surface", () => {
         ReadonlyArray<{ readonly id: string; readonly price: number }>
       >();
       type GroupedRow = (typeof groupedRows)[number];
-      expectTypeOf<GroupedRow>().toMatchTypeOf<{
+      expectTypeOf<GroupedRow>().toEqualTypeOf<{
         readonly status: "open" | "closed" | "cancelled";
         readonly count: bigint;
-        readonly totalPrice: number;
+        readonly totalPrice: BigDecimal.BigDecimal;
         readonly averageUpdatedAt: BigDecimal.BigDecimal;
         readonly firstStatus: "open" | "closed" | "cancelled";
       }>();
@@ -351,18 +351,31 @@ describe("public type surface", () => {
         ],
       }).rows;
 
-      expectTypeOf<(typeof groupedPositionRows)[number]>().toMatchTypeOf<{
+      expectTypeOf<(typeof groupedPositionRows)[number]>().toEqualTypeOf<{
         readonly accountId: string;
         readonly active: boolean;
         readonly rowCount: bigint;
         readonly symbolCount: bigint;
         readonly totalQuantity: bigint;
         readonly totalPrice: BigDecimal.BigDecimal;
-        readonly totalNotional: number;
+        readonly totalNotional: BigDecimal.BigDecimal;
         readonly averagePrice: BigDecimal.BigDecimal;
         readonly firstAccountId: string;
         readonly maxQuantity: bigint;
       }>();
+
+      const dynamicAggregateAlias = "dynamicTotal" as string;
+      react.useLiveQuery("orders", {
+        groupBy: ["status"],
+        // @ts-expect-error aggregate aliases must be string literals for typed result rows
+        aggregates: [
+          {
+            type: "sum",
+            field: "price",
+            as: dynamicAggregateAlias,
+          },
+        ],
+      });
     };
 
     expect(assertQueryTypes).toBeTypeOf("function");
