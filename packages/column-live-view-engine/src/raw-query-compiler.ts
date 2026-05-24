@@ -9,7 +9,7 @@ import {
   isPlainRecord,
   isRecord,
   valuesEqual,
-} from "./row-values.js";
+} from "./row-values";
 
 type RowObject = object;
 
@@ -454,7 +454,6 @@ const matchesFilter = (value: unknown, filter: unknown): boolean => {
     }
     return eq !== undefined || oneOf !== undefined || notEqual !== undefined;
   }
-  /* v8 ignore next -- runtime validation rejects scalar object filters before evaluation. */
   if (!isOperatorFilterObject(filter)) {
     return valuesEqual(value, filter);
   }

@@ -1,5 +1,7 @@
 import { Config } from "effect";
-import type { RuntimeEnvironmentConfig } from "./index.js";
+import type { RuntimeEnvironmentConfig } from "./index";
+
+export type { RuntimeEnvironmentConfig } from "./index";
 
 export const runtimeEnvironmentConfig: RuntimeEnvironmentConfig = {
   websocketPort: Config.number("VIEW_SERVER_WEBSOCKET_PORT"),

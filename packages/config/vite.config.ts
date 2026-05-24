@@ -1,4 +1,5 @@
 import { defineConfig } from "vite-plus";
+import { libraryPack } from "../../vite.pack";
 
 export default defineConfig({
   test: {
@@ -12,12 +13,14 @@ export default defineConfig({
       },
     },
   },
-  pack: {
-    dts: {
-      tsgo: true,
-    },
-    exports: true,
-  },
+  pack: libraryPack([
+    "src/index.ts",
+    "src/runtime.ts",
+    "src/topic-contract.ts",
+    "src/health-contract.ts",
+    "src/live-protocol.ts",
+    "src/kafka-contract.ts",
+  ]),
   lint: {
     options: {
       typeAware: true,

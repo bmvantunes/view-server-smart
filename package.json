@@ -4,11 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "ready": "vp run -r build && vp check && vp run -r test",
+    "check:package-exports": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module preserve --moduleResolution bundler scripts/check-package-exports.ts && node --experimental-strip-types scripts/check-package-exports.ts",
+    "ready": "vp run -r build && pnpm run check:package-exports && vp check && vp run -r test",
     "prepare": "vp config && effect-language-service patch"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
+    "@view-server/column-live-view-engine": "workspace:*",
+    "@view-server/config": "workspace:*",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },

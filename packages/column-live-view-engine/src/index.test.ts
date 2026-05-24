@@ -9,11 +9,15 @@ import { Cause, Effect, Schema, Scope, Stream } from "effect";
 import { fromStringUnsafe } from "effect/BigDecimal";
 import {
   createColumnLiveViewEngine,
+  EngineClosedError,
+  InvalidRowError,
+  InvalidTopicError,
+  UnsupportedQueryError,
   type ColumnLiveViewEngine,
   type ColumnLiveViewEngineConfig,
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
-} from "./index.ts";
+} from "./index";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -1487,6 +1491,7 @@ describe("ColumnLiveViewEngine validation and health", () => {
         topic: "orders",
         message: expect.stringContaining("a finite number"),
       });
+      expect(error).toBeInstanceOf(InvalidRowError);
     }),
   );
 
@@ -1720,6 +1725,7 @@ describe("ColumnLiveViewEngine validation and health", () => {
         _tag: "UnsupportedQueryError",
         message: expect.stringContaining("Grouped aggregate queries are not implemented"),
       });
+      expect(error).toBeInstanceOf(UnsupportedQueryError);
 
       const subscribeError = yield* Effect.flip(engine.subscribe("orders", groupedRuntimeQuery));
       expect(subscribeError._tag).toBe("UnsupportedQueryError");
@@ -2036,6 +2042,7 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const looseEngine = yield* createColumnLiveViewEngine(missingTopicConfig);
       const missing = yield* Effect.flip(looseEngine.snapshot("missing", {}));
       expect(missing._tag).toBe("InvalidTopicError");
+      expect(missing).toBeInstanceOf(InvalidTopicError);
 
       yield* engine.close();
       yield* engine.close();
@@ -2046,6 +2053,7 @@ describe("ColumnLiveViewEngine validation and health", () => {
 
       const closedError = yield* Effect.flip(engine.publish("orders", order("1", "open", 10, 1)));
       expect(closedError._tag).toBe("EngineClosedError");
+      expect(closedError).toBeInstanceOf(EngineClosedError);
     }),
   );
 });

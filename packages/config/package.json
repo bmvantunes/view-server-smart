@@ -14,10 +14,26 @@
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.js"
+    },
+    "./query": {
+      "types": "./dist/topic-contract.d.ts",
+      "import": "./dist/topic-contract.js"
+    },
+    "./health": {
+      "types": "./dist/health-contract.d.ts",
+      "import": "./dist/health-contract.js"
+    },
+    "./live-protocol": {
+      "types": "./dist/live-protocol.d.ts",
+      "import": "./dist/live-protocol.js"
+    },
+    "./kafka": {
+      "types": "./dist/kafka-contract.d.ts",
+      "import": "./dist/kafka-contract.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "vp pack",
     "test": "vp test run --coverage && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

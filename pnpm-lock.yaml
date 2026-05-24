@@ -39,6 +39,12 @@ importers:
       '@effect/language-service':
         specifier: 'catalog:'
         version: 0.86.2
+      '@view-server/column-live-view-engine':
+        specifier: workspace:*
+        version: link:packages/column-live-view-engine
+      '@view-server/config':
+        specifier: workspace:*
+        version: link:packages/config
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

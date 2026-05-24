@@ -23,8 +23,8 @@ import {
   type ViewServerInMemoryRuntime,
   type ViewServerRuntimeError,
   type ViewServerTransportError,
-} from "./index.ts";
-import { runtimeConfig, runtimeEnvironmentConfig } from "./runtime.ts";
+} from "./index";
+import { runtimeConfig, runtimeEnvironmentConfig } from "./runtime";
 
 const Order = Schema.Struct({
   id: Schema.String,

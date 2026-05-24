@@ -1,16 +1,12 @@
 import { Effect, Schema, Semaphore } from "effect";
-import type { HealthTopicStoreState } from "./engine-health.js";
-import type { LiveTopicStoreState, LiveTopicSubscriber } from "./live-subscription.js";
-import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler.js";
-import { cloneRow, fieldValue } from "./row-values.js";
+import type { HealthTopicStoreState } from "./engine-health";
+import type { LiveTopicStoreState, LiveTopicSubscriber } from "./live-subscription";
+import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
+import { cloneRow, fieldValue } from "./row-values";
 
 type RowObject = object;
 
 export type InvalidRowErrorFactory<Error> = (topic: string, message: string) => Error;
-
-export type CommitTopicStore = <Row extends RowObject>(
-  store: TopicStore<Row>,
-) => Effect.Effect<void>;
 
 export class TopicStore<Row extends RowObject>
   implements HealthTopicStoreState<Row>, LiveTopicStoreState<Row>
@@ -27,18 +23,21 @@ export class TopicStore<Row extends RowObject>
     readonly topic: string,
     readonly schema: Schema.Decoder<object>,
     readonly keyField: string,
+    readonly onCommit: () => void,
   ) {
     this.rawQueryMetadata = rawQueryCompilerMetadata(schema);
   }
 }
 
-export const notifyTopicStoreSubscribers = Effect.fn("ColumnLiveViewEngine.topicStore.notify")(
-  function* <Row extends RowObject>(store: TopicStore<Row>) {
-    for (const subscriber of store.subscribers) {
-      yield* subscriber.notify(store);
-    }
-  },
-);
+const commitTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.commit")(function* <
+  Row extends RowObject,
+>(store: TopicStore<Row>) {
+  store.version += 1;
+  store.onCommit();
+  for (const subscriber of store.subscribers) {
+    yield* subscriber.notify(store);
+  }
+});
 
 export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset")(function* <
   Row extends RowObject,
@@ -100,19 +99,14 @@ const rowKey = Effect.fn("ColumnLiveViewEngine.topicStore.rowKey")(function* <
 export const publishTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.publish")(function* <
   Row extends RowObject,
   Error,
->(
-  store: TopicStore<Row>,
-  row: Row,
-  invalidRow: InvalidRowErrorFactory<Error>,
-  commit: CommitTopicStore,
-) {
+>(store: TopicStore<Row>, row: Row, invalidRow: InvalidRowErrorFactory<Error>) {
   const decoded = yield* decodeRow(store, row, invalidRow);
   const key = yield* rowKey(store, decoded, invalidRow);
   const cloned = yield* safeCloneRow(store, decoded, invalidRow);
   yield* store.mutationSemaphore.withPermits(1)(
     Effect.gen(function* () {
       store.rows.set(key, cloned);
-      yield* commit(store);
+      yield* commitTopicStore(store);
     }),
   );
 });
@@ -122,7 +116,6 @@ export const publishTopicStoreRows = Effect.fn("ColumnLiveViewEngine.topicStore.
     store: TopicStore<Row>,
     rows: ReadonlyArray<Row>,
     invalidRow: InvalidRowErrorFactory<Error>,
-    commit: CommitTopicStore,
   ) {
     const decodedRows = yield* Effect.forEach(rows, (row) => decodeRow(store, row, invalidRow));
     const keyedRows = yield* Effect.forEach(decodedRows, (row) =>
@@ -137,7 +130,7 @@ export const publishTopicStoreRows = Effect.fn("ColumnLiveViewEngine.topicStore.
         for (const { key, row } of keyedRows) {
           store.rows.set(key, row);
         }
-        yield* commit(store);
+        yield* commitTopicStore(store);
       }),
     );
   },
@@ -147,13 +140,7 @@ export const patchTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.pat
   Row extends RowObject,
   Patch extends Partial<Row>,
   Error,
->(
-  store: TopicStore<Row>,
-  key: string,
-  patch: Patch,
-  invalidRow: InvalidRowErrorFactory<Error>,
-  commit: CommitTopicStore,
-) {
+>(store: TopicStore<Row>, key: string, patch: Patch, invalidRow: InvalidRowErrorFactory<Error>) {
   yield* store.mutationSemaphore.withPermits(1)(
     Effect.gen(function* () {
       const current = store.rows.get(key);
@@ -167,18 +154,18 @@ export const patchTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.pat
       }
       const cloned = yield* safeCloneRow(store, decoded, invalidRow);
       store.rows.set(key, cloned);
-      yield* commit(store);
+      yield* commitTopicStore(store);
     }),
   );
 });
 
 export const deleteTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.delete")(function* <
   Row extends RowObject,
->(store: TopicStore<Row>, key: string, commit: CommitTopicStore) {
+>(store: TopicStore<Row>, key: string) {
   yield* store.mutationSemaphore.withPermits(1)(
     Effect.gen(function* () {
       store.rows.delete(key);
-      yield* commit(store);
+      yield* commitTopicStore(store);
     }),
   );
 });
