@@ -13,10 +13,10 @@ export default defineConfig({
     },
   },
   pack: {
-    dts: {
-      tsgo: true,
-    },
-    exports: true,
+    entry: ["src/index.ts", "src/runtime.ts"],
+    dts: true,
+    fixedExtension: false,
+    exports: false,
   },
   lint: {
     options: {

@@ -1,4 +1,4 @@
-import type { LiveTopicSubscriber } from "./live-subscription.ts";
+import type { LiveTopicSubscriber } from "./live-subscription";
 import { Effect } from "effect";
 
 type RowObject = object;

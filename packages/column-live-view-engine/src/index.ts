@@ -5,20 +5,20 @@ import type {
   ColumnLiveViewEngine,
   ColumnLiveViewEngineConfig,
   DecodableTopicDefinitions,
-} from "./engine-contract.ts";
+} from "./engine-contract";
 import {
   EngineClosedError,
   InvalidRowError,
   InvalidTopicError,
   UnsupportedQueryError,
-} from "./engine-errors.ts";
-import { collectColumnLiveViewEngineHealth } from "./engine-health.ts";
-import { makeLiveSubscription } from "./live-subscription.ts";
+} from "./engine-errors";
+import { collectColumnLiveViewEngineHealth } from "./engine-health";
+import { makeLiveSubscription } from "./live-subscription";
 import {
   evaluateCompiledRawQuery,
   prepareRawQuery,
   type QueryEvaluation,
-} from "./raw-query-compiler.ts";
+} from "./raw-query-compiler";
 import {
   closeTopicStoreSubscriptions,
   deleteTopicStoreRow,
@@ -28,24 +28,24 @@ import {
   publishTopicStoreRows,
   resetTopicStore,
   TopicStore,
-} from "./topic-store.ts";
+} from "./topic-store";
 
-export { InvalidQueryError } from "./raw-query-compiler.ts";
+export { InvalidQueryError } from "./raw-query-compiler";
 export {
   EngineClosedError,
   InvalidRowError,
   InvalidTopicError,
   UnsupportedQueryError,
-} from "./engine-errors.ts";
-export type { ColumnLiveViewEngineError } from "./engine-errors.ts";
+} from "./engine-errors";
+export type { ColumnLiveViewEngineError } from "./engine-errors";
 export type {
   ColumnLiveViewEngine,
   ColumnLiveViewEngineConfig,
   ColumnLiveViewEngineEvent,
   ColumnLiveViewSubscription,
   DecodableTopicDefinitions,
-} from "./engine-contract.ts";
-export type { ColumnLiveViewEngineHealth, ColumnLiveViewTopicHealth } from "./engine-health.ts";
+} from "./engine-contract";
+export type { ColumnLiveViewEngineHealth, ColumnLiveViewTopicHealth } from "./engine-health";
 
 type RowObject = object;
 const defaultSubscriptionQueueCapacity = 1_024;

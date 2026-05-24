@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { InvalidQueryError } from "./raw-query-compiler.ts";
+import type { InvalidQueryError } from "./raw-query-compiler";
 
 export class InvalidTopicError extends Schema.TaggedErrorClass<InvalidTopicError>()(
   "InvalidTopicError",

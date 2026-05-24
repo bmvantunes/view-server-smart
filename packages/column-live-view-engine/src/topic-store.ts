@@ -1,8 +1,8 @@
 import { Effect, Schema, Semaphore } from "effect";
-import type { HealthTopicStoreState } from "./engine-health.ts";
-import type { LiveTopicStoreState, LiveTopicSubscriber } from "./live-subscription.ts";
-import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler.ts";
-import { cloneRow, fieldValue } from "./row-values.ts";
+import type { HealthTopicStoreState } from "./engine-health";
+import type { LiveTopicStoreState, LiveTopicSubscriber } from "./live-subscription";
+import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
+import { cloneRow, fieldValue } from "./row-values";
 
 type RowObject = object;
 

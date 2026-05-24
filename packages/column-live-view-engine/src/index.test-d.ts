@@ -16,7 +16,7 @@ import type {
   ColumnLiveViewEngineHealth,
   ColumnLiveViewSubscription,
   ColumnLiveViewTopicHealth,
-} from "./index.ts";
+} from "./index";
 
 const Order = Schema.Struct({
   id: Schema.String,

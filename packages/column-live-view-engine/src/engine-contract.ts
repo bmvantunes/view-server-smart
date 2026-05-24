@@ -13,8 +13,8 @@ import type {
   TopicRow,
 } from "@view-server/config";
 import type { Effect, Schema, Stream } from "effect";
-import type { ColumnLiveViewEngineHealth } from "./engine-health.ts";
-import type { ColumnLiveViewEngineError } from "./engine-errors.ts";
+import type { ColumnLiveViewEngineHealth } from "./engine-health";
+import type { ColumnLiveViewEngineError } from "./engine-errors";
 
 export type DecodableTopicDefinitions = Record<
   string,

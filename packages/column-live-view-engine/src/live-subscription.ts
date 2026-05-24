@@ -4,8 +4,8 @@ import {
   evaluateCompiledRawQuery,
   type CompiledRawQuery,
   type QueryEvaluation,
-} from "./raw-query-compiler.ts";
-import { cloneRow, rowsEqual } from "./row-values.ts";
+} from "./raw-query-compiler";
+import { cloneRow, rowsEqual } from "./row-values";
 
 type RowObject = object;
 

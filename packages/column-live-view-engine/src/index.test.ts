@@ -17,7 +17,7 @@ import {
   type ColumnLiveViewEngineConfig,
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
-} from "./index.ts";
+} from "./index";
 
 const Order = Schema.Struct({
   id: Schema.String,

@@ -17,7 +17,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "vp pack",
     "test": "vp test run --coverage && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
