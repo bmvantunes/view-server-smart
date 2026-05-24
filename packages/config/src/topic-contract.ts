@@ -83,10 +83,21 @@ export type Where<Row> = {
   readonly [Field in FieldKey<Row>]?: FieldFilter<Row[Field]>;
 };
 
-export type OrderBy<Row> = {
-  readonly field: FieldKey<Row>;
+export type OrderByField<Field extends string> = {
+  readonly field: Field;
+  readonly aggregate?: never;
   readonly direction: SortDirection;
 };
+
+export type OrderBy<Row> = OrderByField<FieldKey<Row>>;
+
+export type AggregateOrderByField<Alias extends string = string> = {
+  readonly aggregate: Alias;
+  readonly field?: never;
+  readonly direction: SortDirection;
+};
+
+export type GroupedOrderBy<Row> = OrderByField<FieldKey<Row>> | AggregateOrderByField;
 
 export type RawQuery<Row> = {
   readonly select: readonly [FieldKey<Row>, ...Array<FieldKey<Row>>];
@@ -141,11 +152,21 @@ type ExactWhere<Row, Query> = Query extends {
     }
   : unknown;
 
+type ExactOrderByEntry<Entry, Field extends string> = Entry &
+  RejectExtraKeys<Entry, OrderByField<Field>> &
+  (Entry extends { readonly field: infer QueryField }
+    ? { readonly field: QueryField & Field }
+    : { readonly field: Field }) &
+  (Entry extends { readonly aggregate: unknown } ? { readonly aggregate: never } : unknown) &
+  (Entry extends { readonly direction: infer QueryDirection }
+    ? { readonly direction: QueryDirection & SortDirection }
+    : { readonly direction: SortDirection });
+
 type ExactOrderBy<Row, Query> = Query extends {
   readonly orderBy: ReadonlyArray<infer Entry>;
 }
   ? {
-      readonly orderBy: ReadonlyArray<Entry & RejectExtraKeys<Entry, OrderBy<Row>>>;
+      readonly orderBy: ReadonlyArray<ExactOrderByEntry<Entry, FieldKey<Row>>>;
     }
   : unknown;
 
@@ -196,6 +217,7 @@ export type GroupedQuery<Row> = {
   readonly aggregates: Aggregates<Row>;
   readonly select?: never;
   readonly where?: Where<Row>;
+  readonly orderBy?: ReadonlyArray<GroupedOrderBy<Row>>;
   readonly offset?: number;
   readonly limit?: number;
 };
@@ -208,10 +230,54 @@ type ExactAggregates<Row, Candidate> = {
   readonly [Alias in keyof Candidate]: Candidate[Alias] & Aggregate<Row>;
 };
 
+type AggregateAliasesFromAggregates<Aggregates> = Extract<keyof Aggregates, string>;
+
+type GroupedOrderByField<Row, GroupBy> = Extract<
+  GroupBy extends ReadonlyArray<infer Field> ? Field : never,
+  FieldKey<Row>
+>;
+
+type ExactGroupedOrderByEntry<Entry, Field extends string, Alias extends string> =
+  | (Entry &
+      RejectExtraKeys<Entry, OrderByField<Field>> &
+      (Entry extends { readonly field: infer QueryField }
+        ? { readonly field: QueryField & Field }
+        : { readonly field: Field }) &
+      (Entry extends { readonly aggregate: unknown } ? { readonly aggregate: never } : unknown) &
+      (Entry extends { readonly direction: infer QueryDirection }
+        ? { readonly direction: QueryDirection & SortDirection }
+        : { readonly direction: SortDirection }))
+  | (Entry &
+      RejectExtraKeys<Entry, AggregateOrderByField<Alias>> &
+      (Entry extends { readonly aggregate: infer QueryAggregate }
+        ? { readonly aggregate: QueryAggregate & Alias }
+        : { readonly aggregate: Alias }) &
+      (Entry extends { readonly field: unknown } ? { readonly field: never } : unknown) &
+      (Entry extends { readonly direction: infer QueryDirection }
+        ? { readonly direction: QueryDirection & SortDirection }
+        : { readonly direction: SortDirection }));
+
+type ExactGroupedOrderBy<Row, Query> = Query extends {
+  readonly orderBy: ReadonlyArray<infer Entry>;
+  readonly groupBy: infer GroupBy;
+  readonly aggregates: infer Aggregates;
+}
+  ? {
+      readonly orderBy: ReadonlyArray<
+        ExactGroupedOrderByEntry<
+          Entry,
+          GroupedOrderByField<Row, GroupBy>,
+          AggregateAliasesFromAggregates<Aggregates>
+        >
+      >;
+    }
+  : unknown;
+
 export type ExactGroupedQuery<Row, Query> = Query &
   RejectExtraKeys<Query, GroupedQuery<Row>> & {
     readonly select?: never;
   } & ExactWhere<Row, Query> &
+  ExactGroupedOrderBy<Row, Query> &
   (Query extends {
     readonly groupBy: infer GroupBy;
     readonly aggregates: infer Aggregates;

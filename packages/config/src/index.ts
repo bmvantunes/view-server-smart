@@ -9,6 +9,7 @@ import type { RowFromSchema, RowSchema, StringFieldKey, TopicDefinition } from "
 
 export type {
   Aggregate,
+  AggregateOrderByField,
   Aggregates,
   AggregateKind,
   AverageAggregate,
@@ -21,12 +22,14 @@ export type {
   ExactRawQuery,
   FieldFilter,
   FieldKey,
+  GroupedOrderBy,
   GroupedQuery,
   LiveQuery,
   LiveQueryResult,
   LiveQueryRow,
   NumericFieldKey,
   OrderBy,
+  OrderByField,
   RangeFilter,
   RawQuery,
   RowFromSchema,

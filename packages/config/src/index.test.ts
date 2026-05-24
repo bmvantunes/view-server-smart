@@ -367,6 +367,10 @@ describe("public type surface", () => {
         where: {
           region: "london",
         },
+        orderBy: [
+          { aggregate: "totalPrice", direction: "desc" },
+          { field: "status", direction: "asc" },
+        ],
       }).rows;
 
       expectTypeOf(rawRows).toEqualTypeOf<
@@ -439,6 +443,10 @@ describe("public type surface", () => {
           firstAccountId: { aggFunc: "min", field: "accountId" },
           maxQuantity: { aggFunc: "max", field: "quantity" },
         },
+        orderBy: [
+          { aggregate: "totalQuantity", direction: "desc" },
+          { field: "accountId", direction: "asc" },
+        ],
       }).rows;
 
       expectTypeOf<(typeof groupedPositionRows)[number]>().toEqualTypeOf<{
@@ -1149,6 +1157,17 @@ const assertCompileTimeContracts = () => {
     });
 
     react.useLiveQuery("orders", {
+      select: ["id"],
+      orderBy: [
+        {
+          // @ts-expect-error raw orderBy cannot reference aggregate aliases.
+          aggregate: "totalPrice",
+          direction: "desc",
+        },
+      ],
+    });
+
+    react.useLiveQuery("orders", {
       // @ts-expect-error projected fields are constrained to the selected topic row
       select: ["id", "missing"],
     });
@@ -1180,6 +1199,84 @@ const assertCompileTimeContracts = () => {
       typeof invalidAggregateAliasCollision
     > &
       ValidateLiveQuery<typeof invalidAggregateAliasCollision> = invalidAggregateAliasCollision;
+
+    const invalidGroupedOrderByRawField = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ field: "price", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy only accepts groupBy fields or aggregate aliases.
+    const _invalidGroupedOrderByRawField: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByRawField
+    > = invalidGroupedOrderByRawField;
+
+    const invalidGroupedOrderByDirection = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ aggregate: "count", direction: "descending" }],
+    } as const;
+    // @ts-expect-error grouped orderBy direction is constrained to asc or desc.
+    const _invalidGroupedOrderByDirection: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByDirection
+    > = invalidGroupedOrderByDirection;
+
+    const invalidGroupedOrderByAggregate = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ aggregate: "totalPrice", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy aggregate aliases must exist in aggregates.
+    const _invalidGroupedOrderByAggregate: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByAggregate
+    > = invalidGroupedOrderByAggregate;
+
+    const invalidGroupedOrderByFieldKey = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ orderByField: "status", direction: "asc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy group fields use field, not orderByField.
+    const _invalidGroupedOrderByFieldKey: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByFieldKey
+    > = invalidGroupedOrderByFieldKey;
+
+    const invalidGroupedOrderByAggregateKey = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ field: "count", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy aggregate aliases use aggregate, not field.
+    const _invalidGroupedOrderByAggregateKey: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByAggregateKey
+    > = invalidGroupedOrderByAggregateKey;
+
+    const invalidGroupedOrderByBothFieldAndAggregate = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ field: "status", aggregate: "count", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy entries must choose field or aggregate, not both.
+    const _invalidGroupedOrderByBothFieldAndAggregate: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByBothFieldAndAggregate
+    > = invalidGroupedOrderByBothFieldAndAggregate;
+
+    react.useLiveQuery("orders", {
+      select: ["id"],
+      orderBy: [
+        {
+          field: "price",
+          // @ts-expect-error raw orderBy entries cannot also include aggregate.
+          aggregate: "totalPrice",
+          direction: "desc",
+        },
+      ],
+    });
 
     const invalidOrderSumField = {
       groupBy: ["status"],
