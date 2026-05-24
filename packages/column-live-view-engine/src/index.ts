@@ -12,22 +12,28 @@ import type {
   StringFieldKey,
   TopicRow,
 } from "@view-server/config";
-import { Effect, Schema, Semaphore, Stream } from "effect";
+import { Effect, Schema, Stream } from "effect";
 import {
   collectColumnLiveViewEngineHealth,
   type ColumnLiveViewEngineHealth,
-  type HealthTopicStoreState,
 } from "./engine-health.js";
-import { makeLiveSubscription, type LiveTopicSubscriber } from "./live-subscription.js";
+import { makeLiveSubscription } from "./live-subscription.js";
 import {
   evaluateCompiledRawQuery,
   InvalidQueryError,
   prepareRawQuery,
-  rawQueryCompilerMetadata,
   type QueryEvaluation,
-  type RawQueryCompilerMetadata,
 } from "./raw-query-compiler.js";
-import { cloneRow, fieldValue } from "./row-values.js";
+import {
+  closeTopicStoreSubscriptions,
+  deleteTopicStoreRow,
+  notifyTopicStoreSubscribers,
+  patchTopicStoreRow,
+  publishTopicStoreRow,
+  publishTopicStoreRows,
+  resetTopicStore,
+  TopicStore,
+} from "./topic-store.js";
 
 export { InvalidQueryError } from "./raw-query-compiler.js";
 export type { ColumnLiveViewEngineHealth, ColumnLiveViewTopicHealth } from "./engine-health.js";
@@ -259,40 +265,11 @@ export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
 type RowObject = object;
 const defaultSubscriptionQueueCapacity = 1_024;
 
-class TopicStore<Row extends RowObject> implements HealthTopicStoreState<Row> {
-  readonly rows = new Map<string, Row>();
-  readonly subscribers = new Set<LiveTopicSubscriber<Row>>();
-  readonly mutationSemaphore = Semaphore.makeUnsafe(1);
-  version = 0;
-  maxQueueDepth = 0;
-  backpressureEvents = 0;
-
-  constructor(
-    readonly topic: string,
-    readonly schema: Schema.Decoder<object>,
-    readonly keyField: string,
-    readonly rawQueryMetadata: RawQueryCompilerMetadata,
-  ) {}
-}
-
 const isGroupedQuery = (query: unknown): boolean =>
   typeof query === "object" &&
   query !== null &&
   !Array.isArray(query) &&
   ("groupBy" in query || "aggregates" in query);
-
-const safeCloneRow = Effect.fn("ColumnLiveViewEngine.safeCloneRow")(function* <
-  Row extends RowObject,
->(store: TopicStore<Row>, row: Row) {
-  return yield* Effect.try({
-    try: () => cloneRow(row),
-    catch: (cause) =>
-      InvalidRowError.make({
-        topic: store.topic,
-        message: String(cause),
-      }),
-  });
-});
 
 const liveQueryResult = <Row extends RowObject>(
   evaluation: QueryEvaluation<Row>,
@@ -302,33 +279,11 @@ const liveQueryResult = <Row extends RowObject>(
   version: evaluation.version,
 });
 
-const decodeRow = Effect.fn("ColumnLiveViewEngine.decodeRow")(function* <Row extends RowObject>(
-  store: TopicStore<Row>,
-  row: RowObject,
-) {
-  return yield* Effect.try({
-    try: () => Schema.decodeUnknownSync(store.schema)(row) as Row,
-    catch: (cause) =>
-      InvalidRowError.make({
-        topic: store.topic,
-        message: String(cause),
-      }),
+const invalidRow = (topic: string, message: string) =>
+  new InvalidRowError({
+    topic,
+    message,
   });
-});
-
-const rowKey = Effect.fn("ColumnLiveViewEngine.rowKey")(function* <Row extends RowObject>(
-  store: TopicStore<Row>,
-  row: Row,
-) {
-  const key = fieldValue(row, store.keyField);
-  if (typeof key !== "string") {
-    return yield* InvalidRowError.make({
-      topic: store.topic,
-      message: `Key field ${store.keyField} must decode to a string.`,
-    });
-  }
-  return key;
-});
 
 class InMemoryColumnLiveViewEngine<
   Topics extends DecodableTopicDefinitions,
@@ -352,12 +307,7 @@ class InMemoryColumnLiveViewEngine<
       const definition = config.topics[topic];
       this.stores.set(
         topic,
-        new TopicStore<AnyTopicRow<Topics>>(
-          topic,
-          definition.schema,
-          definition.key,
-          rawQueryCompilerMetadata(definition.schema),
-        ),
+        new TopicStore<AnyTopicRow<Topics>>(topic, definition.schema, definition.key),
       );
     }
   }
@@ -387,19 +337,11 @@ class InMemoryColumnLiveViewEngine<
     });
   }
 
-  private notifySubscribers<Row extends RowObject>(store: TopicStore<Row>): Effect.Effect<void> {
-    return Effect.gen(function* () {
-      for (const subscriber of store.subscribers) {
-        yield* subscriber.notify(store);
-      }
-    });
-  }
-
   private commit<Row extends RowObject>(store: TopicStore<Row>): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       store.version += 1;
       this.engineVersion += 1;
-      yield* this.notifySubscribers(store);
+      yield* notifyTopicStoreSubscribers(store);
     });
   }
 
@@ -407,14 +349,8 @@ class InMemoryColumnLiveViewEngine<
     return Effect.gen({ self: this }, function* () {
       yield* this.ensureOpen();
       const store = yield* this.getStore(topic);
-      const decoded = yield* decodeRow(store, row);
-      const key = yield* rowKey(store, decoded);
-      const cloned = yield* safeCloneRow(store, decoded);
-      yield* store.mutationSemaphore.withPermits(1)(
-        Effect.gen({ self: this }, function* () {
-          store.rows.set(key, cloned);
-          yield* this.commit(store);
-        }),
+      yield* publishTopicStoreRow(store, row, invalidRow, (committedStore) =>
+        this.commit(committedStore),
       );
     });
   };
@@ -423,21 +359,8 @@ class InMemoryColumnLiveViewEngine<
     return Effect.gen({ self: this }, function* () {
       yield* this.ensureOpen();
       const store = yield* this.getStore(topic);
-      const decodedRows = yield* Effect.forEach(rows, (row) => decodeRow(store, row));
-      const keyedRows = yield* Effect.forEach(decodedRows, (row) =>
-        Effect.gen(function* () {
-          const key = yield* rowKey(store, row);
-          const cloned = yield* safeCloneRow(store, row);
-          return { key, row: cloned };
-        }),
-      );
-      yield* store.mutationSemaphore.withPermits(1)(
-        Effect.gen({ self: this }, function* () {
-          for (const { key, row } of keyedRows) {
-            store.rows.set(key, row);
-          }
-          yield* this.commit(store);
-        }),
+      yield* publishTopicStoreRows(store, rows, invalidRow, (committedStore) =>
+        this.commit(committedStore),
       );
     });
   };
@@ -446,27 +369,8 @@ class InMemoryColumnLiveViewEngine<
     return Effect.gen({ self: this }, function* () {
       yield* this.ensureOpen();
       const store = yield* this.getStore(topic);
-      yield* store.mutationSemaphore.withPermits(1)(
-        Effect.gen({ self: this }, function* () {
-          const current = store.rows.get(key);
-          if (current === undefined) {
-            return yield* InvalidRowError.make({
-              topic,
-              message: `Cannot patch missing key: ${key}`,
-            });
-          }
-          const decoded = yield* decodeRow(store, { ...current, ...patch });
-          const decodedKey = yield* rowKey(store, decoded);
-          if (decodedKey !== key) {
-            return yield* InvalidRowError.make({
-              topic,
-              message: "Patch must not change the row key.",
-            });
-          }
-          const cloned = yield* safeCloneRow(store, decoded);
-          store.rows.set(key, cloned);
-          yield* this.commit(store);
-        }),
+      yield* patchTopicStoreRow(store, key, patch, invalidRow, (committedStore) =>
+        this.commit(committedStore),
       );
     });
   };
@@ -475,12 +379,7 @@ class InMemoryColumnLiveViewEngine<
     return Effect.gen({ self: this }, function* () {
       yield* this.ensureOpen();
       const store = yield* this.getStore(topic);
-      yield* store.mutationSemaphore.withPermits(1)(
-        Effect.gen({ self: this }, function* () {
-          store.rows.delete(key);
-          yield* this.commit(store);
-        }),
-      );
+      yield* deleteTopicStoreRow(store, key, (committedStore) => this.commit(committedStore));
     });
   };
 
@@ -547,15 +446,7 @@ class InMemoryColumnLiveViewEngine<
   readonly reset: ColumnLiveViewEngine<Topics>["reset"] = () => {
     return Effect.gen({ self: this }, function* () {
       for (const store of this.stores.values()) {
-        for (const subscriber of store.subscribers) {
-          subscriber.closed = true;
-          yield* subscriber.end;
-        }
-        store.subscribers.clear();
-        store.rows.clear();
-        store.version = 0;
-        store.maxQueueDepth = 0;
-        store.backpressureEvents = 0;
+        yield* resetTopicStore(store);
       }
       this.engineVersion = 0;
     });
@@ -566,11 +457,7 @@ class InMemoryColumnLiveViewEngine<
       if (!this.closed) {
         this.closed = true;
         for (const store of this.stores.values()) {
-          for (const subscriber of store.subscribers) {
-            subscriber.closed = true;
-            yield* subscriber.end;
-          }
-          store.subscribers.clear();
+          yield* closeTopicStoreSubscriptions(store);
         }
       }
     });

@@ -930,6 +930,32 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     }),
   );
 
+  it.effect("serializes mixed concurrent writes before notifying subscribers", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [order("a", "open", 10, 1), order("b", "open", 20, 2)]);
+      const subscription = yield* engine.subscribe("orders", {});
+      const take = yield* makeEventReader(subscription);
+      yield* take(1);
+
+      yield* Effect.all(
+        [
+          engine.patch("orders", "a", { price: 30 }),
+          engine.delete("orders", "b"),
+          engine.publish("orders", order("c", "closed", 40, 3)),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      yield* take(3);
+      const fresh = yield* engine.snapshot("orders", {});
+      expect(fresh.version).toBe(4);
+      expect(rowIds(fresh.rows)).toEqual(["a", "c"]);
+      expect(fresh.rows).toEqual([order("a", "open", 30, 1), order("c", "closed", 40, 3)]);
+      yield* subscription.close();
+    }),
+  );
+
   it.effect("idempotent subscription close removes active subscribers from health", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
