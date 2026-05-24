@@ -1,6 +1,5 @@
 import type {
   DeltaEvent,
-  DeltaOperation,
   FieldKey,
   LiveQueryRow,
   LiveQueryResult,
@@ -13,7 +12,8 @@ import type {
   StringFieldKey,
   TopicRow,
 } from "@view-server/config";
-import { Cause, Effect, Queue, Schema, Semaphore, Stream } from "effect";
+import { Effect, Schema, Semaphore, Stream } from "effect";
+import { makeLiveSubscription, type LiveTopicSubscriber } from "./live-subscription.js";
 import {
   evaluateCompiledRawQuery,
   InvalidQueryError,
@@ -22,7 +22,7 @@ import {
   type QueryEvaluation,
   type RawQueryCompilerMetadata,
 } from "./raw-query-compiler.js";
-import { cloneRow, fieldValue, rowsEqual } from "./row-values.js";
+import { cloneRow, fieldValue } from "./row-values.js";
 
 export { InvalidQueryError } from "./raw-query-compiler.js";
 
@@ -281,20 +281,9 @@ export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
 type RowObject = object;
 const defaultSubscriptionQueueCapacity = 1_024;
 
-type TopicSubscriber<Row extends RowObject> = {
-  readonly topic: string;
-  readonly queryId: string;
-  readonly notify: (store: TopicStore<Row>) => Effect.Effect<void>;
-  readonly queuedEvents: Effect.Effect<number>;
-  readonly end: Effect.Effect<void>;
-  maxQueueDepth: number;
-  backpressureEvents: number;
-  closed: boolean;
-};
-
 class TopicStore<Row extends RowObject> {
   readonly rows = new Map<string, Row>();
-  readonly subscribers = new Set<TopicSubscriber<Row>>();
+  readonly subscribers = new Set<LiveTopicSubscriber<Row>>();
   readonly mutationSemaphore = Semaphore.makeUnsafe(1);
   version = 0;
   maxQueueDepth = 0;
@@ -361,125 +350,6 @@ const rowKey = Effect.fn("ColumnLiveViewEngine.rowKey")(function* <Row extends R
     });
   }
   return key;
-});
-
-const snapshotEvent = <Row extends RowObject>(
-  store: { readonly topic: string },
-  queryId: string,
-  evaluation: QueryEvaluation<Row>,
-): SnapshotEvent<Row> => ({
-  type: "snapshot",
-  topic: store.topic,
-  queryId,
-  version: evaluation.version,
-  keys: [...evaluation.keys],
-  rows: evaluation.rows.map(cloneRow),
-  totalRows: evaluation.totalRows,
-});
-
-const deltaOperations = <Row extends RowObject>(
-  previous: QueryEvaluation<Row>,
-  next: QueryEvaluation<Row>,
-): ReadonlyArray<DeltaOperation<Row>> => {
-  const operations: Array<DeltaOperation<Row>> = [];
-  const nextKeys = new Set(next.keys);
-  const currentKeys = [...previous.keys];
-  const currentRows = [...previous.rows];
-
-  for (const key of previous.keys) {
-    if (!nextKeys.has(key)) {
-      const index = currentKeys.indexOf(key);
-      currentKeys.splice(index, 1);
-      currentRows.splice(index, 1);
-      operations.push({
-        type: "remove",
-        key,
-      });
-    }
-  }
-
-  for (const [index, { key, row }] of next.window.entries()) {
-    const currentIndex = currentKeys.indexOf(key);
-    if (currentIndex < 0) {
-      currentKeys.splice(index, 0, key);
-      currentRows.splice(index, 0, row);
-      operations.push({
-        type: "insert",
-        key,
-        row,
-        index,
-      });
-      continue;
-    }
-
-    if (currentIndex !== index) {
-      const currentRow = currentRows[currentIndex]!;
-      currentKeys.splice(currentIndex, 1);
-      currentRows.splice(currentIndex, 1);
-      currentKeys.splice(index, 0, key);
-      currentRows.splice(index, 0, currentRow);
-      operations.push({
-        type: "move",
-        key,
-        fromIndex: currentIndex,
-        toIndex: index,
-      });
-    }
-
-    const currentRow = currentRows[index];
-    if (currentRow === undefined || !rowsEqual(currentRow, row)) {
-      currentRows[index] = row;
-      operations.push({
-        type: "update",
-        key,
-        row,
-        index,
-      });
-    }
-  }
-
-  return operations;
-};
-
-const cloneDeltaOperations = <Row extends RowObject>(
-  operations: ReadonlyArray<DeltaOperation<Row>>,
-): ReadonlyArray<DeltaOperation<Row>> =>
-  operations.map((operation) => {
-    if (operation.type === "insert" || operation.type === "update") {
-      return {
-        ...operation,
-        row: cloneRow(operation.row),
-      };
-    }
-    return operation;
-  });
-
-const deltaEvent = <Row extends RowObject>(
-  store: { readonly topic: string },
-  queryId: string,
-  fromVersion: number,
-  next: QueryEvaluation<Row>,
-  operations: ReadonlyArray<DeltaOperation<Row>>,
-): DeltaEvent<Row> => ({
-  type: "delta",
-  topic: store.topic,
-  queryId,
-  fromVersion,
-  toVersion: next.version,
-  operations: cloneDeltaOperations(operations),
-  totalRows: next.totalRows,
-});
-
-const backpressureStatusEvent = <Row extends RowObject>(
-  store: TopicStore<Row>,
-  subscriber: TopicSubscriber<Row>,
-): StatusEvent => ({
-  type: "status",
-  topic: store.topic,
-  queryId: subscriber.queryId,
-  status: "closed",
-  code: "BackpressureExceeded",
-  message: "Subscription closed because its event queue exceeded capacity.",
 });
 
 class InMemoryColumnLiveViewEngine<
@@ -671,70 +541,16 @@ class InMemoryColumnLiveViewEngine<
         store.rawQueryMetadata,
         query,
       );
-      const queue = yield* Queue.dropping<ColumnLiveViewEngineEvent<ResultRow>, Cause.Done>(
-        this.subscriptionQueueCapacity,
-      );
-      let evaluation = evaluateCompiledRawQuery(store, compiled);
-      const subscriber: TopicSubscriber<StoreRow> = {
-        topic,
+      const subscription = yield* makeLiveSubscription({
+        store,
         queryId,
-        notify: (currentStore) =>
-          Effect.gen(function* () {
-            const previous = evaluation;
-            const next = evaluateCompiledRawQuery(currentStore, compiled);
-            const operations = deltaOperations(previous, next);
-            if (operations.length === 0 && previous.totalRows === next.totalRows) {
-              return;
-            }
-
-            const offered = yield* Queue.offer(
-              queue,
-              deltaEvent(currentStore, queryId, previous.version, next, operations),
-            );
-            if (!offered) {
-              subscriber.backpressureEvents += 1;
-              currentStore.backpressureEvents += 1;
-              subscriber.closed = true;
-              currentStore.subscribers.delete(subscriber);
-              yield* Queue.takeAll(queue).pipe(Effect.ignore);
-              yield* Queue.offer(queue, backpressureStatusEvent(currentStore, subscriber)).pipe(
-                Effect.ignore,
-              );
-              yield* Queue.end(queue);
-              return;
-            }
-
-            const queueDepth = yield* Queue.size(queue);
-            subscriber.maxQueueDepth = Math.max(subscriber.maxQueueDepth, queueDepth);
-            currentStore.maxQueueDepth = Math.max(
-              currentStore.maxQueueDepth,
-              subscriber.maxQueueDepth,
-            );
-            evaluation = next;
-          }),
-        queuedEvents: Queue.size(queue),
-        end: Queue.end(queue),
-        maxQueueDepth: 0,
-        backpressureEvents: 0,
-        closed: false,
-      };
-
-      store.subscribers.add(subscriber);
-      yield* Queue.offer(queue, snapshotEvent(store, queryId, evaluation));
-      subscriber.maxQueueDepth = yield* Queue.size(queue);
-      store.maxQueueDepth = Math.max(store.maxQueueDepth, subscriber.maxQueueDepth);
-
-      const close = Effect.fn("ColumnLiveViewEngine.subscription.close")(function* () {
-        if (!subscriber.closed) {
-          subscriber.closed = true;
-          store.subscribers.delete(subscriber);
-          yield* subscriber.end;
-        }
+        compiled,
+        queueCapacity: this.subscriptionQueueCapacity,
       });
 
       return {
-        events: Stream.fromQueue(queue).pipe(Stream.ensuring(close())),
-        close,
+        events: subscription.events,
+        close: subscription.close,
       };
     });
   };
