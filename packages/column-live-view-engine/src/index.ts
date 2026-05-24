@@ -13,6 +13,11 @@ import type {
   TopicRow,
 } from "@view-server/config";
 import { Effect, Schema, Semaphore, Stream } from "effect";
+import {
+  collectColumnLiveViewEngineHealth,
+  type ColumnLiveViewEngineHealth,
+  type HealthTopicStoreState,
+} from "./engine-health.js";
 import { makeLiveSubscription, type LiveTopicSubscriber } from "./live-subscription.js";
 import {
   evaluateCompiledRawQuery,
@@ -25,6 +30,7 @@ import {
 import { cloneRow, fieldValue } from "./row-values.js";
 
 export { InvalidQueryError } from "./raw-query-compiler.js";
+export type { ColumnLiveViewEngineHealth, ColumnLiveViewTopicHealth } from "./engine-health.js";
 
 export type DecodableTopicDefinitions = Record<
   string,
@@ -91,34 +97,6 @@ export type ColumnLiveViewEngineEvent<Row> = SnapshotEvent<Row> | DeltaEvent<Row
 export type ColumnLiveViewSubscription<Row> = {
   readonly events: Stream.Stream<ColumnLiveViewEngineEvent<Row>>;
   readonly close: () => Effect.Effect<void, never>;
-};
-
-export type ColumnLiveViewTopicHealth = {
-  readonly status: "ready" | "degraded";
-  readonly rowCount: number;
-  readonly version: number;
-  readonly activeSubscriptions: number;
-  readonly queuedEvents: number;
-  readonly maxQueueDepth: number;
-  readonly backpressureEvents: number;
-};
-
-export type ColumnLiveViewEngineHealth<
-  Topics extends DecodableTopicDefinitions = DecodableTopicDefinitions,
-> = {
-  readonly status: "ready" | "stopping";
-  readonly version: number;
-  readonly topics: {
-    readonly [Topic in Extract<keyof Topics, string>]: ColumnLiveViewTopicHealth;
-  };
-  readonly activeSubscriptions: number;
-  readonly queuedEvents: number;
-  readonly maxQueueDepth: number;
-  readonly backpressureEvents: number;
-};
-
-type MutableHealthTopics<Topics extends DecodableTopicDefinitions> = {
-  -readonly [Topic in Extract<keyof Topics, string>]: ColumnLiveViewTopicHealth;
 };
 
 type AnyTopicRow<Topics extends DecodableTopicDefinitions> = TopicRow<
@@ -281,7 +259,7 @@ export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
 type RowObject = object;
 const defaultSubscriptionQueueCapacity = 1_024;
 
-class TopicStore<Row extends RowObject> {
+class TopicStore<Row extends RowObject> implements HealthTopicStoreState<Row> {
   readonly rows = new Map<string, Row>();
   readonly subscribers = new Set<LiveTopicSubscriber<Row>>();
   readonly mutationSemaphore = Semaphore.makeUnsafe(1);
@@ -355,7 +333,10 @@ const rowKey = Effect.fn("ColumnLiveViewEngine.rowKey")(function* <Row extends R
 class InMemoryColumnLiveViewEngine<
   Topics extends DecodableTopicDefinitions,
 > implements ColumnLiveViewEngine<Topics> {
-  private readonly stores = new Map<string, TopicStore<AnyTopicRow<Topics>>>();
+  private readonly stores = new Map<
+    Extract<keyof Topics, string>,
+    TopicStore<AnyTopicRow<Topics>>
+  >();
   private readonly subscriptionQueueCapacity: number;
   private engineVersion = 0;
   private nextQueryId = 0;
@@ -367,7 +348,8 @@ class InMemoryColumnLiveViewEngine<
       Number.isSafeInteger(configuredCapacity) && configuredCapacity > 0
         ? configuredCapacity
         : defaultSubscriptionQueueCapacity;
-    for (const [topic, definition] of Object.entries(config.topics)) {
+    for (const topic in config.topics) {
+      const definition = config.topics[topic];
       this.stores.set(
         topic,
         new TopicStore<AnyTopicRow<Topics>>(
@@ -556,47 +538,9 @@ class InMemoryColumnLiveViewEngine<
   };
 
   readonly health: ColumnLiveViewEngine<Topics>["health"] = () => {
-    return Effect.gen({ self: this }, function* () {
-      const topics = {} as MutableHealthTopics<Topics>;
-      let activeSubscriptions = 0;
-      let queuedEvents = 0;
-      let maxQueueDepth = 0;
-      let backpressureEvents = 0;
-      for (const [topic, store] of this.stores) {
-        activeSubscriptions += store.subscribers.size;
-        let topicQueuedEvents = 0;
-        let topicMaxQueueDepth = store.maxQueueDepth;
-        let topicBackpressureEvents = store.backpressureEvents;
-        for (const subscriber of store.subscribers) {
-          const subscriberQueueDepth = yield* subscriber.queuedEvents;
-          topicQueuedEvents += subscriberQueueDepth;
-          topicMaxQueueDepth = Math.max(topicMaxQueueDepth, subscriber.maxQueueDepth);
-          topicBackpressureEvents += subscriber.backpressureEvents;
-        }
-        queuedEvents += topicQueuedEvents;
-        maxQueueDepth = Math.max(maxQueueDepth, topicMaxQueueDepth);
-        backpressureEvents += topicBackpressureEvents;
-        const typedTopic = topic as Extract<keyof Topics, string>;
-        topics[typedTopic] = {
-          status: this.closed ? "degraded" : "ready",
-          rowCount: store.rows.size,
-          version: store.version,
-          activeSubscriptions: store.subscribers.size,
-          queuedEvents: topicQueuedEvents,
-          maxQueueDepth: topicMaxQueueDepth,
-          backpressureEvents: topicBackpressureEvents,
-        };
-      }
-
-      return {
-        status: this.closed ? "stopping" : "ready",
-        version: this.engineVersion,
-        topics,
-        activeSubscriptions,
-        queuedEvents,
-        maxQueueDepth,
-        backpressureEvents,
-      };
+    return collectColumnLiveViewEngineHealth<Topics, AnyTopicRow<Topics>>(this.stores, {
+      version: () => this.engineVersion,
+      closed: () => this.closed,
     });
   };
 

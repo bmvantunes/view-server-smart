@@ -1622,6 +1622,28 @@ describe("ColumnLiveViewEngine validation and health", () => {
     }),
   );
 
+  it.effect("reads health state when the returned Effect is executed", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      const delayedMutatedHealth = engine.health();
+
+      yield* engine.publish("orders", order("1", "open", 10, 1));
+
+      const mutated = yield* delayedMutatedHealth;
+      expect(mutated.status).toBe("ready");
+      expect(mutated.version).toBe(1);
+      expect(mutated.topics["orders"].rowCount).toBe(1);
+      expect(mutated.topics["orders"].version).toBe(1);
+
+      const delayedClosedHealth = engine.health();
+      yield* engine.close();
+
+      const closed = yield* delayedClosedHealth;
+      expect(closed.status).toBe("stopping");
+      expect(closed.topics["orders"].status).toBe("degraded");
+    }),
+  );
+
   it.effect("falls back to the default queue capacity when configured capacity is invalid", () =>
     Effect.gen(function* () {
       const engine = yield* createColumnLiveViewEngine({
