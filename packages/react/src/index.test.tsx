@@ -1,7 +1,9 @@
-import { describe, expect, it } from "@effect/vitest";
-import { render, waitFor, type RenderResult } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "@effect/vitest";
 import { defineViewServerConfig, type ViewServerInMemoryRuntime } from "@view-server/config";
 import { Effect, Schema } from "effect";
+import type { ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { page } from "vitest/browser";
 import { createViewServerReact } from "./index";
 
 const Order = Schema.Struct({
@@ -49,10 +51,6 @@ const order = (id: string, price: number): OrderRow => ({
   updatedAt: price,
 });
 
-const waitForText = async (view: RenderResult, testId: string, expected: string) => {
-  await waitFor(() => expect(view.getByTestId(testId).textContent).toBe(expected));
-};
-
 const getRuntime = (
   runtime: ViewServerInMemoryRuntime<Topics> | undefined,
 ): ViewServerInMemoryRuntime<Topics> => {
@@ -60,7 +58,36 @@ const getRuntime = (
   return runtime as ViewServerInMemoryRuntime<Topics>;
 };
 
+const roots = new Set<Root>();
+
+const mount = (children: ReactNode) => {
+  const container = document.createElement("main");
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.add(root);
+  root.render(children);
+
+  return {
+    rerender: (nextChildren: ReactNode) => {
+      root.render(nextChildren);
+    },
+    unmount: () => {
+      root.unmount();
+      roots.delete(root);
+      container.remove();
+    },
+  };
+};
+
 describe("createViewServerReact", () => {
+  afterEach(() => {
+    for (const root of roots) {
+      root.unmount();
+    }
+    roots.clear();
+    document.body.replaceChildren();
+  });
+
   it("streams runtime-published snapshots and live deltas in browser providers", async () => {
     let runtime: ViewServerInMemoryRuntime<Topics> | undefined;
 
@@ -75,33 +102,40 @@ describe("createViewServerReact", () => {
         limit: 10,
       });
       return (
-        <output data-testid="orders">
+        <output aria-label="orders" role="status">
           {result.rows.map((row) => `${row.id}:${row.price}`).join("|")}
         </output>
       );
     }
     function HealthView() {
       const health = useViewServerHealth();
-      return <output data-testid="health">{health.engine.topics.orders.rowCount}</output>;
+      return (
+        <output aria-label="health" role="status">
+          {health.engine.topics.orders.rowCount}
+        </output>
+      );
     }
 
-    const view = render(
+    const view = mount(
       <ViewServerInMemoryProvider>
         <RuntimeCapture />
         <OrdersView />
         <HealthView />
       </ViewServerInMemoryProvider>,
     );
+    const orders = page.getByRole("status", { name: "orders" });
+    const health = page.getByRole("status", { name: "health" });
+    await expect.element(orders).toHaveTextContent("");
 
     Effect.runSync(getRuntime(runtime).publishMany("orders", [order("b", 20), order("a", 10)]));
 
-    await waitForText(view, "orders", "a:10|b:20");
-    await waitForText(view, "health", "2");
+    await expect.element(orders).toHaveTextContent("a:10|b:20");
+    await expect.element(health).toHaveTextContent("2");
 
     Effect.runSync(getRuntime(runtime).publish("orders", order("c", 5)));
 
-    await waitForText(view, "orders", "c:5|a:10|b:20");
-    await waitForText(view, "health", "3");
+    await expect.element(orders).toHaveTextContent("c:5|a:10|b:20");
+    await expect.element(health).toHaveTextContent("3");
     view.unmount();
   });
 
@@ -118,18 +152,24 @@ describe("createViewServerReact", () => {
         orderBy: [{ field: "price", direction: "asc" }],
         limit: 10,
       });
-      return <output data-testid="orders">{result.rows.map((row) => row.id).join("|")}</output>;
+      return (
+        <output aria-label="orders" role="status">
+          {result.rows.map((row) => row.id).join("|")}
+        </output>
+      );
     }
 
-    const view = render(
+    const view = mount(
       <ViewServerInMemoryProvider>
         <RuntimeCapture />
         <OrdersView />
       </ViewServerInMemoryProvider>,
     );
+    const orders = page.getByRole("status", { name: "orders" });
+    await expect.element(orders).toHaveTextContent("");
 
     Effect.runSync(getRuntime(runtime).publish("orders", order("a", 10)));
-    await waitForText(view, "orders", "a");
+    await expect.element(orders).toHaveTextContent("a");
 
     view.rerender(
       <ViewServerInMemoryProvider>
@@ -137,10 +177,11 @@ describe("createViewServerReact", () => {
       </ViewServerInMemoryProvider>,
     );
 
-    await waitFor(() => {
-      const health = Effect.runSync(getRuntime(runtime).health());
-      expect(health.engine.topics.orders.activeSubscriptions).toBe(0);
-    });
+    await expect
+      .poll(
+        () => Effect.runSync(getRuntime(runtime).health()).engine.topics.orders.activeSubscriptions,
+      )
+      .toBe(0);
     view.unmount();
   });
 
@@ -158,30 +199,32 @@ describe("createViewServerReact", () => {
         limit: 10,
       });
       return (
-        <output data-testid="orders">
+        <output aria-label="orders" role="status">
           {result.rows.map((row) => `${row.id}:${row.price}`).join("|")}
         </output>
       );
     }
 
-    const view = render(
+    const view = mount(
       <ViewServerInMemoryProvider>
         <RuntimeCapture />
         <OrdersView />
       </ViewServerInMemoryProvider>,
     );
+    const orders = page.getByRole("status", { name: "orders" });
+    await expect.element(orders).toHaveTextContent("");
 
     Effect.runSync(getRuntime(runtime).publishMany("orders", [order("a", 10), order("b", 20)]));
-    await waitForText(view, "orders", "a:10|b:20");
+    await expect.element(orders).toHaveTextContent("a:10|b:20");
 
     Effect.runSync(getRuntime(runtime).publish("orders", order("a", 30)));
-    await waitForText(view, "orders", "b:20|a:30");
+    await expect.element(orders).toHaveTextContent("b:20|a:30");
 
     Effect.runSync(getRuntime(runtime).patch("orders", "a", { price: 5 }));
-    await waitForText(view, "orders", "a:5|b:20");
+    await expect.element(orders).toHaveTextContent("a:5|b:20");
 
     Effect.runSync(getRuntime(runtime).delete("orders", "a"));
-    await waitForText(view, "orders", "b:20");
+    await expect.element(orders).toHaveTextContent("b:20");
 
     const snapshot = Effect.runSync(
       getRuntime(runtime).snapshot("orders", {
@@ -196,7 +239,7 @@ describe("createViewServerReact", () => {
     view.unmount();
   });
 
-  it("maps runtime errors", () => {
+  it("maps runtime errors", async () => {
     let runtime: ViewServerInMemoryRuntime<Topics> | undefined;
 
     function RuntimeCapture() {
@@ -204,11 +247,12 @@ describe("createViewServerReact", () => {
       return null;
     }
 
-    const view = render(
+    const view = mount(
       <ViewServerInMemoryProvider>
         <RuntimeCapture />
       </ViewServerInMemoryProvider>,
     );
+    await expect.poll(() => runtime).not.toBeUndefined();
 
     Effect.runSync(getRuntime(runtime).publish("orders", order("a", 10)));
 
@@ -265,18 +309,20 @@ describe("createViewServerReact", () => {
         limit: 10,
       });
       return (
-        <output data-testid="trades">
+        <output aria-label="trades" role="status">
           {result.rows.map((row) => `${row.id}:${row.quantity}`).join("|")}
         </output>
       );
     }
 
-    const view = render(
+    const view = mount(
       <ViewServerInMemoryProvider>
         <RuntimeCapture />
         <TradesView />
       </ViewServerInMemoryProvider>,
     );
+    const trades = page.getByRole("status", { name: "trades" });
+    await expect.element(trades).toHaveTextContent("");
 
     Effect.runSync(
       getRuntime(runtime).publishMany("trades", [
@@ -285,7 +331,7 @@ describe("createViewServerReact", () => {
       ]),
     );
 
-    await waitForText(view, "trades", "b:10");
+    await expect.element(trades).toHaveTextContent("b:10");
     view.unmount();
   });
 
@@ -297,19 +343,17 @@ describe("createViewServerReact", () => {
       return null;
     }
 
-    const view = render(
+    const view = mount(
       <ViewServerInMemoryProvider>
         <RuntimeCapture />
       </ViewServerInMemoryProvider>,
     );
+    await expect.poll(() => runtime).not.toBeUndefined();
 
     view.unmount();
-    await waitFor(() => {
-      const closedRuntime = Effect.runSyncExit(
-        getRuntime(runtime).publish("orders", order("a", 10)),
-      );
-      expect(closedRuntime._tag).toBe("Failure");
-    });
+    await expect
+      .poll(() => Effect.runSyncExit(getRuntime(runtime).publish("orders", order("a", 10)))._tag)
+      .toBe("Failure");
   });
 
   it("surfaces status events from bounded subscription queues", async () => {
@@ -326,28 +370,30 @@ describe("createViewServerReact", () => {
         limit: 10,
       });
       return (
-        <output data-testid="orders">
+        <output aria-label="orders" role="status">
           {result.status}:{result.statusCode}
         </output>
       );
     }
 
-    const view = render(
+    const view = mount(
       <ViewServerInMemoryProvider subscriptionQueueCapacity={1}>
         <RuntimeCapture />
         <OrdersView />
       </ViewServerInMemoryProvider>,
     );
+    const orders = page.getByRole("status", { name: "orders" });
+    await expect.poll(() => runtime).not.toBeUndefined();
 
     Effect.runSync(getRuntime(runtime).publish("orders", order("a", 10)));
-    await waitForText(view, "orders", "ready:Ready");
+    await expect.element(orders).toHaveTextContent("ready:Ready");
 
     for (let index = 0; index < 50; index += 1) {
       Effect.runSync(getRuntime(runtime).publish("orders", order(`burst-${index}`, index)));
     }
 
     expect(Effect.runSync(getRuntime(runtime).health()).transport.backpressureEvents).toBe(1);
-    await waitForText(view, "orders", "closed:BackpressureExceeded");
+    await expect.element(orders).toHaveTextContent("closed:BackpressureExceeded");
     view.unmount();
   });
 });

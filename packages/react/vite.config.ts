@@ -31,6 +31,9 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    include: ["react-dom/client"],
+  },
   pack: libraryPack("src/index.tsx"),
   lint: {
     options: {
