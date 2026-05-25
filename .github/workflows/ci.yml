@@ -41,10 +41,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install browser test dependencies
+        run: pnpm --filter @view-server/react exec playwright install --with-deps chromium firefox webkit
+
       - name: Effect LSP diagnostics
         run: |
           pnpm exec effect-language-service diagnostics --project packages/config/tsconfig.json --format text --strict
           pnpm exec effect-language-service diagnostics --project packages/column-live-view-engine/tsconfig.json --format text --strict
+          pnpm exec effect-language-service diagnostics --project packages/react/tsconfig.json --format text --strict
 
       - name: Ready gate
         run: pnpm run ready

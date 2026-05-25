@@ -17,6 +17,7 @@ export type TopicRuntimeHealth = {
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
   readonly maxQueueDepth: number;
+  readonly backpressureEvents: number;
   readonly memoryBytes: number;
   readonly tombstoneCount: number;
   readonly compactionPending: boolean;

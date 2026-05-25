@@ -1,15 +1,15 @@
 import type { FieldKey, OrderBy } from "@view-server/config";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, SchemaAST } from "effect";
 import { isBigDecimal, Order } from "effect/BigDecimal";
 import {
   cloneRecord,
-  cloneRow,
   cloneUnknown,
   fieldValue,
   isPlainRecord,
   isRecord,
   valuesEqual,
 } from "./row-values";
+import type { QueryEvaluation, StoredRowOf } from "./query-result";
 
 type RowObject = object;
 
@@ -22,6 +22,7 @@ export class InvalidQueryError extends Schema.TaggedErrorClass<InvalidQueryError
 ) {}
 
 export type RuntimeRawQuery = {
+  readonly select: ReadonlyArray<string>;
   readonly where?: object;
   readonly orderBy?: ReadonlyArray<{
     readonly field: string;
@@ -29,7 +30,6 @@ export type RuntimeRawQuery = {
   }>;
   readonly offset?: number;
   readonly limit?: number;
-  readonly fields?: ReadonlyArray<string>;
 };
 
 type SchemaWithFields = Schema.Decoder<object> & {
@@ -39,19 +39,6 @@ type SchemaWithFields = Schema.Decoder<object> & {
 export type RawQueryCompilerMetadata = {
   readonly fieldNames: ReadonlySet<string>;
   readonly structuredFieldNames: ReadonlySet<string>;
-};
-
-export type StoredRowOf<Row extends RowObject> = {
-  readonly key: string;
-  readonly row: Row;
-};
-
-export type QueryEvaluation<ResultRow extends RowObject> = {
-  readonly rows: ReadonlyArray<ResultRow>;
-  readonly keys: ReadonlyArray<string>;
-  readonly window: ReadonlyArray<StoredRowOf<ResultRow>>;
-  readonly totalRows: number;
-  readonly version: number;
 };
 
 export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject> = {
@@ -78,7 +65,7 @@ type FilterObject = {
   readonly startsWith?: string;
 };
 
-const rawQueryKeys = new Set(["where", "orderBy", "offset", "limit", "fields"]);
+const rawQueryKeys = new Set(["where", "orderBy", "offset", "limit", "select"]);
 const filterOperatorKeys = new Set(["eq", "neq", "in", "gt", "gte", "lt", "lte", "startsWith"]);
 
 const isDenseArray = (value: ReadonlyArray<unknown>): boolean => {
@@ -99,6 +86,14 @@ const isSchemaWithFields = (schema: Schema.Decoder<object>): schema is SchemaWit
 const schemaFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> =>
   isSchemaWithFields(schema) ? new Set(Object.keys(schema.fields)) : new Set();
 
+const schemaAst = (schema: unknown): SchemaAST.AST | undefined => {
+  if (!isRecord(schema)) {
+    return undefined;
+  }
+  const ast = schema["ast"];
+  return SchemaAST.isAST(ast) ? ast : undefined;
+};
+
 const schemaStructuredFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
@@ -106,8 +101,11 @@ const schemaStructuredFieldNames = (schema: Schema.Decoder<object>): ReadonlySet
 
   const fields = new Set<string>();
   for (const [field, fieldSchema] of Object.entries(schema.fields)) {
-    const tag = Object(Object(fieldSchema)["ast"])["_tag"];
-    if (tag === "Objects" || tag === "Arrays" || tag === "ObjectKeyword") {
+    const ast = schemaAst(fieldSchema);
+    if (
+      ast !== undefined &&
+      (SchemaAST.isObjects(ast) || SchemaAST.isArrays(ast) || SchemaAST.isObjectKeyword(ast))
+    ) {
       fields.add(field);
     }
   }
@@ -121,13 +119,16 @@ export const rawQueryCompilerMetadata = (
   structuredFieldNames: schemaStructuredFieldNames(schema),
 });
 
-const decodeRawQuery = (
+const decodeRawQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.decode")((
   topic: string,
   metadata: RawQueryCompilerMetadata,
   query: unknown,
 ): Effect.Effect<RuntimeRawQuery, InvalidQueryError> => {
   if (query === undefined) {
-    return Effect.succeed({});
+    return InvalidQueryError.make({
+      topic,
+      message: "Raw query select must be a non-empty array of strings.",
+    });
   }
   if (!isPlainRecord(query)) {
     return InvalidQueryError.make({
@@ -170,25 +171,34 @@ const decodeRawQuery = (
     });
   }
 
-  const fields = query["fields"];
-  if (
-    fields !== undefined &&
-    (!Array.isArray(fields) || !fields.every((field) => typeof field === "string"))
-  ) {
+  const select = query["select"];
+  if (!Array.isArray(select)) {
     return InvalidQueryError.make({
       topic,
-      message: "Raw query fields must be an array of strings.",
+      message: "Raw query select must be a non-empty array of strings.",
     });
   }
-  if (Array.isArray(fields)) {
-    for (const field of fields) {
-      if (!metadata.fieldNames.has(field)) {
-        return InvalidQueryError.make({
-          topic,
-          message: `Raw query fields contains unknown field: ${field}.`,
-        });
-      }
+  if (select.length === 0 || !isDenseArray(select)) {
+    return InvalidQueryError.make({
+      topic,
+      message: "Raw query select must be a non-empty array of strings.",
+    });
+  }
+  const selectedFields: Array<string> = [];
+  for (const field of select) {
+    if (typeof field !== "string") {
+      return InvalidQueryError.make({
+        topic,
+        message: "Raw query select must be a non-empty array of strings.",
+      });
     }
+    if (!metadata.fieldNames.has(field)) {
+      return InvalidQueryError.make({
+        topic,
+        message: `Raw query select contains unknown field: ${field}.`,
+      });
+    }
+    selectedFields.push(field);
   }
 
   const offset = query["offset"];
@@ -208,12 +218,14 @@ const decodeRawQuery = (
   }
 
   const decoded: {
+    select: Array<string>;
     where?: object;
     orderBy?: Array<{ readonly field: string; readonly direction: "asc" | "desc" }>;
     offset?: number;
     limit?: number;
-    fields?: Array<string>;
-  } = {};
+  } = {
+    select: selectedFields,
+  };
 
   if (where !== undefined) {
     let clonedWhere: Record<string, unknown>;
@@ -233,10 +245,6 @@ const decodeRawQuery = (
   if (limit !== undefined) {
     decoded.limit = limit;
   }
-  if (Array.isArray(fields)) {
-    decoded.fields = [...fields];
-  }
-
   const clonedOrderBy: Array<{ readonly field: string; readonly direction: "asc" | "desc" }> = [];
   if (Array.isArray(orderBy)) {
     for (const entry of orderBy) {
@@ -285,38 +293,37 @@ const decodeRawQuery = (
   }
 
   return Effect.succeed(decoded);
-};
+});
 
-const validateRuntimeQuery = (
+const validateRuntimeQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.validate")(function* (
   topic: string,
   metadata: RawQueryCompilerMetadata,
   query: RuntimeRawQuery,
-): Effect.Effect<void, InvalidQueryError> =>
-  Effect.gen(function* () {
-    if (query.where === undefined) {
-      return;
-    }
+) {
+  if (query.where === undefined) {
+    return;
+  }
 
-    for (const [field, filter] of Object.entries(query.where)) {
-      if (!isPlainRecord(filter) || isBigDecimal(filter)) {
-        continue;
-      }
-      const keys = Object.keys(filter);
-      const operatorKeyCount = keys.filter((key) => filterOperatorKeys.has(key)).length;
-      if (operatorKeyCount > 0 && operatorKeyCount !== keys.length) {
-        return yield* InvalidQueryError.make({
-          topic,
-          message: `Raw query where field ${field} contains unsupported filter operator.`,
-        });
-      }
-      if (operatorKeyCount === 0 && !metadata.structuredFieldNames.has(field)) {
-        return yield* InvalidQueryError.make({
-          topic,
-          message: `Raw query where field ${field} contains unsupported filter operator.`,
-        });
-      }
+  for (const [field, filter] of Object.entries(query.where)) {
+    if (!isPlainRecord(filter) || isBigDecimal(filter)) {
+      continue;
     }
-  });
+    const keys = Object.keys(filter);
+    const operatorKeyCount = keys.filter((key) => filterOperatorKeys.has(key)).length;
+    if (operatorKeyCount > 0 && operatorKeyCount !== keys.length) {
+      return yield* InvalidQueryError.make({
+        topic,
+        message: `Raw query where field ${field} contains unsupported filter operator.`,
+      });
+    }
+    if (operatorKeyCount === 0 && !metadata.structuredFieldNames.has(field)) {
+      return yield* InvalidQueryError.make({
+        topic,
+        message: `Raw query where field ${field} contains unsupported filter operator.`,
+      });
+    }
+  }
+});
 
 const stableValueString = (value: unknown): string => {
   if (Array.isArray(value)) {
@@ -564,32 +571,30 @@ const compareRows = <Row extends RowObject>(
 
 const projectRow = (
   row: RowObject,
-  fields: ReadonlyArray<FieldKey<Record<string, unknown>>> | undefined,
+  select: ReadonlyArray<FieldKey<Record<string, unknown>>>,
 ): RowObject => {
-  if (fields === undefined) {
-    return cloneRow(row);
-  }
-
   const projected: Record<string, unknown> = {};
-  for (const field of fields) {
+  for (const field of select) {
     projected[field] = cloneUnknown(fieldValue(row, field));
   }
   return projected;
 };
 
-const projectCompiledRow = <ResultRow extends RowObject>(
+function projectCompiledRow<ResultRow extends RowObject>(
   row: RowObject,
-  fields: ReadonlyArray<FieldKey<Record<string, unknown>>> | undefined,
-): ResultRow => projectRow(row, fields) as ResultRow;
+  select: ReadonlyArray<FieldKey<Record<string, unknown>>>,
+): ResultRow;
+function projectCompiledRow(
+  row: RowObject,
+  select: ReadonlyArray<FieldKey<Record<string, unknown>>>,
+): RowObject {
+  return projectRow(row, select);
+}
 
 const compileProjection = <Row extends RowObject, ResultRow extends RowObject>(
-  fields: RuntimeRawQuery["fields"],
+  select: ReadonlyArray<string>,
 ): ((row: Row) => ResultRow) => {
-  if (fields === undefined) {
-    return (row) => projectCompiledRow(row, undefined);
-  }
-
-  const selectedFields = [...fields];
+  const selectedFields = [...select];
   return (row) => projectCompiledRow(row, selectedFields);
 };
 
@@ -600,22 +605,20 @@ const compileRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
   return {
     matches: compileMatches(query.where),
     compare: (left, right) => compareRows(left, right, orderBy),
-    project: compileProjection(query.fields),
+    project: compileProjection(query.select),
     offset: query.offset ?? 0,
     limit: query.limit,
   };
 };
 
-export const prepareRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
-  topic: string,
-  metadata: RawQueryCompilerMetadata,
-  query: unknown,
-): Effect.Effect<CompiledRawQuery<Row, ResultRow>, InvalidQueryError> =>
-  Effect.gen(function* () {
-    const decoded = yield* decodeRawQuery(topic, metadata, query);
-    yield* validateRuntimeQuery(topic, metadata, decoded);
-    return compileRawQuery<Row, ResultRow>(decoded);
-  });
+export const prepareRawQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.prepare")(function* <
+  Row extends RowObject,
+  ResultRow extends RowObject,
+>(topic: string, metadata: RawQueryCompilerMetadata, query: unknown) {
+  const decoded = yield* decodeRawQuery(topic, metadata, query);
+  yield* validateRuntimeQuery(topic, metadata, decoded);
+  return compileRawQuery<Row, ResultRow>(decoded);
+});
 
 export const evaluateCompiledRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
   store: RawQueryRowStore<Row>,

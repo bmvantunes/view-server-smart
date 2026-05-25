@@ -9,20 +9,27 @@ import type { RowFromSchema, RowSchema, StringFieldKey, TopicDefinition } from "
 
 export type {
   Aggregate,
+  AggregateOrderByField,
+  Aggregates,
   AggregateKind,
   AverageAggregate,
   ComparableAggregate,
   CountAggregate,
   CountDistinctAggregate,
   EqualityFilter,
+  ExactGroupedQuery,
+  ExactPatch,
+  ExactRawQuery,
   FieldFilter,
   FieldKey,
+  GroupedOrderBy,
   GroupedQuery,
   LiveQuery,
   LiveQueryResult,
   LiveQueryRow,
   NumericFieldKey,
   OrderBy,
+  OrderByField,
   RangeFilter,
   RawQuery,
   RowFromSchema,
@@ -37,7 +44,6 @@ export type {
   TopicName,
   TopicRow,
   TopicSchema,
-  UseLiveQuery,
   ValidateLiveQuery,
   Where,
 } from "./topic-contract";
@@ -54,11 +60,8 @@ export type {
   ViewServerHealth,
 } from "./health-contract";
 export type {
-  ReactHookContracts,
   ViewServerBackpressureError,
-  ViewServerInMemoryProviderOptions,
   ViewServerInMemoryRuntime,
-  ViewServerProviderOptions,
   RuntimeEnvironmentConfig,
   ViewServerRuntimeError,
   ViewServerTransportError,
@@ -92,7 +95,7 @@ export type {
 } from "./kafka-contract";
 
 export type ViewServerConfig<Topics extends object> = {
-  readonly topics: Topics;
+  readonly topics: Topics & ValidateTopicDefinitions<Topics>;
   readonly defineRuntimeOptions: <const Options extends RuntimeOptionsCandidate>(
     options: ExactRuntimeOptions<Topics, Options>,
   ) => RuntimeOptionsDefinition<Topics, Options>;

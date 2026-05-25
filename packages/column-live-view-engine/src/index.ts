@@ -1,24 +1,13 @@
-import type { LiveQueryRow, LiveQueryResult, TopicRow } from "@view-server/config";
+import type { ExactPatch, ExactRawQuery, LiveQueryRow, TopicRow } from "@view-server/config";
 import { Effect } from "effect";
 import type {
-  AnyTopicRow,
   ColumnLiveViewEngine,
   ColumnLiveViewEngineConfig,
   DecodableTopicDefinitions,
 } from "./engine-contract";
-import {
-  EngineClosedError,
-  InvalidRowError,
-  InvalidTopicError,
-  UnsupportedQueryError,
-} from "./engine-errors";
+import { EngineClosedError, InvalidRowError, InvalidTopicError } from "./engine-errors";
 import { collectColumnLiveViewEngineHealth } from "./engine-health";
-import { makeLiveSubscription } from "./live-subscription";
-import {
-  evaluateCompiledRawQuery,
-  prepareRawQuery,
-  type QueryEvaluation,
-} from "./raw-query-compiler";
+import { snapshotExecutableQuery, subscribeExecutableQuery } from "./query-execution";
 import {
   closeTopicStoreSubscriptions,
   deleteTopicStoreRow,
@@ -46,22 +35,7 @@ export type {
 } from "./engine-contract";
 export type { ColumnLiveViewEngineHealth, ColumnLiveViewTopicHealth } from "./engine-health";
 
-type RowObject = object;
 const defaultSubscriptionQueueCapacity = 1_024;
-
-const isGroupedQuery = (query: unknown): boolean =>
-  typeof query === "object" &&
-  query !== null &&
-  !Array.isArray(query) &&
-  ("groupBy" in query || "aggregates" in query);
-
-const liveQueryResult = <Row extends RowObject>(
-  evaluation: QueryEvaluation<Row>,
-): LiveQueryResult<Row> => ({
-  rows: evaluation.rows,
-  totalRows: evaluation.totalRows,
-  version: evaluation.version,
-});
 
 const invalidRow = (topic: string, message: string) =>
   new InvalidRowError({
@@ -72,10 +46,7 @@ const invalidRow = (topic: string, message: string) =>
 class InMemoryColumnLiveViewEngine<
   Topics extends DecodableTopicDefinitions,
 > implements ColumnLiveViewEngine<Topics> {
-  private readonly stores = new Map<
-    Extract<keyof Topics, string>,
-    TopicStore<AnyTopicRow<Topics>>
-  >();
+  private readonly stores = new Map<Extract<keyof Topics, string>, TopicStore<object>>();
   private readonly subscriptionQueueCapacity: number;
   private engineVersion = 0;
   private nextQueryId = 0;
@@ -94,17 +65,19 @@ class InMemoryColumnLiveViewEngine<
       const definition = config.topics[topic];
       this.stores.set(
         topic,
-        new TopicStore<AnyTopicRow<Topics>>(topic, definition.schema, definition.key, () => {
+        new TopicStore<object>(topic, definition.schema, definition.key, () => {
           this.engineVersion += 1;
         }),
       );
     }
   }
 
-  private getStore<Topic extends Extract<keyof Topics, string>>(
-    topic: Topic,
-  ): Effect.Effect<TopicStore<TopicRow<Topics, Topic>>, InvalidTopicError> {
-    return Effect.gen({ self: this }, function* () {
+  private readonly getStore = Effect.fn("ColumnLiveViewEngine.store.get")(
+    { self: this },
+    function* <Topic extends Extract<keyof Topics, string>>(
+      this: InMemoryColumnLiveViewEngine<Topics>,
+      topic: Topic,
+    ) {
       const store = this.stores.get(topic);
       if (store === undefined) {
         return yield* InvalidTopicError.make({
@@ -112,134 +85,144 @@ class InMemoryColumnLiveViewEngine<
           message: `Unknown topic: ${topic}`,
         });
       }
-      return store as TopicStore<TopicRow<Topics, Topic>>;
-    });
-  }
+      return store;
+    },
+  );
 
-  private ensureOpen(): Effect.Effect<void, EngineClosedError> {
-    return Effect.gen({ self: this }, function* () {
+  private readonly ensureOpen = Effect.fn("ColumnLiveViewEngine.open.ensure")(
+    { self: this },
+    function* (this: InMemoryColumnLiveViewEngine<Topics>) {
       if (this.closed) {
         return yield* EngineClosedError.make({
           message: "ColumnLiveViewEngine is closed.",
         });
       }
-    });
-  }
+    },
+  );
 
-  readonly publish: ColumnLiveViewEngine<Topics>["publish"] = (topic, row) => {
-    return Effect.gen({ self: this }, function* () {
-      yield* this.ensureOpen();
-      const store = yield* this.getStore(topic);
-      yield* publishTopicStoreRow(store, row, invalidRow);
-    });
-  };
+  readonly publish: ColumnLiveViewEngine<Topics>["publish"] = Effect.fn(
+    "ColumnLiveViewEngine.publish",
+  )({ self: this }, function* <
+    Topic extends Extract<keyof Topics, string>,
+  >(this: InMemoryColumnLiveViewEngine<Topics>, topic: Topic, row: TopicRow<Topics, Topic>) {
+    yield* this.ensureOpen();
+    const store = yield* this.getStore(topic);
+    yield* publishTopicStoreRow(store, row, invalidRow);
+  });
 
-  readonly publishMany: ColumnLiveViewEngine<Topics>["publishMany"] = (topic, rows) => {
-    return Effect.gen({ self: this }, function* () {
-      yield* this.ensureOpen();
-      const store = yield* this.getStore(topic);
-      yield* publishTopicStoreRows(store, rows, invalidRow);
-    });
-  };
+  readonly publishMany: ColumnLiveViewEngine<Topics>["publishMany"] = Effect.fn(
+    "ColumnLiveViewEngine.publishMany",
+  )({ self: this }, function* <
+    Topic extends Extract<keyof Topics, string>,
+  >(this: InMemoryColumnLiveViewEngine<Topics>, topic: Topic, rows: ReadonlyArray<TopicRow<Topics, Topic>>) {
+    yield* this.ensureOpen();
+    const store = yield* this.getStore(topic);
+    yield* publishTopicStoreRows(store, rows, invalidRow);
+  });
 
-  readonly patch: ColumnLiveViewEngine<Topics>["patch"] = (topic, key, patch) => {
-    return Effect.gen({ self: this }, function* () {
+  readonly patch: ColumnLiveViewEngine<Topics>["patch"] = Effect.fn("ColumnLiveViewEngine.patch")(
+    { self: this },
+    function* <
+      Topic extends Extract<keyof Topics, string>,
+      const Patch extends Partial<TopicRow<Topics, Topic>>,
+    >(
+      this: InMemoryColumnLiveViewEngine<Topics>,
+      topic: Topic,
+      key: string,
+      patch: ExactPatch<TopicRow<Topics, Topic>, Patch>,
+    ) {
       yield* this.ensureOpen();
       const store = yield* this.getStore(topic);
       yield* patchTopicStoreRow(store, key, patch, invalidRow);
-    });
-  };
+    },
+  );
 
-  readonly delete: ColumnLiveViewEngine<Topics>["delete"] = (topic, key) => {
-    return Effect.gen({ self: this }, function* () {
-      yield* this.ensureOpen();
-      const store = yield* this.getStore(topic);
-      yield* deleteTopicStoreRow(store, key);
-    });
-  };
+  readonly delete: ColumnLiveViewEngine<Topics>["delete"] = Effect.fn(
+    "ColumnLiveViewEngine.delete",
+  )({ self: this }, function* <
+    Topic extends Extract<keyof Topics, string>,
+  >(this: InMemoryColumnLiveViewEngine<Topics>, topic: Topic, key: string) {
+    yield* this.ensureOpen();
+    const store = yield* this.getStore(topic);
+    yield* deleteTopicStoreRow(store, key);
+  });
 
-  readonly snapshot: ColumnLiveViewEngine<Topics>["snapshot"] = (topic, query) => {
-    return Effect.gen({ self: this }, function* () {
-      yield* this.ensureOpen();
-      if (isGroupedQuery(query)) {
-        return yield* UnsupportedQueryError.make({
-          topic,
-          message: "Grouped aggregate queries are not implemented in this slice.",
-        });
-      }
-      const store = yield* this.getStore(topic);
-      type ResultRow = LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>;
-      const compiled = yield* prepareRawQuery<TopicRow<Topics, typeof topic>, ResultRow>(
-        topic,
-        store.rawQueryMetadata,
-        query,
-      );
-      return liveQueryResult(evaluateCompiledRawQuery(store, compiled));
-    });
-  };
+  readonly snapshot: ColumnLiveViewEngine<Topics>["snapshot"] = Effect.fn(
+    "ColumnLiveViewEngine.snapshot",
+  )({ self: this }, function* <
+    Topic extends Extract<keyof Topics, string>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
+  >(this: InMemoryColumnLiveViewEngine<Topics>, topic: Topic, query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>) {
+    yield* this.ensureOpen();
+    const store = yield* this.getStore(topic);
+    return yield* snapshotExecutableQuery<
+      object,
+      LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>
+    >(topic, store, query);
+  });
 
-  readonly subscribe: ColumnLiveViewEngine<Topics>["subscribe"] = (topic, query) => {
-    return Effect.gen({ self: this }, function* () {
-      yield* this.ensureOpen();
-      if (isGroupedQuery(query)) {
-        return yield* UnsupportedQueryError.make({
-          topic,
-          message: "Grouped aggregate queries are not implemented in this slice.",
-        });
-      }
-      const store = yield* this.getStore(topic);
-      const queryId = `query-${this.nextQueryId}`;
-      this.nextQueryId += 1;
-      type StoreRow = TopicRow<Topics, typeof topic>;
-      type ResultRow = LiveQueryRow<StoreRow, typeof query>;
-      const compiled = yield* prepareRawQuery<StoreRow, ResultRow>(
-        topic,
-        store.rawQueryMetadata,
-        query,
-      );
-      const subscription = yield* makeLiveSubscription({
-        store,
-        queryId,
-        compiled,
-        queueCapacity: this.subscriptionQueueCapacity,
-      });
+  readonly subscribe: ColumnLiveViewEngine<Topics>["subscribe"] = Effect.fn(
+    "ColumnLiveViewEngine.subscribe",
+  )({ self: this }, function* <
+    Topic extends Extract<keyof Topics, string>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
+  >(this: InMemoryColumnLiveViewEngine<Topics>, topic: Topic, query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>) {
+    yield* this.ensureOpen();
+    const store = yield* this.getStore(topic);
+    const subscription = yield* store.mutationSemaphore.withPermits(1)(
+      Effect.gen({ self: this }, function* () {
+        yield* this.ensureOpen();
+        const queryId = `query-${this.nextQueryId}`;
+        this.nextQueryId += 1;
+        return yield* subscribeExecutableQuery<
+          object,
+          LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>
+        >(topic, store, query, { queryId, queueCapacity: this.subscriptionQueueCapacity });
+      }),
+    );
 
-      return {
-        events: subscription.events,
-        close: subscription.close,
-      };
-    });
-  };
+    return {
+      events: subscription.events,
+      close: subscription.close,
+    };
+  });
 
-  readonly health: ColumnLiveViewEngine<Topics>["health"] = () => {
-    return collectColumnLiveViewEngineHealth<Topics, AnyTopicRow<Topics>>(this.stores, {
+  readonly health: ColumnLiveViewEngine<Topics>["health"] = Effect.fn(
+    "ColumnLiveViewEngine.health",
+  )({ self: this }, function* (this: InMemoryColumnLiveViewEngine<Topics>) {
+    return yield* collectColumnLiveViewEngineHealth<Topics, object>(this.stores, {
       version: () => this.engineVersion,
       closed: () => this.closed,
     });
-  };
+  });
 
-  readonly reset: ColumnLiveViewEngine<Topics>["reset"] = () => {
-    return Effect.gen({ self: this }, function* () {
+  readonly reset: ColumnLiveViewEngine<Topics>["reset"] = Effect.fn("ColumnLiveViewEngine.reset")(
+    { self: this },
+    function* (this: InMemoryColumnLiveViewEngine<Topics>) {
+      yield* this.ensureOpen();
       for (const store of this.stores.values()) {
         yield* resetTopicStore(store);
       }
       this.engineVersion = 0;
-    });
-  };
+    },
+  );
 
-  readonly close: ColumnLiveViewEngine<Topics>["close"] = () => {
-    return Effect.gen({ self: this }, function* () {
+  readonly close: ColumnLiveViewEngine<Topics>["close"] = Effect.fn("ColumnLiveViewEngine.close")(
+    { self: this },
+    function* (this: InMemoryColumnLiveViewEngine<Topics>) {
       if (!this.closed) {
         this.closed = true;
         for (const store of this.stores.values()) {
           yield* closeTopicStoreSubscriptions(store);
         }
       }
-    });
-  };
+    },
+  );
 }
 
-export const createColumnLiveViewEngine = <const Topics extends DecodableTopicDefinitions>(
-  config: ColumnLiveViewEngineConfig<Topics>,
-): Effect.Effect<ColumnLiveViewEngine<Topics>> =>
-  Effect.sync(() => new InMemoryColumnLiveViewEngine(config));
+export const createColumnLiveViewEngine = Effect.fn("ColumnLiveViewEngine.make")(
+  <const Topics extends DecodableTopicDefinitions>(
+    config: ColumnLiveViewEngineConfig<Topics>,
+  ): Effect.Effect<ColumnLiveViewEngine<Topics>> =>
+    Effect.sync(() => new InMemoryColumnLiveViewEngine(config)),
+);

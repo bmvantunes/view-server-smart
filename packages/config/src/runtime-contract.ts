@@ -1,17 +1,13 @@
-import type { Clock, Config, Effect } from "effect";
+import type { Config, Effect } from "effect";
 import type { ViewServerHealth } from "./health-contract";
 import type {
-  LiveQuery,
+  ExactPatch,
+  ExactRawQuery,
   LiveQueryResult,
   LiveQueryRow,
   TopicRow,
-  UseLiveQuery,
   ValidateLiveQuery,
 } from "./topic-contract";
-
-export type ViewServerProviderOptions = {
-  readonly url: string;
-};
 
 export type ViewServerBackpressureError = {
   readonly _tag: "ViewServerBackpressureError";
@@ -30,6 +26,8 @@ export type ViewServerRuntimeError =
       readonly code:
         | "InvalidTopic"
         | "InvalidRow"
+        | "InvalidQuery"
+        | "UnsupportedQuery"
         | "SnapshotStale"
         | "RuntimeUnavailable"
         | "RuntimeResetFailed";
@@ -56,10 +54,13 @@ export type ViewServerInMemoryRuntime<Topics extends object> = {
     topic: Topic,
     rows: ReadonlyArray<TopicRow<Topics, Topic>>,
   ) => Effect.Effect<void, ViewServerRuntimeError>;
-  readonly patch: <Topic extends Extract<keyof Topics, string>>(
+  readonly patch: <
+    Topic extends Extract<keyof Topics, string>,
+    const Patch extends Partial<TopicRow<Topics, Topic>>,
+  >(
     topic: Topic,
     key: string,
-    patch: Partial<TopicRow<Topics, Topic>>,
+    patch: ExactPatch<TopicRow<Topics, Topic>, Patch>,
   ) => Effect.Effect<void, ViewServerRuntimeError>;
   readonly delete: <Topic extends Extract<keyof Topics, string>>(
     topic: Topic,
@@ -67,31 +68,16 @@ export type ViewServerInMemoryRuntime<Topics extends object> = {
   ) => Effect.Effect<void, ViewServerRuntimeError>;
   readonly snapshot: <
     Topic extends Extract<keyof Topics, string>,
-    const Query extends LiveQuery<TopicRow<Topics, Topic>>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
   >(
     topic: Topic,
-    query: Query & ValidateLiveQuery<Query>,
+    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
   ) => Effect.Effect<
     LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ViewServerRuntimeError
   >;
   readonly health: () => Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
   readonly reset: () => Effect.Effect<void, ViewServerRuntimeError>;
-};
-
-export type ViewServerInMemoryProviderOptions<Topics extends object> = {
-  readonly seed?: {
-    readonly [Topic in keyof Topics]?: ReadonlyArray<TopicRow<Topics, Topic>>;
-  };
-  readonly runtime?: ViewServerInMemoryRuntime<Topics>;
-  readonly onRuntime?: (runtime: ViewServerInMemoryRuntime<Topics>) => void;
-  readonly clock?: Clock.Clock;
-};
-
-export type ReactHookContracts<Topics extends object> = {
-  readonly useLiveQuery: UseLiveQuery<Topics>;
-  readonly useViewServerHealth: () => ViewServerHealth<Topics>;
-  readonly useViewServerTestRuntime: () => ViewServerInMemoryRuntime<Topics>;
 };
 
 export type RuntimeEnvironmentConfig = {

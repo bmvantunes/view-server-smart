@@ -1,0 +1,50 @@
+{
+  "name": "@view-server/react",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    }
+  },
+  "scripts": {
+    "build": "vp run -t @view-server/in-memory#build && vp pack",
+    "test": "vp test run --coverage --typecheck"
+  },
+  "dependencies": {
+    "@effect/atom-react": "catalog:",
+    "@view-server/client": "workspace:*",
+    "@view-server/config": "workspace:*",
+    "effect": "catalog:",
+    "scheduler": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "@view-server/in-memory": "workspace:*",
+    "@vitest/browser": "4.1.6",
+    "@vitest/coverage-istanbul": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/runner": "catalog:",
+    "playwright": "1.60.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vitest-browser-react": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  }
+}

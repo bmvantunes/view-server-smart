@@ -4,14 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check:effect": "effect-language-service diagnostics --project packages/config/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/client/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/column-live-view-engine/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/in-memory/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/react/tsconfig.json --format text --strict",
     "check:package-exports": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module preserve --moduleResolution bundler scripts/check-package-exports.ts && node --experimental-strip-types scripts/check-package-exports.ts",
-    "ready": "vp run -r build && pnpm run check:package-exports && vp check && vp run -r test",
+    "ready": "vp run -r build && pnpm run check:package-exports && vp check && pnpm run check:effect && vp run -r test",
     "prepare": "vp config && effect-language-service patch"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
+    "@view-server/client": "workspace:*",
     "@view-server/column-live-view-engine": "workspace:*",
     "@view-server/config": "workspace:*",
+    "@view-server/in-memory": "workspace:*",
+    "@view-server/react": "workspace:*",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },

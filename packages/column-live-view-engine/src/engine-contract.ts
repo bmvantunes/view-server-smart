@@ -1,10 +1,9 @@
 import type {
   DeltaEvent,
-  FieldKey,
+  ExactPatch,
+  ExactRawQuery,
   LiveQueryRow,
   LiveQueryResult,
-  OrderBy,
-  RawQuery,
   RowFromSchema,
   RowSchema,
   SnapshotEvent,
@@ -14,7 +13,7 @@ import type {
 } from "@view-server/config";
 import type { Effect, Schema, Stream } from "effect";
 import type { ColumnLiveViewEngineHealth } from "./engine-health";
-import type { ColumnLiveViewEngineError } from "./engine-errors";
+import type { ColumnLiveViewEngineError, EngineClosedError } from "./engine-errors";
 
 export type DecodableTopicDefinitions = Record<
   string,
@@ -53,112 +52,6 @@ export type AnyTopicRow<Topics extends DecodableTopicDefinitions> = TopicRow<
   Extract<keyof Topics, string>
 >;
 
-type RejectExtraKeys<Candidate, Shape> = {
-  readonly [Key in Exclude<keyof Candidate, keyof Shape>]: never;
-};
-
-type IsUnion<Value, Candidate = Value> = Value extends unknown
-  ? [Candidate] extends [Value]
-    ? false
-    : true
-  : false;
-
-type TupleHasUnionElement<Tuple extends ReadonlyArray<unknown>> = Tuple extends readonly [
-  infer Head,
-  ...infer Tail,
-]
-  ? IsUnion<Head> extends true
-    ? true
-    : TupleHasUnionElement<Tail>
-  : false;
-
-type ExactRawQuery<Row, Query> = Query &
-  RejectExtraKeys<Query, RawQuery<Row>> & {
-    readonly groupBy?: never;
-    readonly aggregates?: never;
-  } & ExactWhere<Row, Query> &
-  ExactOrderBy<Row, Query> &
-  RejectDynamicRawFields<Row, Query>;
-
-type RejectDynamicRawFields<Row, Query> = "fields" extends keyof Query
-  ? Query extends { readonly fields?: infer Fields }
-    ? NonNullable<Fields> extends ReadonlyArray<unknown>
-      ? undefined extends Query["fields"]
-        ? {
-            readonly fields: never;
-          }
-        : IsUnion<NonNullable<Fields>> extends true
-          ? {
-              readonly fields: never;
-            }
-          : number extends NonNullable<Fields>["length"]
-            ? {
-                readonly fields: never;
-              }
-            : TupleHasUnionElement<NonNullable<Fields>> extends true
-              ? {
-                  readonly fields: never;
-                }
-              : NonNullable<Fields>[number] extends FieldKey<Row>
-                ? unknown
-                : {
-                    readonly fields: never;
-                  }
-      : unknown
-    : unknown
-  : unknown;
-
-type ExactWhere<Row, Query> = Query extends {
-  readonly where: infer Where;
-}
-  ? {
-      readonly where: Where &
-        RejectExtraKeys<Where, { readonly [Field in FieldKey<Row>]?: unknown }> & {
-          readonly [Field in Extract<keyof Where, FieldKey<Row>>]: ExactFilter<
-            Row[Field],
-            Where[Field]
-          >;
-        };
-    }
-  : unknown;
-
-type ExactFilter<Value, Filter> = Value extends object
-  ? unknown
-  : ExactOperatorFilter<Value, Filter>;
-
-type ExactOperatorFilter<Value, Filter> = Filter extends object
-  ? Filter extends ReadonlyArray<unknown>
-    ? unknown
-    : Filter & RejectExtraKeys<Filter, FieldFilterShape<Value>>
-  : unknown;
-
-type FieldFilterShape<Value> = Value extends string
-  ? {
-      readonly eq?: Value;
-      readonly neq?: Value;
-      readonly in?: ReadonlyArray<Value>;
-      readonly startsWith?: string;
-    }
-  : {
-      readonly eq?: Value;
-      readonly neq?: Value;
-      readonly in?: ReadonlyArray<Value>;
-      readonly gt?: Value;
-      readonly gte?: Value;
-      readonly lt?: Value;
-      readonly lte?: Value;
-    };
-
-type ExactOrderBy<Row, Query> = Query extends {
-  readonly orderBy: ReadonlyArray<infer Entry>;
-}
-  ? {
-      readonly orderBy: ReadonlyArray<Entry & RejectExtraKeys<Entry, OrderBy<Row>>>;
-    }
-  : unknown;
-
-type ExactPatch<Row, Patch> = Patch & RejectExtraKeys<Patch, Partial<Row>>;
-
 export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
   readonly publish: <Topic extends Extract<keyof Topics, string>>(
     topic: Topic,
@@ -182,25 +75,25 @@ export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
   ) => Effect.Effect<void, ColumnLiveViewEngineError>;
   readonly snapshot: <
     Topic extends Extract<keyof Topics, string>,
-    const Query extends RawQuery<TopicRow<Topics, Topic>>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
   >(
     topic: Topic,
-    query: ExactRawQuery<TopicRow<Topics, Topic>, Query>,
+    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>,
   ) => Effect.Effect<
     LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ColumnLiveViewEngineError
   >;
   readonly subscribe: <
     Topic extends Extract<keyof Topics, string>,
-    const Query extends RawQuery<TopicRow<Topics, Topic>>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
   >(
     topic: Topic,
-    query: ExactRawQuery<TopicRow<Topics, Topic>, Query>,
+    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>,
   ) => Effect.Effect<
     ColumnLiveViewSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ColumnLiveViewEngineError
   >;
   readonly health: () => Effect.Effect<ColumnLiveViewEngineHealth<Topics>, never>;
-  readonly reset: () => Effect.Effect<void, never>;
+  readonly reset: () => Effect.Effect<void, EngineClosedError>;
   readonly close: () => Effect.Effect<void, never>;
 };

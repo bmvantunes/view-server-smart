@@ -186,24 +186,22 @@ export function AppRoot() {
 Test/browser-in-memory shape:
 
 ```tsx
-import { ViewServerInMemoryProvider } from "./view-server.config";
+import { createInMemoryViewServer } from "./view-server.config";
+
+const { ViewServerInMemoryProvider, client } = createInMemoryViewServer();
+
+client.publish("orders", {
+  id: "order-1",
+  customerId: "customer-1",
+  status: "open",
+  price: 42,
+  region: "usa",
+  updatedAt: 1,
+});
 
 export function TestRoot() {
   return (
-    <ViewServerInMemoryProvider
-      seed={{
-        orders: [
-          {
-            id: "order-1",
-            customerId: "customer-1",
-            status: "open",
-            price: 42,
-            region: "usa",
-            updatedAt: 1,
-          },
-        ],
-      }}
-    >
+    <ViewServerInMemoryProvider>
       <App />
     </ViewServerInMemoryProvider>
   );
@@ -230,10 +228,13 @@ export function OrdersGrid() {
 
 The hook must be fully type-safe from `defineViewServerConfig` without requiring users to define indexes.
 
-`ViewServerProvider` and `ViewServerInMemoryProvider` must expose the same hook behavior. The only difference is transport:
+`ViewServerProvider` and `ViewServerInMemoryProvider` must expose the same hook behavior. The only difference is the provider adapter behind the shared React client seam:
 
 - `ViewServerProvider` connects to a real server through the configured URL.
 - `ViewServerInMemoryProvider` creates a real in-memory `ColumnLiveViewEngine` inside the browser/test process.
+- `useLiveQuery` and `useViewServerHealth` must depend only on the internal transport-neutral React client contract.
+- The in-memory provider supplies that client from the in-memory engine.
+- The real provider supplies that client from the WebSocket/Effect RPC transport.
 
 No mock query engine should exist. Browser tests should exercise the same query compiler, columnar store, snapshot logic, delta logic, and grouped accumulator as production.
 
@@ -324,77 +325,56 @@ Effect.runPromise(runtime);
 The in-memory API should be generated from the same config:
 
 ```ts
-export const {
-  ViewServerProvider,
-  ViewServerInMemoryProvider,
-  useLiveQuery,
-  useViewServerTestRuntime,
-} = viewServer.react;
+export const { ViewServerProvider, useLiveQuery, createInMemoryViewServer } = viewServer.react;
 ```
 
 Recommended test usage:
 
 ```tsx
 import { Effect } from "effect";
-import {
-  ViewServerInMemoryProvider,
-  useLiveQuery,
-  useViewServerTestRuntime,
-} from "./view-server.config";
-
-function PublishButton() {
-  const runtime = useViewServerTestRuntime();
-
-  return (
-    <button
-      onClick={() => {
-        Effect.runPromise(
-          runtime.publish("orders", {
-            id: "order-2",
-            customerId: "customer-2",
-            status: "open",
-            price: 99,
-            region: "london",
-            updatedAt: 2,
-          }),
-        );
-      }}
-    >
-      publish
-    </button>
-  );
-}
+import { createInMemoryViewServer, useLiveQuery } from "./view-server.config";
 
 function Orders() {
   const result = useLiveQuery("orders", {
     where: { status: "open" },
     orderBy: [{ field: "price", direction: "desc" }],
+    select: ["id", "price"],
     limit: 50,
   });
 
   return <div>{result.rows.length}</div>;
 }
 
-export function TestApp() {
-  return (
-    <ViewServerInMemoryProvider seed={{ orders: [] }}>
-      <PublishButton />
-      <Orders />
-    </ViewServerInMemoryProvider>
-  );
-}
+const { ViewServerInMemoryProvider, client } = createInMemoryViewServer();
+
+render(
+  <ViewServerInMemoryProvider>
+    <Orders />
+  </ViewServerInMemoryProvider>,
+);
+
+Effect.runPromise(
+  client.publish("orders", {
+    id: "order-2",
+    customerId: "customer-2",
+    status: "open",
+    price: 99,
+    region: "london",
+    updatedAt: 2,
+  }),
+);
 ```
 
-The in-memory runtime should expose test-only publishing helpers:
+The in-memory client should expose typed publishing helpers:
 
 ```ts
-runtime.publish(topic, row);
-runtime.publishMany(topic, rows);
-runtime.patch(topic, key, patch);
-runtime.delete(topic, key);
-runtime.snapshot(topic, query);
-runtime.health();
-runtime.reset();
+client.publish(topic, row);
+client.publishMany(topic, rows);
+client.patch(topic, key, patch);
+client.delete(topic, key);
+client.snapshot(topic, query);
+client.health();
+client.reset();
 ```
 
 These helpers must be fully typed from `defineViewServerConfig`.
@@ -404,27 +384,31 @@ Important boundary:
 - `ViewServerInMemoryProvider` is public for tests, demos, Storybook, and local browser benchmarks.
 - It must not import server-only Kafka/TCP/gRPC adapters.
 - It should be backed by the same core engine package used by the server runtime.
-- Each provider instance owns a fresh engine unless an explicit runtime instance is passed.
+- `useLiveQuery` must not know whether it is under `ViewServerProvider` or `ViewServerInMemoryProvider`.
+- Test setup should publish through the external `client`, not through a React hook.
+- Do not expose a runtime/test hook from the React API. Publishing into the in-memory server happens through the `client` returned by `createInMemoryViewServer()`.
 
 Provider options:
 
 ```tsx
-<ViewServerInMemoryProvider
-  seed={{ orders, trades }}
-  clock={testClock}
-  runtime={optionalPrecreatedRuntime}
-  onRuntime={captureRuntime}
->
+const { ViewServerInMemoryProvider, client } = createInMemoryViewServer({
+  subscriptionQueueCapacity: 1,
+});
+
+<ViewServerInMemoryProvider>
   <App />
-</ViewServerInMemoryProvider>
+</ViewServerInMemoryProvider>;
 ```
 
 Default behavior:
 
-- Creates a fresh engine on mount.
-- Seeds typed rows before children subscribe.
+- `createInMemoryViewServer()` creates a fresh engine and typed client.
+- Provider supplies that engine to hooks.
+- Setup data goes through `client.publish` / `client.publishMany`; provider seed data is not supported.
 - Disposes all subscriptions and engine state on unmount.
-- Does not share state across tests unless `runtime` is explicitly provided.
+- Does not share state across tests unless the same in-memory instance is explicitly reused.
+- Mutation helpers must not synchronously rebuild the full health snapshot on every publish.
+- `client.health()` may read fresh engine health on demand, while provider health updates should use cached/coalesced refreshes so hot publish paths stay cheap.
 
 This is also the correct path for real browser benchmarks. There is no external database process, no production-only snapshot backend, and no external database requirement, so Vitest browser mode can benchmark real `useLiveQuery` behavior end to end.
 
@@ -1041,7 +1025,7 @@ Responsibilities:
 - `packages/config`: `defineViewServerConfig`, query DSL types, schema/topic typing, shared public types.
 - `packages/column-live-view-engine`: in-memory columnar store, snapshot, subscribe, deltas, grouped aggregates, health core.
 - `packages/runtime`: server runtime, Effect RPC/WebSocket adapter, HTTP `/health`, `/metrics`, TCP publish, Kafka ingest, graceful shutdown.
-- `packages/react`: `ViewServerProvider`, `ViewServerInMemoryProvider`, `useLiveQuery`, `useViewServerHealth`.
+- `packages/react`: `ViewServerProvider`, `createInMemoryViewServer`, `ViewServerInMemoryProvider`, `useLiveQuery`, `useViewServerHealth`.
 - `packages/testing`: test helpers only, no production-only shortcuts.
 - `apps/examples`: minimal real app proving browser usage and runtime URL injection.
 
@@ -1203,11 +1187,13 @@ TCP publish tests should cover:
 
 `ViewServerInMemoryProvider`:
 
-- creates fresh engine by default
-- seeds rows before children subscribe
-- exposes test runtime
+- is created by `createInMemoryViewServer()`
+- uses the same internal React client contract as `ViewServerProvider`
+- supports setup data through the external `client.publish` / `client.publishMany` API
 - disposes engine on unmount
 - never imports Kafka/TCP/WebSocket server code
+
+Do not add `seed`, `onRuntime`, `runtime`, or `testing` props to the provider. Those make the provider too smart and couple app components to test setup concerns.
 
 React tests must run in browser mode and prove real hook behavior.
 

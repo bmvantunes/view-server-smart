@@ -10,16 +10,21 @@ import {
   type KafkaMappingInput,
   type KafkaMessageMetadata,
   type KafkaTopicDefinition,
+  type ExactGroupedQuery,
+  type ExactRawQuery,
+  type LiveQueryResult,
+  type LiveQueryRow,
   type LiveSubscription,
   type LiveTransportAdapter,
   type ProtobufEsGeneratedMessageDescriptor,
-  type ReactHookContracts,
+  type RawQuery,
   type SnapshotEvent,
   type StatusEvent,
   type TopicRuntimeHealth,
+  type TopicRow,
+  type ValidateLiveQuery,
   type ViewServerBackpressureError,
   type ViewServerHealth,
-  type ViewServerInMemoryProviderOptions,
   type ViewServerInMemoryRuntime,
   type ViewServerRuntimeError,
   type ViewServerTransportError,
@@ -120,6 +125,17 @@ const viewServer = defineViewServerConfig({
   },
 });
 
+type LiveQueryCall<Topics extends object> = {
+  <Topic extends Extract<keyof Topics, string>, const Query extends object>(
+    topic: Topic,
+    query: ExactGroupedQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
+  ): LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;
+  <Topic extends Extract<keyof Topics, string>, const Query extends object>(
+    topic: Topic,
+    query: ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
+  ): LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;
+};
+
 const kafkaRegions = {
   usa: runtimeConfig.kafkaBootstrapServers("VIEW_SERVER_KAFKA_USA_BOOTSTRAP_SERVERS"),
   london: runtimeConfig.kafkaBootstrapServers("VIEW_SERVER_KAFKA_LONDON_BOOTSTRAP_SERVERS"),
@@ -205,6 +221,7 @@ describe("public type surface", () => {
       version: 1,
       keys: ["order-1"],
       rows: [{ id: "order-1" }],
+      totalRows: 1,
     };
 
     const metadata: KafkaMessageMetadata<"usa"> = {
@@ -230,6 +247,7 @@ describe("public type surface", () => {
       activeSubscriptions: 0,
       queuedEvents: 0,
       maxQueueDepth: 0,
+      backpressureEvents: 0,
       memoryBytes: 0,
       tombstoneCount: 0,
       compactionPending: false,
@@ -283,15 +301,16 @@ describe("public type surface", () => {
     >().toEqualTypeOf<ViewServerTransportError>();
   });
 
-  it("derives query result rows from fields and grouped aggregates", () => {
-    const assertQueryTypes = (react: ReactHookContracts<typeof viewServer.topics>) => {
-      const fullRawResult = react.useLiveQuery("orders", {
+  it("derives query result rows from select and grouped aggregates", () => {
+    const assertQueryTypes = (useLiveQuery: LiveQueryCall<typeof viewServer.topics>) => {
+      const selectedRawResult = useLiveQuery("orders", {
+        select: ["id", "customerId", "status", "price", "region", "updatedAt"],
         where: {
           status: { eq: "open" },
         },
       });
 
-      expectTypeOf(fullRawResult).toEqualTypeOf<{
+      expectTypeOf(selectedRawResult).toEqualTypeOf<{
         readonly rows: ReadonlyArray<{
           readonly id: string;
           readonly customerId: string;
@@ -300,12 +319,27 @@ describe("public type surface", () => {
           readonly region: string;
           readonly updatedAt: number;
         }>;
-        readonly totalRows?: number;
+        readonly totalRows: number;
         readonly version: number;
+        readonly status: "loading" | "ready" | "stale" | "closed" | "error";
+        readonly statusCode?:
+          | "Ready"
+          | "SnapshotStale"
+          | "SubscriptionClosed"
+          | "TransportError"
+          | "BackpressureExceeded"
+          | "InvalidTopic"
+          | "InvalidRow"
+          | "InvalidQuery"
+          | "UnsupportedQuery"
+          | "RuntimeUnavailable"
+          | "RuntimeResetFailed"
+          | undefined;
+        readonly message?: string | undefined;
       }>();
 
-      const selectedResult = react.useLiveQuery("orders", {
-        fields: ["customerId", "status", "updatedAt"],
+      const selectedResult = useLiveQuery("orders", {
+        select: ["customerId", "status", "updatedAt"],
         where: {
           customerId: { startsWith: "customer-" },
           status: "open",
@@ -319,12 +353,27 @@ describe("public type surface", () => {
           readonly status: "open" | "closed" | "cancelled";
           readonly updatedAt: number;
         }>;
-        readonly totalRows?: number;
+        readonly totalRows: number;
         readonly version: number;
+        readonly status: "loading" | "ready" | "stale" | "closed" | "error";
+        readonly statusCode?:
+          | "Ready"
+          | "SnapshotStale"
+          | "SubscriptionClosed"
+          | "TransportError"
+          | "BackpressureExceeded"
+          | "InvalidTopic"
+          | "InvalidRow"
+          | "InvalidQuery"
+          | "UnsupportedQuery"
+          | "RuntimeUnavailable"
+          | "RuntimeResetFailed"
+          | undefined;
+        readonly message?: string | undefined;
       }>();
 
-      const rawRows = react.useLiveQuery("orders", {
-        fields: ["id", "price"],
+      const rawRows = useLiveQuery("orders", {
+        select: ["id", "price"],
         where: {
           status: "open",
         },
@@ -332,17 +381,21 @@ describe("public type surface", () => {
         limit: 50,
       }).rows;
 
-      const groupedRows = react.useLiveQuery("orders", {
+      const groupedRows = useLiveQuery("orders", {
         groupBy: ["status"],
-        aggregates: [
-          { type: "count", as: "count" },
-          { type: "sum", field: "price", as: "totalPrice" },
-          { type: "avg", field: "updatedAt", as: "averageUpdatedAt" },
-          { type: "min", field: "status", as: "firstStatus" },
-        ],
+        aggregates: {
+          count: { aggFunc: "count" },
+          totalPrice: { aggFunc: "sum", field: "price" },
+          averageUpdatedAt: { aggFunc: "avg", field: "updatedAt" },
+          firstStatus: { aggFunc: "min", field: "status" },
+        },
         where: {
           region: "london",
         },
+        orderBy: [
+          { aggregate: "totalPrice", direction: "desc" },
+          { field: "status", direction: "asc" },
+        ],
       }).rows;
 
       expectTypeOf(rawRows).toEqualTypeOf<
@@ -357,9 +410,9 @@ describe("public type surface", () => {
         readonly firstStatus: "open" | "closed" | "cancelled";
       }>();
 
-      const singleAggregateResult = react.useLiveQuery("orders", {
+      const singleAggregateResult = useLiveQuery("orders", {
         groupBy: ["region"],
-        aggregates: [{ type: "countDistinct", field: "customerId", as: "uniqueCustomers" }],
+        aggregates: { uniqueCustomers: { aggFunc: "countDistinct", field: "customerId" } },
       });
 
       expectTypeOf(singleAggregateResult).toEqualTypeOf<{
@@ -367,12 +420,27 @@ describe("public type surface", () => {
           readonly region: string;
           readonly uniqueCustomers: bigint;
         }>;
-        readonly totalRows?: number;
+        readonly totalRows: number;
         readonly version: number;
+        readonly status: "loading" | "ready" | "stale" | "closed" | "error";
+        readonly statusCode?:
+          | "Ready"
+          | "SnapshotStale"
+          | "SubscriptionClosed"
+          | "TransportError"
+          | "BackpressureExceeded"
+          | "InvalidTopic"
+          | "InvalidRow"
+          | "InvalidQuery"
+          | "UnsupportedQuery"
+          | "RuntimeUnavailable"
+          | "RuntimeResetFailed"
+          | undefined;
+        readonly message?: string | undefined;
       }>();
 
-      const positionRows = react.useLiveQuery("positions", {
-        fields: ["id", "price", "quantity"],
+      const positionRows = useLiveQuery("positions", {
+        select: ["id", "price", "quantity"],
         where: {
           accountId: { startsWith: "acct-" },
           active: true,
@@ -394,17 +462,21 @@ describe("public type surface", () => {
         }>
       >();
 
-      const groupedPositionRows = react.useLiveQuery("positions", {
+      const groupedPositionRows = useLiveQuery("positions", {
         groupBy: ["accountId", "active"],
-        aggregates: [
-          { type: "count", as: "rowCount" },
-          { type: "countDistinct", field: "symbol", as: "symbolCount" },
-          { type: "sum", field: "quantity", as: "totalQuantity" },
-          { type: "sum", field: "price", as: "totalPrice" },
-          { type: "sum", field: "notional", as: "totalNotional" },
-          { type: "avg", field: "price", as: "averagePrice" },
-          { type: "min", field: "accountId", as: "firstAccountId" },
-          { type: "max", field: "quantity", as: "maxQuantity" },
+        aggregates: {
+          rowCount: { aggFunc: "count" },
+          symbolCount: { aggFunc: "countDistinct", field: "symbol" },
+          totalQuantity: { aggFunc: "sum", field: "quantity" },
+          totalPrice: { aggFunc: "sum", field: "price" },
+          totalNotional: { aggFunc: "sum", field: "notional" },
+          averagePrice: { aggFunc: "avg", field: "price" },
+          firstAccountId: { aggFunc: "min", field: "accountId" },
+          maxQuantity: { aggFunc: "max", field: "quantity" },
+        },
+        orderBy: [
+          { aggregate: "totalQuantity", direction: "desc" },
+          { field: "accountId", direction: "asc" },
         ],
       }).rows;
 
@@ -421,18 +493,21 @@ describe("public type surface", () => {
         readonly maxQuantity: bigint;
       }>();
 
-      const dynamicAggregateAlias = "dynamicTotal" as string;
-      react.useLiveQuery("orders", {
+      const dynamicAggregateAlias: string = "dynamicTotal";
+      const dynamicAggregateQuery = {
         groupBy: ["status"],
-        // @ts-expect-error aggregate aliases must be string literals for typed result rows
-        aggregates: [
-          {
-            type: "sum",
-            field: "price",
-            as: dynamicAggregateAlias,
-          },
-        ],
-      });
+        aggregates: {
+          [dynamicAggregateAlias]: { aggFunc: "sum", field: "price" },
+        },
+      } as const;
+      // @ts-expect-error aggregate aliases must be literal object keys.
+      const _invalidDynamicAggregateAlias: ExactGroupedQuery<
+        typeof Order.Type,
+        typeof dynamicAggregateQuery
+      > &
+        ValidateLiveQuery<typeof dynamicAggregateQuery> = dynamicAggregateQuery;
+
+      void _invalidDynamicAggregateAlias;
     };
 
     expect(assertQueryTypes).toBeTypeOf("function");
@@ -670,6 +745,7 @@ const assertCompileTimeContracts = () => {
       updatedAt: 1,
     });
     const snapshotEffect = runtime.snapshot("orders", {
+      select: ["id"],
       where: {
         status: "open",
       },
@@ -727,23 +803,12 @@ const assertCompileTimeContracts = () => {
     );
 
     const invalidSnapshotFilter = runtime.snapshot("orders", {
+      select: ["id"],
       where: {
         // @ts-expect-error snapshot filters must use values from the selected topic row
         price: "not-a-number",
       },
     });
-    const dynamicSnapshotAlias = "dynamicTotal" as string;
-    const invalidSnapshotDynamicAlias = runtime.snapshot("orders", {
-      groupBy: ["status"],
-      // @ts-expect-error runtime snapshot aggregate aliases must be string literals
-      aggregates: [{ type: "sum", field: "price", as: dynamicSnapshotAlias }],
-    });
-    const invalidSnapshotAliasCollision = runtime.snapshot("orders", {
-      groupBy: ["status"],
-      // @ts-expect-error runtime snapshot aggregate aliases cannot collide with groupBy fields
-      aggregates: [{ type: "count", as: "status" }],
-    });
-
     expectTypeOf<
       Effect.Error<typeof invalidPublishWrongField>
     >().toEqualTypeOf<ViewServerRuntimeError>();
@@ -761,71 +826,10 @@ const assertCompileTimeContracts = () => {
     expectTypeOf<
       Effect.Error<typeof invalidSnapshotFilter>
     >().toEqualTypeOf<ViewServerRuntimeError>();
-    expectTypeOf<
-      Effect.Error<typeof invalidSnapshotDynamicAlias>
-    >().toEqualTypeOf<ViewServerRuntimeError>();
-    expectTypeOf<
-      Effect.Error<typeof invalidSnapshotAliasCollision>
-    >().toEqualTypeOf<ViewServerRuntimeError>();
   };
 
   expectTypeOf(assertRuntimeContracts).toBeFunction();
   expectTypeOf<ViewServerBackpressureError>().toMatchTypeOf<ViewServerRuntimeError>();
-
-  const assertProviderContracts = (
-    options: ViewServerInMemoryProviderOptions<typeof viewServer.topics>,
-  ) => {
-    type ProviderOrderSeedRow = NonNullable<NonNullable<typeof options.seed>["orders"]>[number];
-    expectTypeOf<ProviderOrderSeedRow>().toEqualTypeOf<{
-      readonly id: string;
-      readonly customerId: string;
-      readonly status: "open" | "closed" | "cancelled";
-      readonly price: number;
-      readonly region: string;
-      readonly updatedAt: number;
-    }>();
-  };
-
-  expectTypeOf(assertProviderContracts).toBeFunction();
-
-  const validProviderOptions: ViewServerInMemoryProviderOptions<typeof viewServer.topics> = {
-    seed: {
-      orders: [
-        {
-          id: "order-1",
-          customerId: "customer-1",
-          status: "open",
-          price: 42,
-          region: "usa",
-          updatedAt: 1,
-        },
-      ],
-    },
-  };
-
-  expectTypeOf(validProviderOptions.runtime).toEqualTypeOf<
-    ViewServerInMemoryRuntime<typeof viewServer.topics> | undefined
-  >();
-
-  const invalidProviderOptions: ViewServerInMemoryProviderOptions<typeof viewServer.topics> = {
-    seed: {
-      orders: [
-        {
-          id: "order-1",
-          customerId: "customer-1",
-          status: "open",
-          price: 42,
-          region: "usa",
-          // @ts-expect-error seed rows must match the topic schema
-          updatedAt: "not-a-number",
-        },
-      ],
-    },
-  };
-
-  expectTypeOf(invalidProviderOptions).toMatchTypeOf<
-    ViewServerInMemoryProviderOptions<typeof viewServer.topics>
-  >();
 
   defineViewServerConfig({
     topics: {
@@ -1073,192 +1077,287 @@ const assertCompileTimeContracts = () => {
     },
   });
 
-  const assertReactContracts = (react: ReactHookContracts<typeof viewServer.topics>) => {
-    react.useLiveQuery("orders", {
+  const assertLiveQueryContracts = (useLiveQuery: LiveQueryCall<typeof viewServer.topics>) => {
+    // @ts-expect-error raw queries must explicitly select projected fields.
+    useLiveQuery("orders", {
+      where: { status: "open" },
+    });
+
+    useLiveQuery("orders", {
+      select: ["id"],
       where: {
         // @ts-expect-error raw queries reject fields not present on the selected topic
         missing: "open",
       },
     });
 
-    react.useLiveQuery("orders", {
+    useLiveQuery("orders", {
+      select: ["id"],
       where: {
         // @ts-expect-error filter values must match the selected field type
         price: "not-a-number",
       },
     });
 
-    react.useLiveQuery("orders", {
+    useLiveQuery("orders", {
+      select: ["id"],
       where: {
-        status: {
-          // @ts-expect-error string filters do not accept range operators
-          gte: "open",
-        },
+        // @ts-expect-error string filters do not accept range operators
+        status: { gte: "open" },
       },
     });
 
-    react.useLiveQuery("orders", {
+    const invalidStatusInFilter = {
+      select: ["id"],
       where: {
-        status: {
-          // @ts-expect-error filter arrays must contain selected field values
-          in: ["open", "pending"],
-        },
+        status: { in: ["open", "pending"] },
+      },
+    } as const;
+    // @ts-expect-error filter arrays must contain selected field values
+    const _invalidStatusInFilter: RawQuery<typeof Order.Type> &
+      ExactRawQuery<typeof Order.Type, typeof invalidStatusInFilter> = invalidStatusInFilter;
+
+    useLiveQuery("orders", {
+      select: ["id"],
+      where: {
+        // @ts-expect-error number filters do not accept string-only operators
+        price: { startsWith: "1" },
       },
     });
 
-    react.useLiveQuery("orders", {
+    useLiveQuery("positions", {
+      select: ["id"],
       where: {
-        price: {
-          // @ts-expect-error number filters do not accept string-only operators
-          startsWith: "1",
-        },
+        // @ts-expect-error boolean filters do not accept range operators
+        active: { gte: true },
       },
     });
 
-    react.useLiveQuery("positions", {
+    useLiveQuery("positions", {
+      select: ["id"],
       where: {
-        active: {
-          // @ts-expect-error boolean filters do not accept range operators
-          gte: true,
-        },
+        // @ts-expect-error boolean filters do not accept string-only operators
+        active: { startsWith: "t" },
       },
     });
 
-    react.useLiveQuery("positions", {
+    useLiveQuery("positions", {
+      select: ["id"],
       where: {
-        active: {
-          // @ts-expect-error boolean filters do not accept string-only operators
-          startsWith: "t",
-        },
+        // @ts-expect-error BigDecimal filters require BigDecimal values, not strings
+        price: { gte: "10.00" },
       },
     });
 
-    react.useLiveQuery("positions", {
+    useLiveQuery("positions", {
+      select: ["id"],
       where: {
-        price: {
-          // @ts-expect-error BigDecimal filters require BigDecimal values, not strings
-          gte: "10.00",
-        },
+        // @ts-expect-error BigDecimal filters do not accept string-only operators
+        price: { startsWith: "10" },
       },
     });
 
-    react.useLiveQuery("positions", {
+    useLiveQuery("positions", {
+      select: ["id"],
       where: {
-        price: {
-          // @ts-expect-error BigDecimal filters do not accept string-only operators
-          startsWith: "10",
-        },
+        // @ts-expect-error bigint filters require bigint values, not numbers
+        quantity: { gte: 1 },
       },
     });
 
-    react.useLiveQuery("positions", {
-      where: {
-        quantity: {
-          // @ts-expect-error bigint filters require bigint values, not numbers
-          gte: 1,
-        },
-      },
-    });
-
-    react.useLiveQuery("orders", {
+    useLiveQuery("orders", {
+      select: ["id"],
+      // @ts-expect-error orderBy fields are constrained to the selected topic row
       orderBy: [
         {
-          // @ts-expect-error orderBy fields are constrained to the selected topic row
           field: "missing",
           direction: "asc",
         },
       ],
     });
 
-    react.useLiveQuery("orders", {
+    useLiveQuery("orders", {
+      select: ["id"],
+      // @ts-expect-error sort direction is constrained to asc or desc
       orderBy: [
         {
           field: "price",
-          // @ts-expect-error sort direction is constrained to asc or desc
           direction: "ascending",
         },
       ],
     });
 
-    react.useLiveQuery("orders", {
-      // @ts-expect-error projected fields are constrained to the selected topic row
-      fields: ["id", "missing"],
+    useLiveQuery("orders", {
+      select: ["id"],
+      // @ts-expect-error raw orderBy cannot reference aggregate aliases.
+      orderBy: [
+        {
+          aggregate: "totalPrice",
+          direction: "desc",
+        },
+      ],
     });
 
-    react.useLiveQuery("orders", {
-      // @ts-expect-error grouped queries reject groupBy fields not present on the topic row
+    const invalidSelectedFields = {
+      select: ["id", "missing"],
+    } as const;
+    // @ts-expect-error projected fields are constrained to the selected topic row
+    useLiveQuery("orders", invalidSelectedFields);
+
+    const invalidGroupByField = {
       groupBy: ["missing"],
-      aggregates: [{ type: "count", as: "count" }],
-    });
+      aggregates: { count: { aggFunc: "count" } },
+    } as const;
+    // @ts-expect-error grouped queries reject groupBy fields not present on the topic row
+    const _invalidGroupByField: ExactGroupedQuery<typeof Order.Type, typeof invalidGroupByField> =
+      invalidGroupByField;
 
-    react.useLiveQuery("orders", {
+    const invalidGroupedSelect = {
       groupBy: ["status"],
-      // @ts-expect-error aggregate aliases cannot collide with groupBy fields
-      aggregates: [{ type: "count", as: "status" }],
-    });
+      select: ["id"],
+      aggregates: { count: { aggFunc: "count" } },
+    } as const;
+    // @ts-expect-error grouped queries cannot select raw fields.
+    const _invalidGroupedSelect: ExactGroupedQuery<typeof Order.Type, typeof invalidGroupedSelect> =
+      invalidGroupedSelect;
 
-    react.useLiveQuery("orders", {
+    const invalidAggregateAliasCollision = {
       groupBy: ["status"],
-      aggregates: [
+      aggregates: { status: { aggFunc: "count" } },
+    } as const;
+    // @ts-expect-error aggregate aliases cannot collide with groupBy fields
+    const _invalidAggregateAliasCollision: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidAggregateAliasCollision
+    > &
+      ValidateLiveQuery<typeof invalidAggregateAliasCollision> = invalidAggregateAliasCollision;
+
+    const invalidGroupedOrderByRawField = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ field: "price", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy only accepts groupBy fields or aggregate aliases.
+    const _invalidGroupedOrderByRawField: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByRawField
+    > = invalidGroupedOrderByRawField;
+
+    const invalidGroupedOrderByDirection = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ aggregate: "count", direction: "descending" }],
+    } as const;
+    // @ts-expect-error grouped orderBy direction is constrained to asc or desc.
+    const _invalidGroupedOrderByDirection: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByDirection
+    > = invalidGroupedOrderByDirection;
+
+    const invalidGroupedOrderByAggregate = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ aggregate: "totalPrice", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy aggregate aliases must exist in aggregates.
+    const _invalidGroupedOrderByAggregate: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByAggregate
+    > = invalidGroupedOrderByAggregate;
+
+    const invalidGroupedOrderByFieldKey = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ orderByField: "status", direction: "asc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy group fields use field, not orderByField.
+    const _invalidGroupedOrderByFieldKey: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByFieldKey
+    > = invalidGroupedOrderByFieldKey;
+
+    const invalidGroupedOrderByAggregateKey = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ field: "count", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy aggregate aliases use aggregate, not field.
+    const _invalidGroupedOrderByAggregateKey: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByAggregateKey
+    > = invalidGroupedOrderByAggregateKey;
+
+    const invalidGroupedOrderByBothFieldAndAggregate = {
+      groupBy: ["status"],
+      aggregates: { count: { aggFunc: "count" } },
+      orderBy: [{ field: "status", aggregate: "count", direction: "desc" }],
+    } as const;
+    // @ts-expect-error grouped orderBy entries must choose field or aggregate, not both.
+    const _invalidGroupedOrderByBothFieldAndAggregate: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidGroupedOrderByBothFieldAndAggregate
+    > = invalidGroupedOrderByBothFieldAndAggregate;
+
+    useLiveQuery("orders", {
+      select: ["id"],
+      // @ts-expect-error raw orderBy entries cannot also include aggregate.
+      orderBy: [
         {
-          type: "sum",
-          // @ts-expect-error sum and avg aggregate fields must be numeric
-          field: "status",
-          as: "badTotal",
+          field: "price",
+          aggregate: "totalPrice",
+          direction: "desc",
         },
       ],
     });
 
-    react.useLiveQuery("positions", {
+    const invalidOrderSumField = {
+      groupBy: ["status"],
+      aggregates: {
+        badTotal: { aggFunc: "sum", field: "status" },
+      },
+    } as const;
+    // @ts-expect-error sum and avg aggregate fields must be numeric
+    const _invalidOrderSumField: ExactGroupedQuery<typeof Order.Type, typeof invalidOrderSumField> =
+      invalidOrderSumField;
+
+    const invalidPositionSumField = {
       groupBy: ["accountId"],
-      aggregates: [
-        {
-          type: "sum",
-          // @ts-expect-error sum aggregate fields must be numeric, bigint, or BigDecimal
-          field: "symbol",
-          as: "badSymbolTotal",
-        },
-      ],
-    });
+      aggregates: {
+        badSymbolTotal: { aggFunc: "sum", field: "symbol" },
+      },
+    } as const;
+    // @ts-expect-error sum aggregate fields must be numeric, bigint, or BigDecimal
+    const _invalidPositionSumField: ExactGroupedQuery<
+      typeof Position.Type,
+      typeof invalidPositionSumField
+    > = invalidPositionSumField;
 
-    react.useLiveQuery("orders", {
+    const invalidOrderAverageField = {
       groupBy: ["status"],
-      aggregates: [
-        {
-          type: "avg",
-          // @ts-expect-error avg aggregate fields must be numeric
-          field: "status",
-          as: "badAverage",
-        },
-      ],
-    });
+      aggregates: {
+        badAverage: { aggFunc: "avg", field: "status" },
+      },
+    } as const;
+    // @ts-expect-error avg aggregate fields must be numeric
+    const _invalidOrderAverageField: ExactGroupedQuery<
+      typeof Order.Type,
+      typeof invalidOrderAverageField
+    > = invalidOrderAverageField;
 
-    react.useLiveQuery("positions", {
+    const invalidPositionAverageField = {
       groupBy: ["accountId"],
-      aggregates: [
-        {
-          type: "avg",
-          // @ts-expect-error avg aggregate fields must be numeric, bigint, or BigDecimal
-          field: "symbol",
-          as: "badSymbolAverage",
-        },
-      ],
-    });
-
-    const health = react.useViewServerHealth();
-    expectTypeOf<typeof health>().toEqualTypeOf<ViewServerHealth<typeof viewServer.topics>>();
-    expectTypeOf<typeof health.engine.topics.orders>().toEqualTypeOf<TopicRuntimeHealth>();
-    expectTypeOf<typeof health.engine.topics.trades>().toEqualTypeOf<TopicRuntimeHealth>();
-    expectTypeOf<typeof health.engine.topics.positions>().toEqualTypeOf<TopicRuntimeHealth>();
-    // @ts-expect-error health topics preserve configured topic keys.
-    expectTypeOf<typeof health.engine.topics.missing>().toEqualTypeOf<TopicRuntimeHealth>();
-    // @ts-expect-error the map key is the topic identity; values do not duplicate it.
-    expectTypeOf<typeof health.engine.topics.orders.topic>().toEqualTypeOf<"orders">();
-
-    expectTypeOf(react.useViewServerTestRuntime()).toHaveProperty("publish");
+      aggregates: {
+        badSymbolAverage: { aggFunc: "avg", field: "symbol" },
+      },
+    } as const;
+    // @ts-expect-error avg aggregate fields must be numeric, bigint, or BigDecimal
+    const _invalidPositionAverageField: ExactGroupedQuery<
+      typeof Position.Type,
+      typeof invalidPositionAverageField
+    > = invalidPositionAverageField;
   };
 
-  expectTypeOf(assertReactContracts).toBeFunction();
+  expectTypeOf(assertLiveQueryContracts).toBeFunction();
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,

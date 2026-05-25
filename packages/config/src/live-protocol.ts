@@ -9,7 +9,7 @@ export type SnapshotEvent<Row> = {
   readonly version: number;
   readonly keys: ReadonlyArray<string>;
   readonly rows: ReadonlyArray<Row>;
-  readonly totalRows?: number;
+  readonly totalRows: number;
 };
 
 export type DeltaOperation<Row> =
@@ -43,7 +43,7 @@ export type DeltaEvent<Row> = {
   readonly fromVersion: number;
   readonly toVersion: number;
   readonly operations: ReadonlyArray<DeltaOperation<Row>>;
-  readonly totalRows?: number;
+  readonly totalRows: number;
 };
 
 export type StatusEventCode =

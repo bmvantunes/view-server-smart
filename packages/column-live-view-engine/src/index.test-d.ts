@@ -11,11 +11,13 @@ import type { Effect, Stream } from "effect";
 import { Schema } from "effect";
 import type {
   ColumnLiveViewEngine,
+  ColumnLiveViewEngineError,
   ColumnLiveViewEngineConfig,
   ColumnLiveViewEngineEvent,
   ColumnLiveViewEngineHealth,
   ColumnLiveViewSubscription,
   ColumnLiveViewTopicHealth,
+  EngineClosedError,
 } from "./index";
 
 const Order = Schema.Struct({
@@ -52,38 +54,39 @@ type StreamEvent<Value> =
   Value extends ColumnLiveViewSubscription<infer _Row> ? Stream.Success<Value["events"]> : never;
 
 declare const engine: Engine;
-declare const tupleUnionFields: readonly ["id"] | readonly ["id", "price"];
 declare const dynamicSingleField: "id" | "price";
 declare const optionalNarrowFieldsQuery: {
-  readonly fields?: readonly ["id"];
+  readonly select?: readonly ["id"];
 };
 
 describe("ColumnLiveViewEngine type contract", () => {
-  it("types full-row snapshots and subscription events", () => {
-    const fullSnapshot = engine.snapshot("orders", {});
-    expectTypeOf<EffectSuccess<typeof fullSnapshot>>().toEqualTypeOf<LiveQueryResult<OrderRow>>();
-
-    const fullSubscription = engine.subscribe("orders", {});
-    expectTypeOf<EffectSuccess<typeof fullSubscription>>().toEqualTypeOf<
-      ColumnLiveViewSubscription<OrderRow>
+  it("requires explicit selected-row snapshots and subscription events", () => {
+    const idSnapshot = engine.snapshot("orders", { select: ["id"] });
+    expectTypeOf<EffectSuccess<typeof idSnapshot>>().toEqualTypeOf<
+      LiveQueryResult<{ readonly id: string }>
     >();
-    expectTypeOf<
-      SubscriptionRow<EffectSuccess<typeof fullSubscription>>
-    >().toEqualTypeOf<OrderRow>();
+
+    const fullSubscription = engine.subscribe("orders", { select: ["id"] });
+    expectTypeOf<EffectSuccess<typeof fullSubscription>>().toEqualTypeOf<
+      ColumnLiveViewSubscription<{ readonly id: string }>
+    >();
+    expectTypeOf<SubscriptionRow<EffectSuccess<typeof fullSubscription>>>().toEqualTypeOf<{
+      readonly id: string;
+    }>();
     type FullEvent = ColumnLiveViewEngineEvent<
       SubscriptionRow<EffectSuccess<typeof fullSubscription>>
     >;
-    expectTypeOf<
-      SnapshotRow<Extract<FullEvent, { readonly type: "snapshot" }>>
-    >().toEqualTypeOf<OrderRow>();
-    expectTypeOf<
-      DeltaRow<Extract<FullEvent, { readonly type: "delta" }>>
-    >().toEqualTypeOf<OrderRow>();
+    expectTypeOf<SnapshotRow<Extract<FullEvent, { readonly type: "snapshot" }>>>().toEqualTypeOf<{
+      readonly id: string;
+    }>();
+    expectTypeOf<DeltaRow<Extract<FullEvent, { readonly type: "delta" }>>>().toEqualTypeOf<{
+      readonly id: string;
+    }>();
   });
 
   it("types selected-row snapshots and subscription events", () => {
     const selectedSnapshot = engine.snapshot("orders", {
-      fields: ["id", "price"],
+      select: ["id", "price"],
     });
     expectTypeOf<EffectSuccess<typeof selectedSnapshot>>().toEqualTypeOf<
       LiveQueryResult<{
@@ -97,7 +100,7 @@ describe("ColumnLiveViewEngine type contract", () => {
     }>();
 
     const subscription = engine.subscribe("orders", {
-      fields: ["customerId", "status"],
+      select: ["customerId", "status"],
     });
     expectTypeOf<EffectSuccess<typeof subscription>>().toEqualTypeOf<
       ColumnLiveViewSubscription<{
@@ -141,32 +144,51 @@ describe("ColumnLiveViewEngine type contract", () => {
   });
 
   it("types valid mutation calls", () => {
+    const validPublish = engine.publish("orders", {
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      updatedAt: 1,
+    });
     const validPatch = engine.patch("orders", "order-1", {
       price: 42,
       status: "closed",
     });
+    const validReset = engine.reset();
+    const validClose = engine.close();
+    const validHealth = engine.health();
+
+    expectTypeOf<Effect.Error<typeof validPublish>>().toEqualTypeOf<ColumnLiveViewEngineError>();
     expectTypeOf<EffectSuccess<typeof validPatch>>().toEqualTypeOf<void>();
+    expectTypeOf<Effect.Error<typeof validPatch>>().toEqualTypeOf<ColumnLiveViewEngineError>();
+    expectTypeOf<Effect.Error<typeof validReset>>().toEqualTypeOf<EngineClosedError>();
+    expectTypeOf<Effect.Error<typeof validClose>>().toEqualTypeOf<never>();
+    expectTypeOf<Effect.Error<typeof validHealth>>().toEqualTypeOf<never>();
   });
 
-  it("rejects invalid raw query fields and topics", () => {
+  it("rejects invalid raw query select and topics", () => {
     const _invalidSelectedField = engine.snapshot("orders", {
       // @ts-expect-error invalid selected field is rejected.
-      fields: ["missing"],
+      select: ["missing"],
     });
     const _invalidSubscribeSelectedField = engine.subscribe("orders", {
       // @ts-expect-error invalid selected field is rejected for subscriptions.
-      fields: ["missing"],
+      select: ["missing"],
     });
 
     const _invalidWhereField = engine.snapshot("orders", {
+      select: ["id"],
       // @ts-expect-error invalid where field is rejected.
       where: { missing: "value" },
     });
 
     const _invalidOrderField = engine.snapshot("orders", {
+      select: ["id"],
+      // @ts-expect-error invalid order field is rejected.
       orderBy: [
         {
-          // @ts-expect-error invalid order field is rejected.
           field: "missing",
           direction: "asc",
         },
@@ -174,18 +196,19 @@ describe("ColumnLiveViewEngine type contract", () => {
     });
 
     // @ts-expect-error invalid topic is rejected.
-    const _invalidTopic = engine.snapshot("missing", {});
+    const _invalidTopic = engine.snapshot("missing", { select: ["id"] });
     // @ts-expect-error invalid subscription topic is rejected.
-    const _invalidSubscribeTopic = engine.subscribe("missing", {});
+    const _invalidSubscribeTopic = engine.subscribe("missing", { select: ["id"] });
 
     const extraRawQuery = {
-      fields: ["id"],
+      select: ["id"],
       typo: true,
     } as const;
     // @ts-expect-error extra raw query keys are rejected through variables.
     const _invalidExtraRawQueryKey = engine.snapshot("orders", extraRawQuery);
 
     const extraWhereField = {
+      select: ["id"],
       where: {
         status: "open",
         missing: "x",
@@ -195,6 +218,7 @@ describe("ColumnLiveViewEngine type contract", () => {
     const _invalidExtraWhereField = engine.snapshot("orders", extraWhereField);
 
     const extraFilterOperator = {
+      select: ["id"],
       where: {
         status: {
           eq: "open",
@@ -206,6 +230,7 @@ describe("ColumnLiveViewEngine type contract", () => {
     const _invalidExtraFilterOperator = engine.snapshot("orders", extraFilterOperator);
 
     const extraOrderByEntry = {
+      select: ["id"],
       orderBy: [
         {
           field: "id",
@@ -217,56 +242,31 @@ describe("ColumnLiveViewEngine type contract", () => {
     // @ts-expect-error extra orderBy entry keys are rejected through variables.
     const _invalidExtraOrderByEntry = engine.snapshot("orders", extraOrderByEntry);
 
-    const dynamicSelectedFieldsQuery: LiveQuery<OrderRow> = {
-      fields: ["id"],
-    };
-    const _invalidDynamicSelectedFieldsSnapshot = engine.snapshot(
-      "orders",
-      // @ts-expect-error dynamic selected field arrays are rejected because they cannot prove the projected row shape.
-      dynamicSelectedFieldsQuery,
-    );
-    const _invalidDynamicSelectedFieldsSubscription = engine.subscribe(
-      "orders",
-      // @ts-expect-error dynamic selected field arrays are rejected because they cannot prove the projected row shape.
-      dynamicSelectedFieldsQuery,
-    );
-
-    const tupleUnionSelectedFieldsQuery = {
-      fields: tupleUnionFields,
-    };
-    const _invalidTupleUnionSelectedFieldsSnapshot = engine.snapshot(
-      "orders",
-      // @ts-expect-error tuple-union fields are rejected because each branch projects a different row shape.
-      tupleUnionSelectedFieldsQuery,
-    );
-    const _invalidTupleUnionSelectedFieldsSubscription = engine.subscribe(
-      "orders",
-      // @ts-expect-error tuple-union fields are rejected because each branch projects a different row shape.
-      tupleUnionSelectedFieldsQuery,
-    );
-
     const dynamicSingleTupleSelectedFieldsQuery = {
-      fields: [dynamicSingleField],
+      select: [dynamicSingleField],
     } as const;
-    const _invalidDynamicSingleTupleSelectedFieldsSnapshot = engine.snapshot(
+    const _dynamicSingleTupleSelectedFieldsSnapshot = engine.snapshot(
       "orders",
-      // @ts-expect-error dynamic tuple field entries are rejected because the projected row shape is not fixed.
       dynamicSingleTupleSelectedFieldsQuery,
     );
-    const _invalidDynamicSingleTupleSelectedFieldsSubscription = engine.subscribe(
+    expectTypeOf<
+      EffectSuccess<typeof _dynamicSingleTupleSelectedFieldsSnapshot>["rows"][number]
+    >().toEqualTypeOf<Partial<{ readonly id: string; readonly price: number }>>();
+
+    const broadSelectedFields: ReadonlyArray<"id" | "price"> = ["id", "price"];
+    const broadSelectedFieldsQuery = {
+      select: broadSelectedFields,
+    };
+    const _invalidBroadSelectedFieldsSnapshot = engine.snapshot(
       "orders",
-      // @ts-expect-error dynamic tuple field entries are rejected because the projected row shape is not fixed.
-      dynamicSingleTupleSelectedFieldsQuery,
+      // @ts-expect-error broad selected field arrays are rejected because result rows must be exact.
+      broadSelectedFieldsQuery,
     );
 
+    // @ts-expect-error raw queries must explicitly select projected fields.
     const broadRawQueryWithoutFields: RawQuery<OrderRow> = {
       where: { status: "open" },
     };
-    const _invalidBroadRawQueryWithoutFieldsSnapshot = engine.snapshot(
-      "orders",
-      // @ts-expect-error broad RawQuery variables are rejected because optional fields could be dynamic.
-      broadRawQueryWithoutFields,
-    );
     const _invalidOptionalNarrowFieldsSnapshot = engine.snapshot(
       "orders",
       // @ts-expect-error optional selected fields are rejected because omitted and present cases project different row shapes.
@@ -288,13 +288,8 @@ describe("ColumnLiveViewEngine type contract", () => {
     void _invalidExtraWhereField;
     void _invalidExtraFilterOperator;
     void _invalidExtraOrderByEntry;
-    void _invalidDynamicSelectedFieldsSnapshot;
-    void _invalidDynamicSelectedFieldsSubscription;
-    void _invalidTupleUnionSelectedFieldsSnapshot;
-    void _invalidTupleUnionSelectedFieldsSubscription;
-    void _invalidDynamicSingleTupleSelectedFieldsSnapshot;
-    void _invalidDynamicSingleTupleSelectedFieldsSubscription;
-    void _invalidBroadRawQueryWithoutFieldsSnapshot;
+    void _dynamicSingleTupleSelectedFieldsSnapshot;
+    void broadRawQueryWithoutFields;
     void _invalidOptionalNarrowFieldsSnapshot;
     void _invalidOptionalNarrowFieldsSubscription;
   });
@@ -328,7 +323,7 @@ describe("ColumnLiveViewEngine type contract", () => {
       topics: {
         orders: {
           schema: Order,
-          // @ts-expect-error engine topic keys must be string fields in the schema.
+          // @ts-expect-error engine topic keys must be string select in the schema.
           key: "missing",
         },
       },
@@ -342,19 +337,19 @@ describe("ColumnLiveViewEngine type contract", () => {
       // @ts-expect-error grouped queries are not part of this raw-only slice.
       groupBy: ["status"],
       // @ts-expect-error grouped queries are not part of this raw-only slice.
-      aggregates: [{ type: "count", as: "count" }],
+      aggregates: { count: { aggFunc: "count" } },
     });
 
     const _groupedSubscription = engine.subscribe("orders", {
       // @ts-expect-error grouped subscriptions are not part of this raw-only slice.
       groupBy: ["status"],
       // @ts-expect-error grouped subscriptions are not part of this raw-only slice.
-      aggregates: [{ type: "count", as: "count" }],
+      aggregates: { count: { aggFunc: "count" } },
     });
 
     const groupedVariable: LiveQuery<OrderRow> = {
       groupBy: ["status"],
-      aggregates: [{ type: "count", as: "count" }],
+      aggregates: { count: { aggFunc: "count" } },
     };
     // @ts-expect-error widened grouped query variables are rejected.
     const _groupedVariableSnapshot = engine.snapshot("orders", groupedVariable);
