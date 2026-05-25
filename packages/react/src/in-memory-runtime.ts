@@ -195,8 +195,8 @@ export const makeProviderState = <const Topics extends DecodableTopicDefinitions
     const health = AtomRef.make(healthFromEngine(engineHealth));
     const runtime = makeRuntime(engine, health);
     const reactClient = makeReactClient(engine, health);
-    return yield* Effect.succeed({
+    return {
       reactClient,
       runtime,
-    });
+    };
   });
