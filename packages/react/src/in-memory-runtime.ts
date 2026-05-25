@@ -107,16 +107,28 @@ export const refreshHealth = <Topics extends DecodableTopicDefinitions>(
 ) => readHealth(engine, health).pipe(Effect.asVoid);
 
 export const makeHealthRefreshScheduler = (refresh: Effect.Effect<void>) => {
-  let queued = false;
+  let running = false;
+  let pending = false;
+
+  const drainRefreshes = Effect.fn("ViewServerReact.healthRefreshScheduler.drain")(function* () {
+    let shouldRefresh = true;
+    while (shouldRefresh) {
+      pending = false;
+      yield* refresh;
+      shouldRefresh = pending;
+    }
+  });
+
   return Effect.gen(function* () {
-    if (queued) {
+    if (running) {
+      pending = true;
       return;
     }
-    queued = true;
-    yield* refresh.pipe(
+    running = true;
+    yield* drainRefreshes().pipe(
       Effect.ensuring(
         Effect.sync(() => {
-          queued = false;
+          running = false;
         }),
       ),
       Effect.forkDetach({ startImmediately: true }),

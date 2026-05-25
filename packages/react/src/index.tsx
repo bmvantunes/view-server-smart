@@ -12,7 +12,7 @@ import type {
 } from "@view-server/config";
 import { Effect, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
-import { createElement, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { liveQueryResultFromAsyncResult } from "./hook-result";
 import { makeProviderState } from "./in-memory-runtime";
 import { applyEvent, initialClientState } from "./live-query-state";
@@ -67,16 +67,24 @@ export const createViewServerReact = <const Topics extends DecodableTopicDefinit
 
   const useClient = (): ViewServerReactClient<Topics> => AtomReact.useAtomValue(ProviderAtom.use());
 
+  function ProviderClientMount(): null {
+    AtomReact.useAtomMount(ProviderAtom.use());
+    return null;
+  }
+
   const createInMemoryViewServer = (
     options: ViewServerInMemoryOptions = {},
   ): ViewServerInMemoryInstance<Topics> => {
     const providerState = Effect.runSync(makeProviderState(config, options));
 
     function ViewServerInMemoryProvider(props: ViewServerInMemoryProviderProps): ReactNode {
-      return createElement(
-        AtomReact.RegistryProvider,
-        { defaultIdleTTL: 0 },
-        createElement(ProviderAtom.Provider, { value: providerState.reactClient }, props.children),
+      return (
+        <AtomReact.RegistryProvider defaultIdleTTL={0}>
+          <ProviderAtom.Provider value={providerState.reactClient}>
+            <ProviderClientMount />
+            {props.children}
+          </ProviderAtom.Provider>
+        </AtomReact.RegistryProvider>
       );
     }
 

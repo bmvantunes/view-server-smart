@@ -165,6 +165,51 @@ describe("createViewServerReact", () => {
     await view.unmount();
   });
 
+  it("keeps the in-memory engine open while a mounted provider has no hook consumers", async () => {
+    const { ViewServerInMemoryProvider, client } = createInMemoryViewServer();
+
+    function OrdersView() {
+      const result = useLiveQuery("orders", {
+        select: ["id", "price"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      return (
+        <output aria-label="orders" role="status">
+          {result.rows.map((row) => `${row.id}:${row.price}`).join("|")}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <ViewServerInMemoryProvider>
+        <OrdersView />
+      </ViewServerInMemoryProvider>,
+    );
+    const orders = view.getByRole("status", { name: "orders" });
+
+    await Effect.runPromise(client.publish("orders", order("a", 10)));
+    await expect.element(orders).toHaveTextContent("a:10");
+
+    await view.rerender(<ViewServerInMemoryProvider></ViewServerInMemoryProvider>);
+    await expect
+      .poll(async () => {
+        const health = await Effect.runPromise(client.health());
+        return health.engine.topics.orders.activeSubscriptions;
+      })
+      .toBe(0);
+
+    await Effect.runPromise(client.publish("orders", order("b", 20)));
+
+    await view.rerender(
+      <ViewServerInMemoryProvider>
+        <OrdersView />
+      </ViewServerInMemoryProvider>,
+    );
+    await expect.element(orders).toHaveTextContent("a:10|b:20");
+    await view.unmount();
+  });
+
   it("applies update, move, remove, patch, snapshot, and reset paths", async () => {
     const { ViewServerInMemoryProvider, client } = createInMemoryViewServer();
 
@@ -232,13 +277,38 @@ describe("createViewServerReact", () => {
       .toBe(50);
   });
 
-  it("coalesces health scheduler requests while refresh is already pending", async () => {
-    const refreshFinished = await Effect.runPromise(Deferred.make<void>());
-    const requestRefresh = makeHealthRefreshScheduler(Deferred.await(refreshFinished));
+  it("queues a trailing health scheduler refresh when requested while refresh is pending", async () => {
+    const firstStarted = await Effect.runPromise(Deferred.make<void>());
+    const firstFinished = await Effect.runPromise(Deferred.make<void>());
+    const secondStarted = await Effect.runPromise(Deferred.make<void>());
+    const secondFinished = await Effect.runPromise(Deferred.make<void>());
+    let refreshCount = 0;
+
+    const requestRefresh = makeHealthRefreshScheduler(
+      Effect.gen(function* () {
+        const currentRefresh = yield* Effect.sync(() => {
+          refreshCount += 1;
+          return refreshCount;
+        });
+        if (currentRefresh === 1) {
+          yield* Deferred.succeed(firstStarted, undefined);
+          yield* Deferred.await(firstFinished);
+          return;
+        }
+        yield* Deferred.succeed(secondStarted, undefined);
+        yield* Deferred.await(secondFinished);
+      }),
+    );
 
     await Effect.runPromise(requestRefresh);
+    await Effect.runPromise(Deferred.await(firstStarted));
+
     await Effect.runPromise(requestRefresh);
-    await Effect.runPromise(Deferred.succeed(refreshFinished, undefined));
+    await Effect.runPromise(Deferred.succeed(firstFinished, undefined));
+    await Effect.runPromise(Deferred.await(secondStarted));
+
+    expect(refreshCount).toBe(2);
+    await Effect.runPromise(Deferred.succeed(secondFinished, undefined));
   });
 
   it("surfaces live query failures as error results", async () => {
