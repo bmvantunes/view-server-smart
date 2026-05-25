@@ -3,6 +3,7 @@ import { defineViewServerConfig, type ViewServerInMemoryRuntime } from "@view-se
 import { Effect, Schema } from "effect";
 import { render } from "vitest-browser-react";
 import { createViewServerReact } from "./index";
+import { applyEvent, initialClientState } from "./live-query-state";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -57,6 +58,32 @@ const getRuntime = (
 };
 
 describe("createViewServerReact", () => {
+  it("applies remove delta operations in the client reducer", () => {
+    const state = applyEvent(
+      {
+        ...initialClientState<{ readonly id: string }>(),
+        rows: [{ id: "a" }, { id: "b" }],
+        keys: ["a", "b"],
+        totalRows: 2,
+        version: 1,
+        status: "ready",
+      },
+      {
+        type: "delta",
+        topic: "orders",
+        queryId: "query-1",
+        fromVersion: 1,
+        toVersion: 2,
+        totalRows: 1,
+        operations: [{ type: "remove", key: "a" }],
+      },
+    );
+
+    expect(state.rows).toEqual([{ id: "b" }]);
+    expect(state.keys).toEqual(["b"]);
+    expect(state.totalRows).toBe(1);
+  });
+
   it("streams runtime-published snapshots and live deltas in browser providers", async () => {
     let runtime: ViewServerInMemoryRuntime<Topics> | undefined;
 
@@ -205,6 +232,31 @@ describe("createViewServerReact", () => {
 
     Effect.runSync(getRuntime(runtime).reset());
     expect(Effect.runSync(getRuntime(runtime).health()).engine.topics.orders.rowCount).toBe(0);
+    await expect.element(orders).toHaveTextContent("");
+    await view.unmount();
+  });
+
+  it("surfaces live query failures as error results", async () => {
+    function BrokenOrdersView() {
+      const result = useLiveQuery("orders", {
+        // @ts-expect-error invalid selected fields are still surfaced through the hook result.
+        select: ["prcie"],
+      });
+      return (
+        <output aria-label="orders" role="status">
+          {result.status}:{result.statusCode}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <ViewServerInMemoryProvider>
+        <BrokenOrdersView />
+      </ViewServerInMemoryProvider>,
+    );
+    const orders = view.getByRole("status", { name: "orders" });
+
+    await expect.element(orders).toHaveTextContent("error:TransportError");
     await view.unmount();
   });
 

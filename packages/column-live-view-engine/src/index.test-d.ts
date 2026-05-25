@@ -167,9 +167,9 @@ describe("ColumnLiveViewEngine type contract", () => {
 
     const _invalidOrderField = engine.snapshot("orders", {
       select: ["id"],
+      // @ts-expect-error invalid order field is rejected.
       orderBy: [
         {
-          // @ts-expect-error invalid order field is rejected.
           field: "missing",
           direction: "asc",
         },
@@ -229,6 +229,16 @@ describe("ColumnLiveViewEngine type contract", () => {
     const _dynamicSingleTupleSelectedFieldsSnapshot = engine.snapshot(
       "orders",
       dynamicSingleTupleSelectedFieldsQuery,
+    );
+
+    const broadSelectedFields: ReadonlyArray<"id" | "price"> = ["id", "price"];
+    const broadSelectedFieldsQuery = {
+      select: broadSelectedFields,
+    };
+    const _invalidBroadSelectedFieldsSnapshot = engine.snapshot(
+      "orders",
+      // @ts-expect-error broad selected field arrays are rejected because result rows must be exact.
+      broadSelectedFieldsQuery,
     );
 
     // @ts-expect-error raw queries must explicitly select projected fields.

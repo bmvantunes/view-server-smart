@@ -1176,8 +1176,8 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       const invalidIn = yield* engine.snapshot("orders", {
         select: ["id"],
         where: {
+          // @ts-expect-error malformed runtime queries must not throw or broaden results.
           status: {
-            // @ts-expect-error malformed runtime queries must not throw or broaden results.
             in: 1,
           },
         },
@@ -1187,8 +1187,8 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       const invalidStartsWith = yield* engine.snapshot("orders", {
         select: ["id"],
         where: {
+          // @ts-expect-error malformed runtime queries must not throw or broaden results.
           customerId: {
-            // @ts-expect-error malformed runtime queries must not throw or broaden results.
             startsWith: Symbol("customer"),
           },
         },
@@ -1271,8 +1271,8 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         engine.snapshot("orders", {
           select: ["id"],
           where: {
+            // @ts-expect-error malformed runtime queries must not broaden results.
             status: {
-              // @ts-expect-error malformed runtime queries must not broaden results.
               equals: "open",
             },
           },
@@ -1386,11 +1386,11 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       const engine = yield* makeEngine();
       yield* engine.publish("orders", order("1", "open", 10, 1));
       const query = {
-        select: [...orderSelect, "note"] as const,
+        select: [...orderSelect, "note"],
         where: {
           status: "open",
         },
-      } satisfies RawQuery<OrderRow>;
+      } as const satisfies RawQuery<OrderRow>;
       const subscription = yield* engine.subscribe("orders", query);
       const take = yield* makeEventReader(subscription);
       const initialEvents = yield* take(1);
@@ -1522,14 +1522,33 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       yield* take(1);
 
       yield* engine.patch("orders", "1", { price: 20 });
+      yield* engine.publish("orders", order("2", "open", 5, 2));
       yield* engine.reset();
 
-      const closedRead = yield* Effect.exit(take(1));
-      expect(closedRead._tag).toBe("Failure");
+      const closedRead = yield* take(1);
+      expect(closedRead).toMatchObject([
+        {
+          type: "status",
+          status: "closed",
+          code: "SubscriptionClosed",
+        },
+      ]);
 
       const health = yield* engine.health();
       expect(health.version).toBe(0);
       expect(health.activeSubscriptions).toBe(0);
+    }),
+  );
+
+  it.effect("rejects reset after the engine is closed", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.close();
+
+      const error = yield* Effect.flip(engine.reset());
+
+      expect(error).toBeInstanceOf(EngineClosedError);
+      expect(error._tag).toBe("EngineClosedError");
     }),
   );
 });
@@ -1898,7 +1917,6 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const invalidOrderBy = yield* Effect.flip(
         engine.snapshot("orders", {
           select: ["id"],
-          // @ts-expect-error malformed runtime query orderBy must be rejected.
           orderBy: "bad",
         }),
       );
@@ -1920,10 +1938,29 @@ describe("ColumnLiveViewEngine validation and health", () => {
       );
       expect(invalidFieldEntry._tag).toBe("InvalidQueryError");
 
+      const emptySelectQuery: { readonly select: ReadonlyArray<unknown> } = {
+        select: [],
+      };
+      const invalidEmptySelect = yield* Effect.flip(
+        // @ts-expect-error hostile empty select is still handled by runtime guards.
+        engine.snapshot("orders", emptySelectQuery),
+      );
+      expect(invalidEmptySelect._tag).toBe("InvalidQueryError");
+
+      const duplicateSelect = yield* Effect.flip(
+        engine.snapshot("orders", {
+          // @ts-expect-error duplicate selected fields are rejected by type and runtime guards.
+          select: ["id", "id"],
+        }),
+      );
+      expect(duplicateSelect).toMatchObject({
+        _tag: "InvalidQueryError",
+        message: expect.stringContaining("duplicate"),
+      });
+
       const invalidOffset = yield* Effect.flip(
         engine.snapshot("orders", {
           select: ["id"],
-          // @ts-expect-error malformed runtime query offset must be rejected.
           offset: "0",
         }),
       );
@@ -1968,7 +2005,6 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const invalidLimit = yield* Effect.flip(
         engine.snapshot("orders", {
           select: ["id"],
-          // @ts-expect-error malformed runtime query limit must be rejected.
           limit: "1",
         }),
       );
@@ -2019,8 +2055,8 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const invalidOrderByField = yield* Effect.flip(
         engine.snapshot("orders", {
           select: ["id"],
+          // @ts-expect-error malformed runtime query orderBy field must be rejected.
           orderBy: [
-            // @ts-expect-error malformed runtime query orderBy field must be rejected.
             {
               direction: "asc",
             },
@@ -2032,9 +2068,9 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const unknownOrderByField = yield* Effect.flip(
         engine.snapshot("orders", {
           select: ["id"],
+          // @ts-expect-error runtime query unknown orderBy fields must be rejected.
           orderBy: [
             {
-              // @ts-expect-error runtime query unknown orderBy fields must be rejected.
               field: "prcie",
               direction: "asc",
             },
@@ -2102,10 +2138,10 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const invalidOrderByDirection = yield* Effect.flip(
         engine.snapshot("orders", {
           select: ["id"],
+          // @ts-expect-error malformed runtime query orderBy direction must be rejected.
           orderBy: [
             {
               field: "price",
-              // @ts-expect-error malformed runtime query orderBy direction must be rejected.
               direction: "sideways",
             },
           ],

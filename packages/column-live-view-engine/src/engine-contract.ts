@@ -4,7 +4,6 @@ import type {
   ExactRawQuery,
   LiveQueryRow,
   LiveQueryResult,
-  RawQuery,
   RowFromSchema,
   RowSchema,
   SnapshotEvent,
@@ -14,7 +13,7 @@ import type {
 } from "@view-server/config";
 import type { Effect, Schema, Stream } from "effect";
 import type { ColumnLiveViewEngineHealth } from "./engine-health";
-import type { ColumnLiveViewEngineError } from "./engine-errors";
+import type { ColumnLiveViewEngineError, EngineClosedError } from "./engine-errors";
 
 export type DecodableTopicDefinitions = Record<
   string,
@@ -76,29 +75,25 @@ export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
   ) => Effect.Effect<void, ColumnLiveViewEngineError>;
   readonly snapshot: <
     Topic extends Extract<keyof Topics, string>,
-    const Query extends RawQuery<TopicRow<Topics, Topic>>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
   >(
     topic: Topic,
-    query: Query &
-      RawQuery<TopicRow<Topics, Topic>> &
-      ExactRawQuery<TopicRow<Topics, Topic>, Query>,
+    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>,
   ) => Effect.Effect<
     LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ColumnLiveViewEngineError
   >;
   readonly subscribe: <
     Topic extends Extract<keyof Topics, string>,
-    const Query extends RawQuery<TopicRow<Topics, Topic>>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
   >(
     topic: Topic,
-    query: Query &
-      RawQuery<TopicRow<Topics, Topic>> &
-      ExactRawQuery<TopicRow<Topics, Topic>, Query>,
+    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>,
   ) => Effect.Effect<
     ColumnLiveViewSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ColumnLiveViewEngineError
   >;
   readonly health: () => Effect.Effect<ColumnLiveViewEngineHealth<Topics>, never>;
-  readonly reset: () => Effect.Effect<void, never>;
+  readonly reset: () => Effect.Effect<void, EngineClosedError>;
   readonly close: () => Effect.Effect<void, never>;
 };

@@ -77,8 +77,8 @@ describe("React type contracts", () => {
   });
 
   it("rejects invalid raw query select", () => {
-    // @ts-expect-error raw queries must explicitly select columns.
     useLiveQuery("orders", {
+      // @ts-expect-error raw queries must explicitly select columns.
       where: {
         status: "open",
       },
@@ -99,9 +99,9 @@ describe("React type contracts", () => {
 
     useLiveQuery("orders", {
       select: ["id"],
+      // @ts-expect-error unknown orderBy fields are rejected.
       orderBy: [
         {
-          // @ts-expect-error unknown orderBy fields are rejected.
           field: "prcie",
           direction: "asc",
         },
@@ -118,8 +118,8 @@ describe("React type contracts", () => {
     useLiveQuery("orders", {
       select: ["id"],
       where: {
+        // @ts-expect-error string fields do not support range filters.
         status: {
-          // @ts-expect-error string fields do not support range filters.
           gte: "open",
         },
       },
@@ -128,8 +128,8 @@ describe("React type contracts", () => {
     useLiveQuery("orders", {
       select: ["id"],
       where: {
+        // @ts-expect-error numeric fields do not support string filters.
         price: {
-          // @ts-expect-error numeric fields do not support string filters.
           startsWith: "10",
         },
       },

@@ -4,14 +4,14 @@ import type {
   ExactRawQuery,
   LiveQueryResult,
   LiveQueryRow,
-  RawQuery,
   TopicRow,
+  TopicSchema,
   ValidateLiveQuery,
   ViewServerConfig,
   ViewServerHealth,
   ViewServerInMemoryRuntime,
 } from "@view-server/config";
-import { Effect, Stream } from "effect";
+import { Cause, Effect, Stream, type Schema } from "effect";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import { createElement, useMemo, type ReactNode } from "react";
@@ -38,14 +38,16 @@ export type ViewServerInMemoryProviderProps = {
 
 export type UseLiveQueryHook<Topics extends DecodableTopicDefinitions> = <
   Topic extends Extract<keyof Topics, string>,
-  const Query extends RawQuery<TopicRow<Topics, Topic>>,
+  const Query extends { readonly select: ReadonlyArray<unknown> },
 >(
   topic: Topic,
-  query: Query &
-    RawQuery<TopicRow<Topics, Topic>> &
-    ExactRawQuery<TopicRow<Topics, Topic>, Query> &
-    ValidateLiveQuery<Query>,
-) => LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;
+  query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
+) => LiveQueryResult<
+  LiveQueryRow<
+    TopicRow<Topics, Topic>,
+    Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>
+  >
+>;
 
 export const createViewServerReact = <const Topics extends DecodableTopicDefinitions>(
   config: ViewServerConfig<Topics>,
@@ -73,7 +75,7 @@ export const createViewServerReact = <const Topics extends DecodableTopicDefinit
 
   const useLiveQuery: UseLiveQueryHook<Topics> = (topic, query) => {
     const providerState = useProviderState();
-    type Row = LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>;
+    type Row = LiveQueryRow<Schema.Schema.Type<TopicSchema<Topics, typeof topic>>, typeof query>;
     const queryKey = stableQueryKey(query);
     const liveAtom = useMemo(
       () =>
@@ -100,7 +102,17 @@ export const createViewServerReact = <const Topics extends DecodableTopicDefinit
       [providerState, topic, queryKey],
     );
     const result = AtomReact.useAtomValue(liveAtom);
-    return liveQueryResult(AsyncResult.getOrElse(result, initialClientState<Row>));
+    const emptyState = () => initialClientState<Row>();
+    if (AsyncResult.isFailure(result)) {
+      const defect = Cause.squash(result.cause);
+      return {
+        ...liveQueryResult(emptyState()),
+        status: "error",
+        statusCode: "TransportError",
+        message: String(defect),
+      };
+    }
+    return liveQueryResult(AsyncResult.getOrElse(result, emptyState));
   };
 
   const useViewServerHealth = (): ViewServerHealth<Topics> => {

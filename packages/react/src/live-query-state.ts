@@ -85,7 +85,7 @@ const applyDelta = <Row>(state: ClientState<Row>, event: DeltaEvent<Row>): Clien
 };
 
 const applyStatus = <Row>(state: ClientState<Row>, event: StatusEvent): ClientState<Row> => ({
-  ...state,
+  ...(event.code === "SubscriptionClosed" ? initialClientState<Row>() : state),
   status: event.status,
   statusCode: event.code,
   message: event.message,

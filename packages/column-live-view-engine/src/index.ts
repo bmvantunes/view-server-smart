@@ -1,7 +1,6 @@
 import type { LiveQueryRow, TopicRow } from "@view-server/config";
 import { Effect } from "effect";
 import type {
-  AnyTopicRow,
   ColumnLiveViewEngine,
   ColumnLiveViewEngineConfig,
   DecodableTopicDefinitions,
@@ -47,10 +46,7 @@ const invalidRow = (topic: string, message: string) =>
 class InMemoryColumnLiveViewEngine<
   Topics extends DecodableTopicDefinitions,
 > implements ColumnLiveViewEngine<Topics> {
-  private readonly stores = new Map<
-    Extract<keyof Topics, string>,
-    TopicStore<AnyTopicRow<Topics>>
-  >();
+  private readonly stores = new Map<Extract<keyof Topics, string>, TopicStore<object>>();
   private readonly subscriptionQueueCapacity: number;
   private engineVersion = 0;
   private nextQueryId = 0;
@@ -69,7 +65,7 @@ class InMemoryColumnLiveViewEngine<
       const definition = config.topics[topic];
       this.stores.set(
         topic,
-        new TopicStore<AnyTopicRow<Topics>>(topic, definition.schema, definition.key, () => {
+        new TopicStore<object>(topic, definition.schema, definition.key, () => {
           this.engineVersion += 1;
         }),
       );
@@ -78,7 +74,7 @@ class InMemoryColumnLiveViewEngine<
 
   private getStore<Topic extends Extract<keyof Topics, string>>(
     topic: Topic,
-  ): Effect.Effect<TopicStore<AnyTopicRow<Topics>>, InvalidTopicError> {
+  ): Effect.Effect<TopicStore<object>, InvalidTopicError> {
     return Effect.gen({ self: this }, function* () {
       const store = this.stores.get(topic);
       if (store === undefined) {
@@ -138,7 +134,7 @@ class InMemoryColumnLiveViewEngine<
       yield* this.ensureOpen();
       const store = yield* this.getStore(topic);
       return yield* snapshotExecutableQuery<
-        AnyTopicRow<Topics>,
+        object,
         LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>
       >(topic, store, query);
     });
@@ -151,7 +147,7 @@ class InMemoryColumnLiveViewEngine<
       const queryId = `query-${this.nextQueryId}`;
       this.nextQueryId += 1;
       const subscription = yield* subscribeExecutableQuery<
-        AnyTopicRow<Topics>,
+        object,
         LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>
       >(topic, store, query, { queryId, queueCapacity: this.subscriptionQueueCapacity });
 
@@ -163,7 +159,7 @@ class InMemoryColumnLiveViewEngine<
   };
 
   readonly health: ColumnLiveViewEngine<Topics>["health"] = () => {
-    return collectColumnLiveViewEngineHealth<Topics, AnyTopicRow<Topics>>(this.stores, {
+    return collectColumnLiveViewEngineHealth<Topics, object>(this.stores, {
       version: () => this.engineVersion,
       closed: () => this.closed,
     });
@@ -171,6 +167,7 @@ class InMemoryColumnLiveViewEngine<
 
   readonly reset: ColumnLiveViewEngine<Topics>["reset"] = () => {
     return Effect.gen({ self: this }, function* () {
+      yield* this.ensureOpen();
       for (const store of this.stores.values()) {
         yield* resetTopicStore(store);
       }

@@ -31,14 +31,21 @@ export type EngineHealthRuntimeState = {
   readonly closed: () => boolean;
 };
 
+function exactTopicHealth<Topics extends object>(
+  topics: Record<string, ColumnLiveViewTopicHealth>,
+): ColumnLiveViewEngineHealth<Topics>["topics"];
+function exactTopicHealth(
+  topics: Record<string, ColumnLiveViewTopicHealth>,
+): Record<string, ColumnLiveViewTopicHealth> {
+  return topics;
+}
+
 export const collectColumnLiveViewEngineHealth = Effect.fn("ColumnLiveViewEngine.health.collect")(
   function* <Topics extends object, Row extends RowObject>(
     stores: ReadonlyMap<Extract<keyof Topics, string>, HealthTopicStoreState<Row>>,
     engineState: EngineHealthRuntimeState,
   ) {
-    const topics: Record<Extract<keyof Topics, string>, ColumnLiveViewTopicHealth> = Object.create(
-      null,
-    );
+    const topics: Record<string, ColumnLiveViewTopicHealth> = {};
     let activeSubscriptions = 0;
     let queuedEvents = 0;
     let maxQueueDepth = 0;
@@ -86,11 +93,11 @@ export const collectColumnLiveViewEngineHealth = Effect.fn("ColumnLiveViewEngine
     return {
       status: closed ? "stopping" : "ready",
       version: engineVersion,
-      topics,
+      topics: exactTopicHealth<Topics>(topics),
       activeSubscriptions,
       queuedEvents,
       maxQueueDepth,
       backpressureEvents,
-    } satisfies ColumnLiveViewEngineHealth<Topics>;
+    } satisfies ColumnLiveViewEngineHealth;
   },
 );

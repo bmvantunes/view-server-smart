@@ -161,23 +161,41 @@ const decodeRawQuery = (
   }
 
   const select = query["select"];
-  if (
-    !Array.isArray(select) ||
-    select.length === 0 ||
-    !select.every((field) => typeof field === "string")
-  ) {
+  if (!Array.isArray(select)) {
     return InvalidQueryError.make({
       topic,
       message: "Raw query select must be a non-empty array of strings.",
     });
   }
+  if (select.length === 0 || !isDenseArray(select)) {
+    return InvalidQueryError.make({
+      topic,
+      message: "Raw query select must be a non-empty array of strings.",
+    });
+  }
+  const selectedFields: Array<string> = [];
+  const seenFields = new Set<string>();
   for (const field of select) {
+    if (typeof field !== "string") {
+      return InvalidQueryError.make({
+        topic,
+        message: "Raw query select must be a non-empty array of strings.",
+      });
+    }
     if (!metadata.fieldNames.has(field)) {
       return InvalidQueryError.make({
         topic,
         message: `Raw query select contains unknown field: ${field}.`,
       });
     }
+    if (seenFields.has(field)) {
+      return InvalidQueryError.make({
+        topic,
+        message: `Raw query select contains duplicate field: ${field}.`,
+      });
+    }
+    seenFields.add(field);
+    selectedFields.push(field);
   }
 
   const offset = query["offset"];
@@ -203,7 +221,7 @@ const decodeRawQuery = (
     offset?: number;
     limit?: number;
   } = {
-    select: [...select],
+    select: selectedFields,
   };
 
   if (where !== undefined) {
@@ -560,10 +578,16 @@ const projectRow = (
   return projected;
 };
 
-const projectCompiledRow = <ResultRow extends RowObject>(
+function projectCompiledRow<ResultRow extends RowObject>(
   row: RowObject,
   select: ReadonlyArray<FieldKey<Record<string, unknown>>>,
-): ResultRow => Object.assign(Object.create(null), projectRow(row, select));
+): ResultRow;
+function projectCompiledRow(
+  row: RowObject,
+  select: ReadonlyArray<FieldKey<Record<string, unknown>>>,
+): RowObject {
+  return projectRow(row, select);
+}
 
 const compileProjection = <Row extends RowObject, ResultRow extends RowObject>(
   select: ReadonlyArray<string>,

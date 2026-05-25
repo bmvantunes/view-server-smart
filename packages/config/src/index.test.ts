@@ -1136,9 +1136,9 @@ const assertCompileTimeContracts = () => {
 
     react.useLiveQuery("orders", {
       select: ["id"],
+      // @ts-expect-error orderBy fields are constrained to the selected topic row
       orderBy: [
         {
-          // @ts-expect-error orderBy fields are constrained to the selected topic row
           field: "missing",
           direction: "asc",
         },
@@ -1147,10 +1147,10 @@ const assertCompileTimeContracts = () => {
 
     react.useLiveQuery("orders", {
       select: ["id"],
+      // @ts-expect-error sort direction is constrained to asc or desc
       orderBy: [
         {
           field: "price",
-          // @ts-expect-error sort direction is constrained to asc or desc
           direction: "ascending",
         },
       ],
@@ -1158,19 +1158,20 @@ const assertCompileTimeContracts = () => {
 
     react.useLiveQuery("orders", {
       select: ["id"],
+      // @ts-expect-error raw orderBy cannot reference aggregate aliases.
       orderBy: [
         {
-          // @ts-expect-error raw orderBy cannot reference aggregate aliases.
           aggregate: "totalPrice",
           direction: "desc",
         },
       ],
     });
 
-    react.useLiveQuery("orders", {
-      // @ts-expect-error projected fields are constrained to the selected topic row
+    const invalidSelectedFields = {
       select: ["id", "missing"],
-    });
+    } as const;
+    // @ts-expect-error projected fields are constrained to the selected topic row
+    react.useLiveQuery("orders", invalidSelectedFields);
 
     const invalidGroupByField = {
       groupBy: ["missing"],
@@ -1268,10 +1269,10 @@ const assertCompileTimeContracts = () => {
 
     react.useLiveQuery("orders", {
       select: ["id"],
+      // @ts-expect-error raw orderBy entries cannot also include aggregate.
       orderBy: [
         {
           field: "price",
-          // @ts-expect-error raw orderBy entries cannot also include aggregate.
           aggregate: "totalPrice",
           direction: "desc",
         },

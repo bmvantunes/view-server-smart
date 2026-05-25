@@ -5,7 +5,6 @@ import type {
   ExactRawQuery,
   LiveQueryResult,
   LiveQueryRow,
-  RawQuery,
   TopicRow,
   UseLiveQuery,
   ValidateLiveQuery,
@@ -68,13 +67,10 @@ export type ViewServerInMemoryRuntime<Topics extends object> = {
   ) => Effect.Effect<void, ViewServerRuntimeError>;
   readonly snapshot: <
     Topic extends Extract<keyof Topics, string>,
-    const Query extends RawQuery<TopicRow<Topics, Topic>>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
   >(
     topic: Topic,
-    query: Query &
-      RawQuery<TopicRow<Topics, Topic>> &
-      ExactRawQuery<TopicRow<Topics, Topic>, Query> &
-      ValidateLiveQuery<Query>,
+    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
   ) => Effect.Effect<
     LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ViewServerRuntimeError

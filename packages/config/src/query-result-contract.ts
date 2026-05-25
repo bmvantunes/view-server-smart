@@ -55,10 +55,7 @@ export type UseLiveQuery<Topics extends object> = {
     topic: Topic,
     query: ExactGroupedQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
   ): LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;
-  <
-    Topic extends Extract<keyof Topics, string>,
-    const Query extends RawQuery<TopicRow<Topics, Topic>>,
-  >(
+  <Topic extends Extract<keyof Topics, string>, const Query extends object>(
     topic: Topic,
     query: ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
   ): LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;

@@ -37,13 +37,14 @@ export const cloneRecord = (value: Record<string, unknown>): Record<string, unkn
   return cloned;
 };
 
-export const cloneRow = <Row extends RowObject>(row: Row): Row => {
-  const cloned = Object.create(Object.getPrototypeOf(row));
+export function cloneRow<Row extends RowObject>(row: Row): Row;
+export function cloneRow(row: RowObject): RowObject {
+  const cloned: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(row)) {
     cloned[key] = cloneUnknown(entry);
   }
   return cloned;
-};
+}
 
 export const fieldValue = (row: RowObject, field: string): unknown => {
   for (const [key, value] of Object.entries(row)) {

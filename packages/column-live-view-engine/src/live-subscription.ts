@@ -1,5 +1,5 @@
 import type { DeltaEvent, SnapshotEvent, StatusEvent } from "@view-server/config";
-import { Cause, Effect, Queue, Stream } from "effect";
+import { Cause, Effect, Option, Queue, Stream } from "effect";
 import { evaluateCompiledRawQuery, type CompiledRawQuery } from "./raw-query-compiler";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 
@@ -25,6 +25,7 @@ export type LiveTopicSubscriber<Row extends RowObject> = {
   readonly notify: (store: LiveTopicStoreState<Row>) => Effect.Effect<void>;
   readonly queuedEvents: Effect.Effect<number>;
   readonly end: Effect.Effect<void>;
+  readonly closeWithStatus: (event: StatusEvent) => Effect.Effect<void>;
   maxQueueDepth: number;
   backpressureEvents: number;
   closed: boolean;
@@ -116,6 +117,15 @@ export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscrip
         }),
       queuedEvents: Queue.size(queue),
       end: Queue.end(queue),
+      closeWithStatus: (event) =>
+        Effect.gen(function* () {
+          let drained = yield* Queue.poll(queue);
+          while (Option.isSome(drained)) {
+            drained = yield* Queue.poll(queue);
+          }
+          yield* Queue.offer(queue, event).pipe(Effect.ignore);
+          yield* Queue.end(queue);
+        }),
       maxQueueDepth: 0,
       backpressureEvents: 0,
       closed: false,
