@@ -1,12 +1,20 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
+import type { ViewServerLiveClient } from "@view-server/client";
 import {
   defineViewServerConfig,
   type LiveQueryResult,
   type ViewServerRuntimeError,
 } from "@view-server/config";
+import { createViewServerReact as createViewServerReactFromPackage } from "@view-server/react";
+import {
+  createInMemoryViewServerReact as createInMemoryViewServerReactFromPackageTesting,
+  type ViewServerInMemoryOptions as ViewServerInMemoryOptionsFromPackageTesting,
+} from "@view-server/react/testing";
 import type { Effect } from "effect";
 import { Schema } from "effect";
+import type { ReactNode } from "react";
 import { createViewServerReact } from "./index";
+import { createInMemoryViewServerReact, type ViewServerInMemoryOptions } from "./testing";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -26,8 +34,13 @@ const viewServer = defineViewServerConfig({
   },
 });
 
-const { createInMemoryViewServer, useLiveQuery, useViewServerHealth } =
-  createViewServerReact(viewServer);
+const react = createViewServerReact(viewServer);
+const { ViewServerProvider, useLiveQuery, useViewServerHealth } = react;
+
+const createInMemoryViewServer = (options?: ViewServerInMemoryOptions) =>
+  createInMemoryViewServerReact(react, options);
+
+declare const liveClient: ViewServerLiveClient<typeof viewServer.topics>;
 
 declare const dynamicSingleField: "id" | "price";
 
@@ -126,6 +139,20 @@ describe("React type contracts", () => {
       select: ["id", "prcie"],
     });
 
+    useLiveQuery("orders", {
+      select: [
+        // @ts-expect-error selected fields must be topic field names, not undefined.
+        undefined,
+      ],
+    });
+
+    useLiveQuery("orders", {
+      select: [
+        // @ts-expect-error selected fields must be topic field names, not null.
+        null,
+      ],
+    });
+
     const dynamicSingleTupleSelectedFieldsQuery = {
       select: [dynamicSingleField],
     } as const;
@@ -159,6 +186,7 @@ describe("React type contracts", () => {
 
   it("keeps health and in-memory client keyed by configured topics", () => {
     const health = useViewServerHealth();
+    const provider = ViewServerProvider({ client: liveClient, children: null });
     const inMemoryViewServer = createInMemoryViewServer({ subscriptionQueueCapacity: 1 });
     type Client = typeof inMemoryViewServer.client;
     const publish = inMemoryViewServer.client.publish("orders", {
@@ -171,6 +199,7 @@ describe("React type contracts", () => {
     });
 
     expectTypeOf(health.engine.topics.orders.rowCount).toEqualTypeOf<number>();
+    expectTypeOf(provider).toEqualTypeOf<ReactNode>();
     expectTypeOf<Parameters<Client["publish"]>>().toEqualTypeOf<
       [topic: "orders", row: typeof Order.Type]
     >();
@@ -184,6 +213,11 @@ describe("React type contracts", () => {
       // @ts-expect-error setup data must go through runtime.publish or runtime.publishMany.
       seed: {},
     });
+  });
+
+  it("requires testing helpers to reuse React bindings", () => {
+    // @ts-expect-error testing helpers need the app binding, not just the config.
+    createInMemoryViewServerReact(viewServer);
   });
 
   it("rejects grouped queries for the in-memory runtime slice", () => {
@@ -205,5 +239,80 @@ describe("React type contracts", () => {
 
     expectTypeOf(invalidGroupedSnapshot).not.toBeAny();
     expectTypeOf(invalidPatch).not.toBeAny();
+  });
+
+  it("preserves consumer types through @view-server/react package imports", () => {
+    const consumerReact = createViewServerReactFromPackage(viewServer);
+    const selected = consumerReact.useLiveQuery("orders", {
+      select: ["id", "price"],
+    });
+    const provider = consumerReact.ViewServerProvider({
+      client: liveClient,
+      children: null,
+    });
+
+    expectTypeOf(selected).toEqualTypeOf<
+      LiveQueryResult<{
+        readonly id: string;
+        readonly price: number;
+      }>
+    >();
+    expectTypeOf(provider).toEqualTypeOf<ReactNode>();
+
+    consumerReact.useLiveQuery("orders", {
+      // @ts-expect-error consumer package imports still reject unknown selected fields.
+      select: ["prcie"],
+    });
+
+    consumerReact.useLiveQuery("orders", {
+      select: [
+        // @ts-expect-error consumer package imports still reject undefined selected fields.
+        undefined,
+      ],
+    });
+
+    consumerReact.useLiveQuery("orders", {
+      select: [
+        // @ts-expect-error consumer package imports still reject null selected fields.
+        null,
+      ],
+    });
+  });
+
+  it("preserves consumer testing types through @view-server/react/testing package imports", () => {
+    const consumerReact = createViewServerReactFromPackage(viewServer);
+    const options = {
+      subscriptionQueueCapacity: 1,
+    } satisfies ViewServerInMemoryOptionsFromPackageTesting;
+    const inMemory = createInMemoryViewServerReactFromPackageTesting(consumerReact, options);
+    const provider = inMemory.ViewServerInMemoryProvider({ children: null });
+    const publish = inMemory.client.publish("orders", {
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      updatedAt: 1,
+    });
+
+    expectTypeOf(provider).toEqualTypeOf<ReactNode>();
+    expectTypeOf<Parameters<typeof inMemory.client.publish>>().toEqualTypeOf<
+      [topic: "orders", row: typeof Order.Type]
+    >();
+    expectTypeOf<Effect.Error<typeof publish>>().toEqualTypeOf<ViewServerRuntimeError>();
+
+    // @ts-expect-error testing helper consumers must pass React bindings, not config.
+    createInMemoryViewServerReactFromPackageTesting(viewServer);
+
+    const invalidPublish = inMemory.client.publish("orders", {
+      id: "order-2",
+      customerId: "customer-2",
+      status: "open",
+      price: 42,
+      region: "usa",
+      // @ts-expect-error consumer testing client keeps exact topic row requirements.
+      updateddAt: 1,
+    });
+    expectTypeOf(invalidPublish).not.toBeAny();
   });
 });

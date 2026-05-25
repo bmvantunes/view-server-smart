@@ -42,6 +42,18 @@ const resetStatusEvent = <Row extends RowObject>(
   message: "Subscription closed because the engine reset.",
 });
 
+const engineClosedStatusEvent = <Row extends RowObject>(
+  store: TopicStore<Row>,
+  subscriber: LiveTopicSubscriber<Row>,
+): StatusEvent => ({
+  type: "status",
+  topic: store.topic,
+  queryId: subscriber.queryId,
+  status: "closed",
+  code: "SubscriptionClosed",
+  message: "Subscription closed because the engine closed.",
+});
+
 const commitTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.commit")(function* <
   Row extends RowObject,
 >(store: TopicStore<Row>) {
@@ -77,7 +89,7 @@ export const closeTopicStoreSubscriptions = Effect.fn(
     Effect.gen(function* () {
       for (const subscriber of store.subscribers) {
         subscriber.closed = true;
-        yield* subscriber.end;
+        yield* subscriber.closeWithStatus(engineClosedStatusEvent(store, subscriber));
       }
       store.subscribers.clear();
     }),

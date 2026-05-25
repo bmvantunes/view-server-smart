@@ -1,14 +1,11 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import { defineViewServerConfig } from "@view-server/config";
-import { Cause, Deferred, Effect, Schema } from "effect";
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import { createInMemoryViewServer as createCoreInMemoryViewServer } from "@view-server/in-memory";
+import { Effect, Schema } from "effect";
+import { Component, type ReactNode } from "react";
 import { render } from "vitest-browser-react";
-import { liveQueryFailureResult } from "./hook-error";
-import { liveQueryResultFromAsyncResult } from "./hook-result";
 import { createViewServerReact } from "./index";
-import { makeHealthRefreshScheduler } from "./in-memory-runtime";
-import { applyEvent, initialClientState, type ClientState } from "./live-query-state";
-import { stableQueryKey } from "./query-key";
+import { createInMemoryViewServerReact, type ViewServerInMemoryOptions } from "./testing";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -40,8 +37,11 @@ const viewServer = defineViewServerConfig({
   },
 });
 
-const { createInMemoryViewServer, useLiveQuery, useViewServerHealth } =
-  createViewServerReact(viewServer);
+const react = createViewServerReact(viewServer);
+const { useLiveQuery, useViewServerHealth } = react;
+
+const createInMemoryViewServer = (options?: ViewServerInMemoryOptions) =>
+  createInMemoryViewServerReact(react, options);
 
 type OrderRow = typeof Order.Type;
 
@@ -54,31 +54,194 @@ const order = (id: string, price: number): OrderRow => ({
   updatedAt: price,
 });
 
+class ProviderErrorBoundary extends Component<
+  { readonly children: ReactNode },
+  { readonly message: string | null }
+> {
+  override readonly state: { readonly message: string | null } = {
+    message: null,
+  };
+
+  static getDerivedStateFromError(error: unknown): { readonly message: string } {
+    return {
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  override render(): ReactNode {
+    if (this.state.message !== null) {
+      return (
+        <output aria-label="provider error" role="alert">
+          {this.state.message}
+        </output>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 describe("createViewServerReact", () => {
-  it("applies remove delta operations in the client reducer", () => {
-    const state = applyEvent(
-      {
-        ...initialClientState<{ readonly id: string }>(),
-        rows: [{ id: "a" }, { id: "b" }],
-        keys: ["a", "b"],
-        totalRows: 2,
-        version: 1,
-        status: "ready",
-      },
-      {
-        type: "delta",
-        topic: "orders",
-        queryId: "query-1",
-        fromVersion: 1,
-        toVersion: 2,
-        totalRows: 1,
-        operations: [{ type: "remove", key: "a" }],
-      },
+  it("cleans subscriptions without closing caller-owned generic provider clients", async () => {
+    const inMemory = createCoreInMemoryViewServer(viewServer);
+
+    function OrdersView() {
+      const result = useLiveQuery("orders", {
+        select: ["id"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      return (
+        <output aria-label="orders" role="status">
+          {result.rows.map((row) => row.id).join("|")}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <react.ViewServerProvider client={inMemory.liveClient}>
+        <OrdersView />
+      </react.ViewServerProvider>,
+    );
+    const orders = view.getByRole("status", { name: "orders" });
+
+    await Effect.runPromise(inMemory.client.publish("orders", order("a", 10)));
+    await expect.element(orders).toHaveTextContent(/^a$/);
+
+    await view.unmount();
+
+    await expect
+      .poll(async () => {
+        const health = await Effect.runPromise(inMemory.client.health());
+        return health.engine.topics.orders.activeSubscriptions;
+      })
+      .toBe(0);
+
+    await Effect.runPromise(inMemory.client.publish("orders", order("b", 20)));
+    const health = await Effect.runPromise(inMemory.client.health());
+    expect(health.status).toBe("ready");
+    expect(health.engine.topics.orders.rowCount).toBe(2);
+    await Effect.runPromise(inMemory.close);
+  });
+
+  it("surfaces missing provider clients", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    function HealthView() {
+      const health = useViewServerHealth();
+      return <output role="status">{health.status}</output>;
+    }
+
+    try {
+      const missingProvider = await render(
+        <ProviderErrorBoundary>
+          <HealthView />
+        </ProviderErrorBoundary>,
+      );
+      const error = missingProvider.getByRole("alert", { name: "provider error" });
+      await expect.element(error).toHaveTextContent(/^ViewServerProvider is missing a client\.$/);
+      await missingProvider.unmount();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("switches hook clients when the generic provider client prop changes", async () => {
+    const first = createCoreInMemoryViewServer(viewServer);
+    const second = createCoreInMemoryViewServer(viewServer);
+
+    function OrdersView() {
+      const result = useLiveQuery("orders", {
+        select: ["id"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      return (
+        <output aria-label="orders" role="status">
+          {result.rows.map((row) => row.id).join("|")}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <react.ViewServerProvider client={first.liveClient}>
+        <OrdersView />
+      </react.ViewServerProvider>,
+    );
+    const orders = view.getByRole("status", { name: "orders" });
+
+    await Effect.runPromise(first.client.publish("orders", order("first", 10)));
+    await expect.element(orders).toHaveTextContent(/^first$/);
+
+    await view.rerender(
+      <react.ViewServerProvider client={second.liveClient}>
+        <OrdersView />
+      </react.ViewServerProvider>,
+    );
+    await Effect.runPromise(second.client.publish("orders", order("second", 20)));
+    await expect.element(orders).toHaveTextContent(/^second$/);
+
+    await expect
+      .poll(async () => {
+        const health = await Effect.runPromise(first.client.health());
+        return health.engine.topics.orders.activeSubscriptions;
+      })
+      .toBe(0);
+
+    await view.unmount();
+    await Effect.runPromise(first.close);
+    await Effect.runPromise(second.close);
+  });
+
+  it("keeps nested provider contexts isolated per binding instance", async () => {
+    const outerReact = createViewServerReact(viewServer);
+    const innerReact = createViewServerReact(viewServer);
+    const outer = createInMemoryViewServerReact(outerReact);
+    const inner = createInMemoryViewServerReact(innerReact);
+
+    function OuterOrdersView() {
+      const result = outerReact.useLiveQuery("orders", {
+        select: ["id"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      return (
+        <output aria-label="outer orders" role="status">
+          outer orders: {result.rows.map((row) => row.id).join("|")}
+        </output>
+      );
+    }
+
+    function InnerOrdersView() {
+      const result = innerReact.useLiveQuery("orders", {
+        select: ["id"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      return (
+        <output aria-label="inner orders" role="status">
+          inner orders: {result.rows.map((row) => row.id).join("|")}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <outer.ViewServerInMemoryProvider>
+        <inner.ViewServerInMemoryProvider>
+          <OuterOrdersView />
+          <InnerOrdersView />
+        </inner.ViewServerInMemoryProvider>
+      </outer.ViewServerInMemoryProvider>,
     );
 
-    expect(state.rows).toEqual([{ id: "b" }]);
-    expect(state.keys).toEqual(["b"]);
-    expect(state.totalRows).toBe(1);
+    await Effect.runPromise(outer.client.publish("orders", order("outer", 10)));
+    await Effect.runPromise(inner.client.publish("orders", order("inner", 20)));
+
+    const outerOrders = view.getByRole("status", { name: "outer orders" });
+    const innerOrders = view.getByRole("status", { name: "inner orders" });
+    await expect.element(outerOrders).toHaveTextContent(/^outer orders: outer$/);
+    await expect.element(innerOrders).toHaveTextContent(/^inner orders: inner$/);
+
+    await view.unmount();
   });
 
   it("streams runtime-published snapshots and live deltas in browser providers", async () => {
@@ -90,9 +253,10 @@ describe("createViewServerReact", () => {
         select: ["id", "price"],
         limit: 10,
       });
+      const rows = result.rows.map((row) => `${row.id}:${row.price}`).join("|");
       return (
         <output aria-label="orders" role="status">
-          {result.rows.map((row) => `${row.id}:${row.price}`).join("|")}
+          {rows === "" ? "orders: none" : `orders: ${rows}`}
         </output>
       );
     }
@@ -113,17 +277,17 @@ describe("createViewServerReact", () => {
     );
     const orders = view.getByRole("status", { name: "orders" });
     const health = view.getByRole("status", { name: "health" });
-    await expect.element(orders).toHaveTextContent("");
+    await expect.element(orders).toHaveTextContent(/^orders: none$/);
 
     await Effect.runPromise(client.publishMany("orders", [order("b", 20), order("a", 10)]));
 
-    await expect.element(orders).toHaveTextContent("a:10|b:20");
-    await expect.element(health).toHaveTextContent("2");
+    await expect.element(orders).toHaveTextContent(/^orders: a:10\|b:20$/);
+    await expect.element(health).toHaveTextContent(/^2$/);
 
     await Effect.runPromise(client.publish("orders", order("c", 5)));
 
-    await expect.element(orders).toHaveTextContent("c:5|a:10|b:20");
-    await expect.element(health).toHaveTextContent("3");
+    await expect.element(orders).toHaveTextContent(/^orders: c:5\|a:10\|b:20$/);
+    await expect.element(health).toHaveTextContent(/^3$/);
     await view.unmount();
   });
 
@@ -136,9 +300,10 @@ describe("createViewServerReact", () => {
         orderBy: [{ field: "price", direction: "asc" }],
         limit: 10,
       });
+      const rows = result.rows.map((row) => row.id).join("|");
       return (
         <output aria-label="orders" role="status">
-          {result.rows.map((row) => row.id).join("|")}
+          {rows === "" ? "orders: none" : `orders: ${rows}`}
         </output>
       );
     }
@@ -149,10 +314,10 @@ describe("createViewServerReact", () => {
       </ViewServerInMemoryProvider>,
     );
     const orders = view.getByRole("status", { name: "orders" });
-    await expect.element(orders).toHaveTextContent("");
+    await expect.element(orders).toHaveTextContent(/^orders: none$/);
 
     await Effect.runPromise(client.publish("orders", order("a", 10)));
-    await expect.element(orders).toHaveTextContent("a");
+    await expect.element(orders).toHaveTextContent(/^orders: a$/);
 
     await view.rerender(<ViewServerInMemoryProvider></ViewServerInMemoryProvider>);
 
@@ -174,9 +339,10 @@ describe("createViewServerReact", () => {
         orderBy: [{ field: "price", direction: "asc" }],
         limit: 10,
       });
+      const rows = result.rows.map((row) => `${row.id}:${row.price}`).join("|");
       return (
         <output aria-label="orders" role="status">
-          {result.rows.map((row) => `${row.id}:${row.price}`).join("|")}
+          {rows === "" ? "orders: none" : `orders: ${rows}`}
         </output>
       );
     }
@@ -189,7 +355,7 @@ describe("createViewServerReact", () => {
     const orders = view.getByRole("status", { name: "orders" });
 
     await Effect.runPromise(client.publish("orders", order("a", 10)));
-    await expect.element(orders).toHaveTextContent("a:10");
+    await expect.element(orders).toHaveTextContent(/^orders: a:10$/);
 
     await view.rerender(<ViewServerInMemoryProvider></ViewServerInMemoryProvider>);
     await expect
@@ -206,7 +372,7 @@ describe("createViewServerReact", () => {
         <OrdersView />
       </ViewServerInMemoryProvider>,
     );
-    await expect.element(orders).toHaveTextContent("a:10|b:20");
+    await expect.element(orders).toHaveTextContent(/^orders: a:10\|b:20$/);
     await view.unmount();
   });
 
@@ -219,9 +385,10 @@ describe("createViewServerReact", () => {
         select: ["id", "price"],
         limit: 10,
       });
+      const rows = result.rows.map((row) => `${row.id}:${row.price}`).join("|");
       return (
         <output aria-label="orders" role="status">
-          {result.rows.map((row) => `${row.id}:${row.price}`).join("|")}
+          {rows === "" ? "orders: none" : `orders: ${rows}`}
         </output>
       );
     }
@@ -232,19 +399,19 @@ describe("createViewServerReact", () => {
       </ViewServerInMemoryProvider>,
     );
     const orders = view.getByRole("status", { name: "orders" });
-    await expect.element(orders).toHaveTextContent("");
+    await expect.element(orders).toHaveTextContent(/^orders: none$/);
 
     await Effect.runPromise(client.publishMany("orders", [order("a", 10), order("b", 20)]));
-    await expect.element(orders).toHaveTextContent("a:10|b:20");
+    await expect.element(orders).toHaveTextContent(/^orders: a:10\|b:20$/);
 
     await Effect.runPromise(client.publish("orders", order("a", 30)));
-    await expect.element(orders).toHaveTextContent("b:20|a:30");
+    await expect.element(orders).toHaveTextContent(/^orders: b:20\|a:30$/);
 
     await Effect.runPromise(client.patch("orders", "a", { price: 5 }));
-    await expect.element(orders).toHaveTextContent("a:5|b:20");
+    await expect.element(orders).toHaveTextContent(/^orders: a:5\|b:20$/);
 
     await Effect.runPromise(client.delete("orders", "a"));
-    await expect.element(orders).toHaveTextContent("b:20");
+    await expect.element(orders).toHaveTextContent(/^orders: b:20$/);
 
     const snapshot = await Effect.runPromise(
       client.snapshot("orders", {
@@ -256,7 +423,7 @@ describe("createViewServerReact", () => {
 
     await Effect.runPromise(client.reset());
     expect((await Effect.runPromise(client.health())).engine.topics.orders.rowCount).toBe(0);
-    await expect.element(orders).toHaveTextContent("");
+    await expect.element(orders).toHaveTextContent(/^orders: none$/);
     await view.unmount();
   });
 
@@ -275,40 +442,6 @@ describe("createViewServerReact", () => {
         return health.engine.topics.orders.rowCount;
       })
       .toBe(50);
-  });
-
-  it("queues a trailing health scheduler refresh when requested while refresh is pending", async () => {
-    const firstStarted = await Effect.runPromise(Deferred.make<void>());
-    const firstFinished = await Effect.runPromise(Deferred.make<void>());
-    const secondStarted = await Effect.runPromise(Deferred.make<void>());
-    const secondFinished = await Effect.runPromise(Deferred.make<void>());
-    let refreshCount = 0;
-
-    const requestRefresh = makeHealthRefreshScheduler(
-      Effect.gen(function* () {
-        const currentRefresh = yield* Effect.sync(() => {
-          refreshCount += 1;
-          return refreshCount;
-        });
-        if (currentRefresh === 1) {
-          yield* Deferred.succeed(firstStarted, undefined);
-          yield* Deferred.await(firstFinished);
-          return;
-        }
-        yield* Deferred.succeed(secondStarted, undefined);
-        yield* Deferred.await(secondFinished);
-      }),
-    );
-
-    await Effect.runPromise(requestRefresh);
-    await Effect.runPromise(Deferred.await(firstStarted));
-
-    await Effect.runPromise(requestRefresh);
-    await Effect.runPromise(Deferred.succeed(firstFinished, undefined));
-    await Effect.runPromise(Deferred.await(secondStarted));
-
-    expect(refreshCount).toBe(2);
-    await Effect.runPromise(Deferred.succeed(secondFinished, undefined));
   });
 
   it("surfaces live query failures as error results", async () => {
@@ -333,149 +466,8 @@ describe("createViewServerReact", () => {
     );
     const orders = view.getByRole("status", { name: "orders" });
 
-    await expect.element(orders).toHaveTextContent("error:InvalidQuery");
+    await expect.element(orders).toHaveTextContent(/^error:InvalidQuery$/);
     await view.unmount();
-  });
-
-  it("distinguishes non-plain object query values in stable query keys", () => {
-    class FilterValue {
-      readonly label = "same";
-    }
-
-    const firstFilter = new FilterValue();
-    const secondFilter = new FilterValue();
-
-    expect(stableQueryKey({ where: { custom: { eq: firstFilter } } })).toBe(
-      stableQueryKey({ where: { custom: { eq: firstFilter } } }),
-    );
-    expect(stableQueryKey({ where: { custom: { eq: firstFilter } } })).not.toBe(
-      stableQueryKey({ where: { custom: { eq: secondFilter } } }),
-    );
-    expect(
-      stableQueryKey({
-        where: {
-          custom: {
-            eq: new Map<string, number>([
-              ["b", 1],
-              ["a", 2],
-            ]),
-          },
-        },
-      }),
-    ).toBe(
-      stableQueryKey({
-        where: {
-          custom: {
-            eq: new Map<string, number>([
-              ["a", 2],
-              ["b", 1],
-            ]),
-          },
-        },
-      }),
-    );
-    expect(stableQueryKey({ where: { custom: { eq: new Set(["b", "a"]) } } })).toBe(
-      stableQueryKey({ where: { custom: { eq: new Set(["a", "b"]) } } }),
-    );
-  });
-
-  it("preserves typed hook failure status codes", () => {
-    for (const code of [
-      "Ready",
-      "SnapshotStale",
-      "SubscriptionClosed",
-      "TransportError",
-      "BackpressureExceeded",
-      "InvalidTopic",
-      "InvalidRow",
-      "InvalidQuery",
-      "UnsupportedQuery",
-      "RuntimeUnavailable",
-      "RuntimeResetFailed",
-    ]) {
-      expect(
-        liveQueryFailureResult<never>(
-          Cause.fail({
-            _tag: "ViewServerRuntimeError",
-            code,
-            message: code,
-          }),
-        ),
-      ).toMatchObject({
-        status: "error",
-        statusCode: code,
-        message: code,
-      });
-    }
-    expect(
-      liveQueryFailureResult<never>(
-        Cause.fail({
-          _tag: "ViewServerRuntimeError",
-          code: "InvalidRow",
-          message: "invalid row",
-        }),
-      ),
-    ).toMatchObject({
-      status: "error",
-      statusCode: "InvalidRow",
-      message: "invalid row",
-    });
-    expect(
-      liveQueryFailureResult<never>(
-        Cause.fail({
-          _tag: "UnknownFailure",
-          code: "UnexpectedCode",
-          message: "unexpected",
-        }),
-      ),
-    ).toMatchObject({
-      status: "error",
-      statusCode: "TransportError",
-      message: "unexpected",
-    });
-    expect(liveQueryFailureResult<never>(Cause.fail("plain failure"))).toMatchObject({
-      status: "error",
-      statusCode: "TransportError",
-      message: "plain failure",
-    });
-    expect(liveQueryFailureResult<never>(Cause.fail({ code: "InvalidRow" }))).toMatchObject({
-      status: "error",
-      statusCode: "TransportError",
-      message: "[object Object]",
-    });
-  });
-
-  it("maps async atom lifecycle states into live query results", () => {
-    expect(liveQueryResultFromAsyncResult(AsyncResult.initial())).toMatchObject({
-      status: "loading",
-      rows: [],
-      totalRows: 0,
-    });
-    expect(
-      liveQueryResultFromAsyncResult(
-        AsyncResult.success({
-          ...initialClientState<{ readonly id: string }>(),
-          rows: [{ id: "a" }],
-          keys: ["a"],
-          totalRows: 1,
-          version: 1,
-          status: "ready",
-        }),
-      ),
-    ).toMatchObject({
-      status: "ready",
-      rows: [{ id: "a" }],
-      totalRows: 1,
-    });
-    expect(
-      liveQueryResultFromAsyncResult(
-        AsyncResult.failure<ClientState<{ readonly id: string }>, string>(Cause.fail("boom")),
-      ),
-    ).toMatchObject({
-      status: "error",
-      statusCode: "TransportError",
-      message: "boom",
-    });
   });
 
   it("maps runtime errors", async () => {
@@ -541,9 +533,10 @@ describe("createViewServerReact", () => {
         select: ["id", "quantity"],
         limit: 10,
       });
+      const rows = result.rows.map((row) => `${row.id}:${row.quantity}`).join("|");
       return (
         <output aria-label="trades" role="status">
-          {result.rows.map((row) => `${row.id}:${row.quantity}`).join("|")}
+          {rows === "" ? "trades: none" : `trades: ${rows}`}
         </output>
       );
     }
@@ -554,7 +547,7 @@ describe("createViewServerReact", () => {
       </ViewServerInMemoryProvider>,
     );
     const trades = view.getByRole("status", { name: "trades" });
-    await expect.element(trades).toHaveTextContent("");
+    await expect.element(trades).toHaveTextContent(/^trades: none$/);
 
     await Effect.runPromise(
       client.publishMany("trades", [
@@ -563,11 +556,11 @@ describe("createViewServerReact", () => {
       ]),
     );
 
-    await expect.element(trades).toHaveTextContent("b:10");
+    await expect.element(trades).toHaveTextContent(/^trades: b:10$/);
     await view.unmount();
   });
 
-  it("surfaces runtime unavailable after provider disposal", async () => {
+  it("closes the owned in-memory runtime after provider disposal", async () => {
     const { ViewServerInMemoryProvider, client } = createInMemoryViewServer();
 
     function HealthView() {
@@ -584,12 +577,64 @@ describe("createViewServerReact", () => {
         <HealthView />
       </ViewServerInMemoryProvider>,
     );
-    await expect.element(view.getByRole("status", { name: "health" })).toHaveTextContent("ready");
+    const health = view.getByRole("status", { name: "health" });
+    await expect.element(health).toHaveTextContent(/^ready$/);
 
     await view.unmount();
     await expect
       .poll(async () => {
         return Effect.runPromise(Effect.flip(client.publish("orders", order("a", 10)))).then(
+          (error) => error.code,
+          () => "success",
+        );
+      })
+      .toBe("RuntimeUnavailable");
+  });
+
+  it("surfaces closed status and clears rows when runtime closes while subscribed", async () => {
+    const { ViewServerInMemoryProvider, client, close } = createInMemoryViewServer();
+
+    function OrdersView() {
+      const result = useLiveQuery("orders", {
+        select: ["id"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      return (
+        <output aria-label="orders" role="status">
+          {result.status}:{result.statusCode}:{result.rows.map((row) => row.id).join("|")}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <ViewServerInMemoryProvider>
+        <OrdersView />
+      </ViewServerInMemoryProvider>,
+    );
+    const orders = view.getByRole("status", { name: "orders" });
+
+    await Effect.runPromise(client.publish("orders", order("a", 10)));
+    await expect.element(orders).toHaveTextContent(/^ready:Ready:a$/);
+
+    await Effect.runPromise(close);
+
+    await expect.element(orders).toHaveTextContent(/^closed:SubscriptionClosed:$/);
+    await view.unmount();
+  });
+
+  it("returns close for disposing in-memory helpers without mounting a provider", async () => {
+    const { client, close } = createInMemoryViewServer();
+
+    await Effect.runPromise(client.publish("orders", order("a", 10)));
+    await Effect.runPromise(close);
+
+    const health = await Effect.runPromise(client.health());
+    expect(health.status).toBe("stopping");
+
+    await expect
+      .poll(async () => {
+        return Effect.runPromise(Effect.flip(client.publish("orders", order("b", 20)))).then(
           (error) => error.code,
           () => "success",
         );
@@ -623,14 +668,14 @@ describe("createViewServerReact", () => {
     const orders = view.getByRole("status", { name: "orders" });
 
     await Effect.runPromise(client.publish("orders", order("a", 10)));
-    await expect.element(orders).toHaveTextContent("ready:Ready");
+    await expect.element(orders).toHaveTextContent(/^ready:Ready$/);
 
     for (let index = 0; index < 50; index += 1) {
       await Effect.runPromise(client.publish("orders", order(`burst-${index}`, index)));
     }
 
     expect((await Effect.runPromise(client.health())).transport.backpressureEvents).toBe(1);
-    await expect.element(orders).toHaveTextContent("closed:BackpressureExceeded");
+    await expect.element(orders).toHaveTextContent(/^closed:BackpressureExceeded$/);
     await view.unmount();
   });
 });

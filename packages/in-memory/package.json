@@ -1,0 +1,32 @@
+{
+  "name": "@view-server/in-memory",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test run --coverage --typecheck"
+  },
+  "dependencies": {
+    "@view-server/client": "workspace:*",
+    "@view-server/column-live-view-engine": "workspace:*",
+    "@view-server/config": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/runner": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

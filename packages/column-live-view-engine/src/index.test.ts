@@ -4,6 +4,7 @@ import {
   type DeltaEvent,
   type RawQuery,
   type SnapshotEvent,
+  type StatusEvent,
 } from "@view-server/config";
 import { Cause, Effect, Schema, Scope, Stream } from "effect";
 import { fromStringUnsafe } from "effect/BigDecimal";
@@ -177,6 +178,12 @@ const expectDeltaEvent: <Row>(
   event: ColumnLiveViewEngineEvent<Row>,
 ) => asserts event is DeltaEvent<Row> = (event) => {
   expect(event).toMatchObject({ type: "delta" });
+};
+
+const expectStatusEvent: <Row>(
+  event: ColumnLiveViewEngineEvent<Row>,
+) => asserts event is StatusEvent = (event) => {
+  expect(event).toMatchObject({ type: "status" });
 };
 
 const expectSnapshotRows = <Row>(
@@ -1018,6 +1025,38 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     }),
   );
 
+  it.effect("does not record backpressure when explicit close races with publish", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      const subscriptions = yield* Effect.all(
+        Array.from({ length: 32 }, () => engine.subscribe("orders", { select: ["id"] })),
+        { concurrency: "unbounded" },
+      );
+
+      yield* Effect.all(
+        [
+          Effect.all(
+            subscriptions.map((subscription) => subscription.close()),
+            { concurrency: "unbounded" },
+          ),
+          Effect.all(
+            Array.from({ length: 32 }, (_, index) =>
+              engine.publish("orders", order(`race-${index}`, "open", index, index)),
+            ),
+            { concurrency: "unbounded" },
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const health = yield* engine.health();
+      expect(health.activeSubscriptions).toBe(0);
+      expect(health.backpressureEvents).toBe(0);
+      expect(health.topics["orders"].activeSubscriptions).toBe(0);
+      expect(health.topics["orders"].backpressureEvents).toBe(0);
+    }),
+  );
+
   it.effect("stream finalization releases active subscribers", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
@@ -1027,6 +1066,52 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(events.map((event) => event.type)).toEqual(["snapshot"]);
 
       const health = yield* engine.health();
+      expect(health.topics["orders"].activeSubscriptions).toBe(0);
+      expect(health.activeSubscriptions).toBe(0);
+    }),
+  );
+
+  it.effect("emits closed status before ending subscriptions when engine closes", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publish("orders", order("a", "open", 10, 1));
+      const subscription = yield* engine.subscribe("orders", { select: ["id"] });
+      const take = yield* makeEventReader(subscription);
+
+      const snapshot = yield* take(1);
+      expectSnapshotRows(firstEvent(snapshot), [{ id: "a" }]);
+
+      yield* engine.close();
+
+      const closedEvents = yield* take(1);
+      const closed = firstEvent(closedEvents);
+      expectStatusEvent(closed);
+      expect(closed).toMatchObject({
+        status: "closed",
+        code: "SubscriptionClosed",
+        message: "Subscription closed because the engine closed.",
+      });
+
+      const health = yield* engine.health();
+      expect(health.topics["orders"].activeSubscriptions).toBe(0);
+      expect(health.activeSubscriptions).toBe(0);
+    }),
+  );
+
+  it.effect("does not register subscriptions after a concurrent engine close", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      const subscribeAll = Effect.all(
+        Array.from({ length: 64 }, () =>
+          engine.subscribe("orders", { select: ["id"] }).pipe(Effect.result),
+        ),
+        { concurrency: "unbounded" },
+      );
+
+      yield* Effect.all([subscribeAll, engine.close()], { concurrency: "unbounded" });
+
+      const health = yield* engine.health();
+      expect(health.status).toBe("stopping");
       expect(health.topics["orders"].activeSubscriptions).toBe(0);
       expect(health.activeSubscriptions).toBe(0);
     }),

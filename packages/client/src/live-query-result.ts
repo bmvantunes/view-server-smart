@@ -1,6 +1,6 @@
 import type { LiveQueryResult } from "@view-server/config";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import { liveQueryFailureResult } from "./hook-error";
+import { liveQueryFailureResult } from "./live-query-error";
 import { initialClientState, liveQueryResult, type ClientState } from "./live-query-state";
 
 export const liveQueryResultFromAsyncResult = <Row>(

@@ -1,5 +1,5 @@
 import type { DeltaEvent, LiveQueryResult, StatusEvent } from "@view-server/config";
-import type { ColumnLiveViewEngineEvent } from "@view-server/column-live-view-engine";
+import type { ViewServerLiveEvent } from "./live-client";
 
 export type ClientState<Row> = {
   readonly rows: ReadonlyArray<Row>;
@@ -29,7 +29,7 @@ export const liveQueryResult = <Row>(state: ClientState<Row>): LiveQueryResult<R
 });
 
 const applySnapshot = <Row>(
-  event: Extract<ColumnLiveViewEngineEvent<Row>, { readonly type: "snapshot" }>,
+  event: Extract<ViewServerLiveEvent<Row>, { readonly type: "snapshot" }>,
 ): ClientState<Row> => ({
   rows: event.rows,
   keys: event.keys,
@@ -84,16 +84,19 @@ const applyDelta = <Row>(state: ClientState<Row>, event: DeltaEvent<Row>): Clien
   };
 };
 
-const applyStatus = <Row>(state: ClientState<Row>, event: StatusEvent): ClientState<Row> => ({
-  ...(event.code === "SubscriptionClosed" ? initialClientState<Row>() : state),
-  status: event.status,
-  statusCode: event.code,
-  message: event.message,
-});
+const applyStatus = <Row>(state: ClientState<Row>, event: StatusEvent): ClientState<Row> => {
+  const baseState = event.status === "closed" ? initialClientState<Row>() : state;
+  return {
+    ...baseState,
+    status: event.status,
+    statusCode: event.code,
+    message: event.message,
+  };
+};
 
 export const applyEvent = <Row>(
   state: ClientState<Row>,
-  event: ColumnLiveViewEngineEvent<Row>,
+  event: ViewServerLiveEvent<Row>,
 ): ClientState<Row> => {
   if (event.type === "snapshot") {
     return applySnapshot(event);

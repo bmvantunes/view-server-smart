@@ -1,46 +1,39 @@
 import * as AtomReact from "@effect/atom-react";
-import type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";
+import {
+  applyEvent,
+  initialClientState,
+  liveQueryResultFromAsyncResult,
+  stableQueryKey,
+  type ViewServerLiveClient,
+} from "@view-server/client";
 import type {
   ExactRawQuery,
   LiveQueryResult,
   LiveQueryRow,
+  TopicDefinitions,
   TopicRow,
   ValidateLiveQuery,
   ViewServerConfig,
   ViewServerHealth,
-  ViewServerInMemoryRuntime,
 } from "@view-server/config";
 import { Effect, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
-import { useMemo, type ReactNode } from "react";
-import { liveQueryResultFromAsyncResult } from "./hook-result";
-import { makeProviderState } from "./in-memory-runtime";
-import { applyEvent, initialClientState } from "./live-query-state";
-import type { ViewServerReactClient } from "./react-client";
-import { stableQueryKey } from "./query-key";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { ViewServerReactConfig } from "./internal";
 
-type ReactBindings<Topics extends DecodableTopicDefinitions> = {
+export type ViewServerReactBindings<Topics extends TopicDefinitions> = {
+  readonly [ViewServerReactConfig]: ViewServerConfig<Topics>;
   readonly useLiveQuery: UseLiveQueryHook<Topics>;
   readonly useViewServerHealth: () => ViewServerHealth<Topics>;
-  readonly createInMemoryViewServer: (
-    options?: ViewServerInMemoryOptions,
-  ) => ViewServerInMemoryInstance<Topics>;
+  readonly ViewServerProvider: (props: ViewServerProviderProps<Topics>) => ReactNode;
 };
 
-export type ViewServerInMemoryProviderProps = {
+export type ViewServerProviderProps<Topics extends TopicDefinitions> = {
+  readonly client: ViewServerLiveClient<Topics>;
   readonly children?: ReactNode;
 };
 
-export type ViewServerInMemoryOptions = {
-  readonly subscriptionQueueCapacity?: number;
-};
-
-export type ViewServerInMemoryInstance<Topics extends DecodableTopicDefinitions> = {
-  readonly ViewServerInMemoryProvider: (props: ViewServerInMemoryProviderProps) => ReactNode;
-  readonly client: ViewServerInMemoryRuntime<Topics>;
-};
-
-export type UseLiveQueryHook<Topics extends DecodableTopicDefinitions> = <
+export type UseLiveQueryHook<Topics extends TopicDefinitions> = <
   Topic extends Extract<keyof Topics, string>,
   const Query extends { readonly select: ReadonlyArray<unknown> },
 >(
@@ -53,46 +46,26 @@ export type UseLiveQueryHook<Topics extends DecodableTopicDefinitions> = <
   >
 >;
 
-export const createViewServerReact = <const Topics extends DecodableTopicDefinitions>(
+export const createViewServerReact = <const Topics extends TopicDefinitions>(
   config: ViewServerConfig<Topics>,
-): ReactBindings<Topics> => {
-  const ProviderAtom = AtomReact.make((client: ViewServerReactClient<Topics>) =>
-    Atom.make((get) => {
-      get.addFinalizer(() => {
-        Effect.runFork(client.close);
-      });
-      return client;
-    }),
-  );
+): ViewServerReactBindings<Topics> => {
+  const ClientContext = createContext<ViewServerLiveClient<Topics> | null>(null);
 
-  const useClient = (): ViewServerReactClient<Topics> => AtomReact.useAtomValue(ProviderAtom.use());
-
-  function ProviderClientMount(): null {
-    AtomReact.useAtomMount(ProviderAtom.use());
-    return null;
-  }
-
-  const createInMemoryViewServer = (
-    options: ViewServerInMemoryOptions = {},
-  ): ViewServerInMemoryInstance<Topics> => {
-    const providerState = Effect.runSync(makeProviderState(config, options));
-
-    function ViewServerInMemoryProvider(props: ViewServerInMemoryProviderProps): ReactNode {
-      return (
-        <AtomReact.RegistryProvider>
-          <ProviderAtom.Provider value={providerState.reactClient}>
-            <ProviderClientMount />
-            {props.children}
-          </ProviderAtom.Provider>
-        </AtomReact.RegistryProvider>
-      );
+  const useClient = (): ViewServerLiveClient<Topics> => {
+    const client = useContext(ClientContext);
+    if (client === null) {
+      throw new Error("ViewServerProvider is missing a client.");
     }
-
-    return {
-      ViewServerInMemoryProvider,
-      client: providerState.runtime,
-    };
+    return client;
   };
+
+  function ViewServerProvider(props: ViewServerProviderProps<Topics>): ReactNode {
+    return (
+      <AtomReact.RegistryProvider>
+        <ClientContext.Provider value={props.client}>{props.children}</ClientContext.Provider>
+      </AtomReact.RegistryProvider>
+    );
+  }
 
   const useLiveQuery: UseLiveQueryHook<Topics> = (topic, query) => {
     const client = useClient();
@@ -125,8 +98,9 @@ export const createViewServerReact = <const Topics extends DecodableTopicDefinit
   };
 
   return {
+    [ViewServerReactConfig]: config,
     useLiveQuery,
     useViewServerHealth,
-    createInMemoryViewServer,
+    ViewServerProvider,
   };
 };

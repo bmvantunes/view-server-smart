@@ -1,5 +1,5 @@
 import type { DeltaEvent, SnapshotEvent, StatusEvent } from "@view-server/config";
-import { Cause, Effect, Option, Queue, Stream } from "effect";
+import { Cause, Effect, Option, Queue, type Semaphore, Stream } from "effect";
 import { evaluateCompiledRawQuery, type CompiledRawQuery } from "./raw-query-compiler";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 
@@ -15,6 +15,7 @@ export type LiveTopicStoreState<Row extends RowObject> = {
   readonly rows: ReadonlyMap<string, Row>;
   readonly version: number;
   readonly subscribers: Set<LiveTopicSubscriber<Row>>;
+  readonly mutationSemaphore: Semaphore.Semaphore;
   maxQueueDepth: number;
   backpressureEvents: number;
 };
@@ -136,11 +137,15 @@ export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscrip
     updateQueueDepth(store, subscriber, yield* Queue.size(queue));
 
     const close = Effect.fn("ColumnLiveViewEngine.liveSubscription.close")(function* () {
-      if (!subscriber.closed) {
-        subscriber.closed = true;
-        store.subscribers.delete(subscriber);
-        yield* subscriber.end;
-      }
+      yield* store.mutationSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          if (!subscriber.closed) {
+            subscriber.closed = true;
+            store.subscribers.delete(subscriber);
+            yield* subscriber.end;
+          }
+        }),
+      );
     });
 
     return {

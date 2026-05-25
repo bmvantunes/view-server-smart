@@ -31,7 +31,7 @@ export default defineConfig({
       },
     },
   },
-  pack: libraryPack("src/index.tsx"),
+  pack: libraryPack(["src/index.tsx", "src/testing.tsx"]),
   lint: {
     options: {
       typeAware: true,

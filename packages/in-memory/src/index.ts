@@ -6,9 +6,9 @@ import {
   UnsupportedQueryError,
   type ColumnLiveViewEngine,
   type ColumnLiveViewEngineError,
-  type ColumnLiveViewEngineHealth,
   type DecodableTopicDefinitions,
 } from "@view-server/column-live-view-engine";
+import type { ViewServerLiveClient } from "@view-server/client";
 import type {
   ViewServerConfig,
   ViewServerHealth,
@@ -17,14 +17,17 @@ import type {
 } from "@view-server/config";
 import { Effect } from "effect";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
-import type { ViewServerReactClient } from "./react-client";
+import { healthFromEngine, makeHealthRefreshScheduler, readHealth, refreshHealth } from "./health";
 
-export type InMemoryViewServerState<Topics extends DecodableTopicDefinitions> = {
-  readonly reactClient: ViewServerReactClient<Topics>;
-  readonly runtime: ViewServerInMemoryRuntime<Topics>;
+export type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";
+
+export type ViewServerInMemoryInstance<Topics extends DecodableTopicDefinitions> = {
+  readonly client: ViewServerInMemoryRuntime<Topics>;
+  readonly liveClient: ViewServerLiveClient<Topics>;
+  readonly close: Effect.Effect<void>;
 };
 
-export type ProviderInput = {
+export type ViewServerInMemoryOptions = {
   readonly subscriptionQueueCapacity?: number;
 };
 
@@ -68,77 +71,7 @@ const engineErrorToRuntimeError = (error: ColumnLiveViewEngineError): ViewServer
   };
 };
 
-const healthFromEngine = <Topics extends DecodableTopicDefinitions>(
-  engineHealth: ColumnLiveViewEngineHealth<Topics>,
-): ViewServerHealth<Topics> => {
-  return {
-    status: engineHealth.status,
-    version: engineHealth.version,
-    uptimeMs: 0,
-    engine: { topics: engineHealth.topics },
-    transport: {
-      activeClients: 1,
-      activeStreams: engineHealth.activeSubscriptions,
-      activeSubscriptions: engineHealth.activeSubscriptions,
-      messagesPerSecond: 0,
-      bytesPerSecond: 0,
-      queuedMessages: engineHealth.queuedEvents,
-      queuedBytes: 0,
-      droppedClients: 0,
-      backpressureEvents: engineHealth.backpressureEvents,
-      reconnects: 0,
-      lastError: null,
-    },
-  };
-};
-
-export const readHealth = <Topics extends DecodableTopicDefinitions>(
-  engine: ColumnLiveViewEngine<Topics>,
-  health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
-) =>
-  engine.health().pipe(
-    Effect.map(healthFromEngine),
-    Effect.tap((value) => Effect.sync(() => health.set(value))),
-  );
-
-export const refreshHealth = <Topics extends DecodableTopicDefinitions>(
-  engine: ColumnLiveViewEngine<Topics>,
-  health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
-) => readHealth(engine, health).pipe(Effect.asVoid);
-
-export const makeHealthRefreshScheduler = (refresh: Effect.Effect<void>) => {
-  let running = false;
-  let pending = false;
-
-  const drainRefreshes = Effect.fn("ViewServerReact.healthRefreshScheduler.drain")(function* () {
-    let shouldRefresh = true;
-    while (shouldRefresh) {
-      pending = false;
-      yield* refresh;
-      shouldRefresh = pending;
-    }
-  });
-
-  const requestRefresh = Effect.fn("ViewServerReact.healthRefreshScheduler.request")(function* () {
-    if (running) {
-      pending = true;
-      return;
-    }
-    running = true;
-    yield* drainRefreshes().pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          running = false;
-        }),
-      ),
-      Effect.forkDetach({ startImmediately: true }),
-    );
-  });
-
-  return requestRefresh();
-};
-
-const makeRuntime = Effect.fn("ViewServerReact.runtime.make")(<
+const makeRuntime = Effect.fn("ViewServerInMemory.runtime.make")(<
   const Topics extends DecodableTopicDefinitions,
 >(
   engine: ColumnLiveViewEngine<Topics>,
@@ -177,13 +110,15 @@ const makeRuntime = Effect.fn("ViewServerReact.runtime.make")(<
   });
 });
 
-const makeReactClient = Effect.fn("ViewServerReact.client.make")(<
+const makeLiveClient = Effect.fn("ViewServerInMemory.liveClient.make")(<
   const Topics extends DecodableTopicDefinitions,
 >(
   engine: ColumnLiveViewEngine<Topics>,
   health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
-): Effect.Effect<ViewServerReactClient<Topics>> => {
-  return Effect.succeed<ViewServerReactClient<Topics>>({
+): Effect.Effect<ViewServerLiveClient<Topics>> => {
+  const close = engine.close().pipe(Effect.andThen(refreshHealth(engine, health)));
+  const readonlyHealth = health.map((value) => value);
+  return Effect.succeed<ViewServerLiveClient<Topics>>({
     subscribe: (topic, query) =>
       engine.subscribe(topic, query).pipe(
         Effect.map((subscription) => ({
@@ -193,17 +128,17 @@ const makeReactClient = Effect.fn("ViewServerReact.client.make")(<
         Effect.tap(() => refreshHealth(engine, health)),
         Effect.mapError(engineErrorToRuntimeError),
       ),
-    health,
-    close: engine.close(),
+    health: readonlyHealth,
+    close,
   });
 });
 
-export const makeProviderState = Effect.fn("ViewServerReact.makeProviderState")(function* <
+export const makeInMemoryViewServer = Effect.fn("ViewServerInMemory.make")(function* <
   const Topics extends DecodableTopicDefinitions,
 >(
   config: ViewServerConfig<Topics>,
-  input: ProviderInput,
-): Effect.fn.Return<InMemoryViewServerState<Topics>> {
+  input: ViewServerInMemoryOptions,
+): Effect.fn.Return<ViewServerInMemoryInstance<Topics>> {
   const engineConfig =
     input.subscriptionQueueCapacity === undefined
       ? { topics: config.topics }
@@ -214,10 +149,16 @@ export const makeProviderState = Effect.fn("ViewServerReact.makeProviderState")(
   const engine = yield* createColumnLiveViewEngine<Topics>(engineConfig);
   const engineHealth = yield* engine.health();
   const health = AtomRef.make(healthFromEngine(engineHealth));
-  const runtime = yield* makeRuntime(engine, health);
-  const reactClient = yield* makeReactClient(engine, health);
+  const client = yield* makeRuntime(engine, health);
+  const liveClient = yield* makeLiveClient(engine, health);
   return {
-    reactClient,
-    runtime,
+    client,
+    liveClient,
+    close: liveClient.close,
   };
 });
+
+export const createInMemoryViewServer = <const Topics extends DecodableTopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  options: ViewServerInMemoryOptions = {},
+): ViewServerInMemoryInstance<Topics> => Effect.runSync(makeInMemoryViewServer(config, options));

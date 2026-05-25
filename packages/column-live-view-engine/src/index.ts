@@ -169,12 +169,17 @@ class InMemoryColumnLiveViewEngine<
   >(this: InMemoryColumnLiveViewEngine<Topics>, topic: Topic, query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>) {
     yield* this.ensureOpen();
     const store = yield* this.getStore(topic);
-    const queryId = `query-${this.nextQueryId}`;
-    this.nextQueryId += 1;
-    const subscription = yield* subscribeExecutableQuery<
-      object,
-      LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>
-    >(topic, store, query, { queryId, queueCapacity: this.subscriptionQueueCapacity });
+    const subscription = yield* store.mutationSemaphore.withPermits(1)(
+      Effect.gen({ self: this }, function* () {
+        yield* this.ensureOpen();
+        const queryId = `query-${this.nextQueryId}`;
+        this.nextQueryId += 1;
+        return yield* subscribeExecutableQuery<
+          object,
+          LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>
+        >(topic, store, query, { queryId, queueCapacity: this.subscriptionQueueCapacity });
+      }),
+    );
 
     return {
       events: subscription.events,

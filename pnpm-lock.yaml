@@ -51,12 +51,18 @@ importers:
       '@effect/language-service':
         specifier: 'catalog:'
         version: 0.86.2
+      '@view-server/client':
+        specifier: workspace:*
+        version: link:packages/client
       '@view-server/column-live-view-engine':
         specifier: workspace:*
         version: link:packages/column-live-view-engine
       '@view-server/config':
         specifier: workspace:*
         version: link:packages/config
+      '@view-server/in-memory':
+        specifier: workspace:*
+        version: link:packages/in-memory
       '@view-server/react':
         specifier: workspace:*
         version: link:packages/react
@@ -66,6 +72,31 @@ importers:
       vite-plus:
         specifier: 'catalog:'
         version: 0.1.22(@vitest/coverage-istanbul@4.1.6)(@vitest/coverage-v8@4.1.6)(typescript@6.0.3)(vite@8.0.14(yaml@2.9.0))(yaml@2.9.0)
+
+  packages/client:
+    dependencies:
+      '@view-server/config':
+        specifier: workspace:*
+        version: link:../config
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70(@voidzero-dev/vite-plus-test@0.1.22)(effect@4.0.0-beta.70)
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 4.1.6(@vitest/browser@4.1.6)(@voidzero-dev/vite-plus-test@0.1.22)
+      '@vitest/runner':
+        specifier: 'catalog:'
+        version: 4.1.6
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@latest
+        version: '@voidzero-dev/vite-plus-test@0.1.22(@vitest/coverage-istanbul@4.1.6)(@vitest/coverage-v8@4.1.6)(typescript@6.0.3)(vite@8.0.14(yaml@2.9.0))(yaml@2.9.0)'
 
   packages/column-live-view-engine:
     dependencies:
@@ -117,14 +148,45 @@ importers:
         specifier: npm:@voidzero-dev/vite-plus-test@latest
         version: '@voidzero-dev/vite-plus-test@0.1.22(@vitest/coverage-istanbul@4.1.6)(@vitest/coverage-v8@4.1.6)(typescript@6.0.3)(vite@8.0.14(yaml@2.9.0))(yaml@2.9.0)'
 
+  packages/in-memory:
+    dependencies:
+      '@view-server/client':
+        specifier: workspace:*
+        version: link:../client
+      '@view-server/column-live-view-engine':
+        specifier: workspace:*
+        version: link:../column-live-view-engine
+      '@view-server/config':
+        specifier: workspace:*
+        version: link:../config
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70(@voidzero-dev/vite-plus-test@0.1.22)(effect@4.0.0-beta.70)
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 4.1.6(@vitest/browser@4.1.6)(@voidzero-dev/vite-plus-test@0.1.22)
+      '@vitest/runner':
+        specifier: 'catalog:'
+        version: 4.1.6
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@latest
+        version: '@voidzero-dev/vite-plus-test@0.1.22(@vitest/coverage-istanbul@4.1.6)(@vitest/coverage-v8@4.1.6)(typescript@6.0.3)(vite@8.0.14(yaml@2.9.0))(yaml@2.9.0)'
+
   packages/react:
     dependencies:
       '@effect/atom-react':
         specifier: 'catalog:'
         version: 4.0.0-beta.70(effect@4.0.0-beta.70)(react@19.2.6)(scheduler@0.27.0)
-      '@view-server/column-live-view-engine':
+      '@view-server/client':
         specifier: workspace:*
-        version: link:../column-live-view-engine
+        version: link:../client
       '@view-server/config':
         specifier: workspace:*
         version: link:../config
@@ -144,6 +206,9 @@ importers:
       '@types/react-dom':
         specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.15)
+      '@view-server/in-memory':
+        specifier: workspace:*
+        version: link:../in-memory
       '@vitest/browser':
         specifier: 4.1.6
         version: 4.1.6(@voidzero-dev/vite-plus-test@0.1.22)(vite@8.0.14(yaml@2.9.0))
