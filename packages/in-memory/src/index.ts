@@ -8,14 +8,22 @@ import {
   type ColumnLiveViewEngineError,
   type DecodableTopicDefinitions,
 } from "@view-server/column-live-view-engine";
-import type { ViewServerLiveClient } from "@view-server/client";
+import type { ViewServerLiveClient, ViewServerLiveEvent } from "@view-server/client";
 import type {
   ViewServerConfig,
   ViewServerHealth,
+  ViewServerHealthSummaryRow,
+  ViewServerHealthTopicRow,
   ViewServerInMemoryRuntime,
   ViewServerRuntimeError,
 } from "@view-server/config";
-import { Effect } from "effect";
+import {
+  VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+  VIEW_SERVER_HEALTH_TOPIC,
+  viewServerHealthSummaryRowFromHealth,
+  viewServerHealthTopicRowsFromHealth,
+} from "@view-server/config";
+import { Cause, Clock, Effect, Queue, Stream } from "effect";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
 import { healthFromEngine, makeHealthRefreshScheduler, readHealth, refreshHealth } from "./health";
 
@@ -118,6 +126,59 @@ const makeLiveClient = Effect.fn("ViewServerInMemory.liveClient.make")(<
 ): Effect.Effect<ViewServerLiveClient<Topics>> => {
   const close = engine.close().pipe(Effect.andThen(refreshHealth(engine, health)));
   const readonlyHealth = health.map((value) => value);
+  const makeHealthSubscription = Effect.fn("ViewServerInMemory.health.subscribe")(function* <
+    Row extends { readonly id: string },
+  >(
+    topic: typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC | typeof VIEW_SERVER_HEALTH_TOPIC,
+    queryId: string,
+    rowsFromHealth: (
+      nextHealth: ViewServerHealth<Topics>,
+      updatedAtNanos: bigint,
+    ) => ReadonlyArray<Row>,
+  ) {
+    const services = yield* Effect.context();
+    const queue = yield* Queue.bounded<ViewServerLiveEvent<Row>, Cause.Done>(64);
+    const latestHealth = yield* readHealth(engine, health).pipe(
+      Effect.mapError(engineErrorToRuntimeError),
+    );
+    let closed = false;
+    const offerSnapshot = Effect.fn("ViewServerInMemory.health.snapshot.offer")(function* (
+      nextHealth: ViewServerHealth<Topics>,
+    ) {
+      const updatedAtNanos = yield* Clock.currentTimeNanos;
+      const rows = rowsFromHealth(nextHealth, updatedAtNanos);
+      yield* Queue.offer(queue, {
+        type: "snapshot",
+        topic,
+        queryId,
+        version: nextHealth.version,
+        keys: rows.map((row) => row.id),
+        rows,
+        totalRows: rows.length,
+      });
+    });
+    yield* offerSnapshot(latestHealth);
+    const unsubscribe = health.subscribe((nextHealth) => {
+      Effect.runForkWith(services)(offerSnapshot(nextHealth));
+    });
+    const closeSubscription = Effect.gen(function* () {
+      const shouldClose = yield* Effect.sync(() => {
+        if (closed) {
+          return false;
+        }
+        closed = true;
+        unsubscribe();
+        return true;
+      });
+      if (shouldClose) {
+        yield* Queue.end(queue);
+      }
+    });
+    return {
+      events: Stream.fromQueue(queue).pipe(Stream.ensuring(closeSubscription)),
+      close: () => closeSubscription,
+    };
+  });
   return Effect.succeed<ViewServerLiveClient<Topics>>({
     subscribe: (topic, query) =>
       engine.subscribe(topic, query).pipe(
@@ -127,6 +188,20 @@ const makeLiveClient = Effect.fn("ViewServerInMemory.liveClient.make")(<
         })),
         Effect.tap(() => refreshHealth(engine, health)),
         Effect.mapError(engineErrorToRuntimeError),
+      ),
+    subscribeHealthSummary: () =>
+      makeHealthSubscription<ViewServerHealthSummaryRow<Topics>>(
+        VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+        "health-summary",
+        (nextHealth, updatedAtNanos) => [
+          viewServerHealthSummaryRowFromHealth(nextHealth, updatedAtNanos),
+        ],
+      ),
+    subscribeHealth: () =>
+      makeHealthSubscription<ViewServerHealthTopicRow<Extract<keyof Topics, string>>>(
+        VIEW_SERVER_HEALTH_TOPIC,
+        "health",
+        viewServerHealthTopicRowsFromHealth,
       ),
     health: readonlyHealth,
     close,

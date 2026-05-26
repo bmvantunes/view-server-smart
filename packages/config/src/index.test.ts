@@ -7,6 +7,11 @@ import { Config, Schema } from "effect";
 import {
   defineProto,
   defineViewServerConfig,
+  VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+  VIEW_SERVER_HEALTH_TOPIC,
+  viewServerHealthSummaryFromHealth,
+  viewServerHealthSummaryRowFromHealth,
+  viewServerHealthTopicRowsFromHealth,
   type KafkaMappingInput,
   type KafkaMessageMetadata,
   type KafkaTopicDefinition,
@@ -25,6 +30,10 @@ import {
   type ValidateLiveQuery,
   type ViewServerBackpressureError,
   type ViewServerHealth,
+  type ViewServerHealthDetails,
+  type ViewServerHealthSummary,
+  type ViewServerHealthSummaryRow,
+  type ViewServerHealthTopicRow,
   type ViewServerInMemoryRuntime,
   type ViewServerRuntimeError,
   type ViewServerTransportError,
@@ -123,6 +132,29 @@ const viewServer = defineViewServerConfig({
       key: "id",
     },
   },
+});
+
+const runtimeTopicHealth = (
+  status: TopicRuntimeHealth["status"],
+  rowCount: number,
+): TopicRuntimeHealth => ({
+  status,
+  rowCount,
+  liveRowCount: rowCount,
+  deletedRowCount: 0,
+  version: rowCount,
+  lastMutationAt: null,
+  mutationsPerSecond: rowCount,
+  rowsPerSecond: rowCount,
+  pendingMutationBatches: 0,
+  activeViews: 0,
+  activeSubscriptions: 0,
+  queuedEvents: 0,
+  maxQueueDepth: 0,
+  backpressureEvents: 0,
+  memoryBytes: 0,
+  tombstoneCount: 0,
+  compactionPending: false,
 });
 
 type LiveQueryCall<Topics extends object> = {
@@ -299,6 +331,165 @@ describe("public type surface", () => {
     expectTypeOf<
       Effect.Error<ReturnType<LiveTransportAdapter["subscribe"]>>
     >().toEqualTypeOf<ViewServerTransportError>();
+  });
+
+  it("derives pushed health summary and detailed rows from runtime health", () => {
+    const health: ViewServerHealth<typeof viewServer.topics> = {
+      status: "degraded",
+      version: 7,
+      uptimeMs: 100,
+      engine: {
+        topics: {
+          orders: runtimeTopicHealth("ready", 10),
+          trades: runtimeTopicHealth("degraded", 20),
+          positions: runtimeTopicHealth("starting", 30),
+        },
+      },
+      kafka: {
+        regions: {
+          usa: {
+            status: "connected",
+            brokers: "localhost:9092",
+            lastConnectedAt: null,
+            lastError: null,
+          },
+        },
+        topics: {
+          sourceOrders: {
+            status: "ready",
+            sourceTopic: "orders-source",
+            viewServerTopic: "orders",
+            regions: {
+              usa: {
+                connected: true,
+                assignedPartitions: 1,
+                messagesPerSecond: 10,
+                bytesPerSecond: 100,
+                decodedMessagesPerSecond: 10,
+                decodeFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: 5,
+                consumerLagMs: null,
+                lagSampledAt: null,
+                highWatermarkOffset: "10",
+                committedOffset: "5",
+                lastError: null,
+              },
+              london: {
+                connected: true,
+                assignedPartitions: 1,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: null,
+                consumerLagMs: null,
+                lagSampledAt: null,
+                highWatermarkOffset: null,
+                committedOffset: null,
+                lastError: null,
+              },
+            },
+          },
+          sourceTrades: {
+            status: "stalled",
+            sourceTopic: "trades-source",
+            viewServerTopic: "trades",
+            regions: {
+              usa: {
+                connected: false,
+                assignedPartitions: 1,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: 11,
+                consumerLagMs: null,
+                lagSampledAt: null,
+                highWatermarkOffset: "20",
+                committedOffset: "9",
+                lastError: "stalled",
+              },
+            },
+          },
+        },
+      },
+      transport: {
+        activeClients: 0,
+        activeStreams: 0,
+        activeSubscriptions: 0,
+        messagesPerSecond: 0,
+        bytesPerSecond: 0,
+        queuedMessages: 0,
+        queuedBytes: 0,
+        droppedClients: 0,
+        backpressureEvents: 0,
+        reconnects: 0,
+        lastError: null,
+      },
+    };
+
+    const summary = viewServerHealthSummaryFromHealth(health, 123n);
+    const summaryRow = viewServerHealthSummaryRowFromHealth(health, 123n);
+    const rows = viewServerHealthTopicRowsFromHealth(health, 123n);
+    const healthWithoutKafka: ViewServerHealth<typeof viewServer.topics> = {
+      status: health.status,
+      version: health.version,
+      uptimeMs: health.uptimeMs,
+      engine: health.engine,
+      transport: health.transport,
+    };
+    const stoppingRows = viewServerHealthTopicRowsFromHealth(
+      {
+        ...health,
+        status: "stopping",
+      },
+      456n,
+    );
+
+    expect(summary).toStrictEqual({
+      status: "degraded",
+      runtimeStatus: "degraded",
+      connectionStatus: "connected",
+      unhealthyTopics: ["trades", "positions"],
+      updatedAtNanos: 123n,
+      maxKafkaLag: 11n,
+    });
+    expect(summaryRow).toStrictEqual({
+      id: "summary",
+      status: "degraded",
+      runtimeStatus: "degraded",
+      connectionStatus: "connected",
+      unhealthyTopics: ["trades", "positions"],
+      updatedAtNanos: 123n,
+      maxKafkaLag: 11n,
+    });
+    expect(rows.map((row) => [row.id, row.kafkaLag, row.status])).toStrictEqual([
+      ["orders", 5n, "ready"],
+      ["trades", 11n, "degraded"],
+      ["positions", 0n, "starting"],
+    ]);
+    expect(viewServerHealthSummaryFromHealth(healthWithoutKafka, 123n).maxKafkaLag).toBe(0n);
+    expect(stoppingRows.map((row) => row.status)).toStrictEqual([
+      "stopping",
+      "stopping",
+      "stopping",
+    ]);
+    expect(VIEW_SERVER_HEALTH_SUMMARY_TOPIC).toBe("__view_server_health_summary");
+    expect(VIEW_SERVER_HEALTH_TOPIC).toBe("__view_server_health");
+    expectTypeOf(summary).toEqualTypeOf<ViewServerHealthSummary<typeof viewServer.topics>>();
+    expectTypeOf(summaryRow).toEqualTypeOf<ViewServerHealthSummaryRow<typeof viewServer.topics>>();
+    expectTypeOf(rows[0]).toEqualTypeOf<
+      ViewServerHealthTopicRow<"orders" | "trades" | "positions"> | undefined
+    >();
+    expectTypeOf<ViewServerHealthDetails<"orders">["status"]>().toEqualTypeOf<
+      "ready" | "degraded" | "starting" | "stopping" | "connecting" | "connected" | "disconnected"
+    >();
   });
 
   it("derives query result rows from select and grouped aggregates", () => {

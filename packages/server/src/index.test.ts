@@ -163,7 +163,24 @@ describe("@view-server/server", () => {
         operations: [{ type: "insert", key: "a", row: { id: "a", price: 10 }, index: 0 }],
         totalRows: 2,
       });
-      expect(client.health.value.engine.topics.orders.rowCount).toBe(2);
+
+      const healthSummarySubscription = yield* client.subscribeHealthSummary();
+      const healthSummaryEvents = yield* healthSummarySubscription.events.pipe(
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      const healthSummarySnapshots = Array.from(healthSummaryEvents).filter(
+        (event) => event.type === "snapshot",
+      );
+      expect(healthSummarySnapshots[0]?.rows[0]?.runtimeStatus).toBe("ready");
+      expect(healthSummarySnapshots[0]?.rows[0]?.connectionStatus).toBe("connected");
+      yield* healthSummarySubscription.close();
+
+      const healthSubscription = yield* client.subscribeHealth();
+      const healthEvents = yield* healthSubscription.events.pipe(Stream.take(1), Stream.runCollect);
+      const healthSnapshots = Array.from(healthEvents).filter((event) => event.type === "snapshot");
+      expect(healthSnapshots[0]?.rows[0]?.rowCount).toBe(2);
+      yield* healthSubscription.close();
 
       yield* inMemory.client.reset();
       expect((yield* inMemory.client.health()).engine.topics.orders.rowCount).toBe(0);

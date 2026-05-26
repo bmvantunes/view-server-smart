@@ -5,6 +5,7 @@ import {
   liveQueryResultFromAsyncResult,
   stableQueryKey,
   type ViewServerLiveClient,
+  type ViewServerLiveSubscription,
 } from "@view-server/client";
 import { makeViewServerClient, type ViewServerClientOptions } from "@view-server/client/remote";
 import type {
@@ -15,9 +16,13 @@ import type {
   TopicRow,
   ValidateLiveQuery,
   ViewServerConfig,
-  ViewServerHealth,
+  ViewServerHealthConnectionStatus,
+  ViewServerHealthDetails,
+  ViewServerHealthSummary,
+  ViewServerHealthSummaryRow,
+  ViewServerHealthTopicRow,
 } from "@view-server/config";
-import { Duration, Effect, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { createContext, useContext, useMemo, type ReactNode } from "react";
@@ -29,7 +34,8 @@ export type ViewServerReactBindings<Topics extends TopicDefinitions> = {
     props: ViewServerClientProviderProps<Topics>,
   ) => ReactNode;
   readonly useLiveQuery: UseLiveQueryHook<Topics>;
-  readonly useViewServerHealth: () => ViewServerHealth<Topics>;
+  readonly useViewServerHealth: () => ViewServerHealthDetails<Extract<keyof Topics, string>>;
+  readonly useViewServerHealthSummary: () => ViewServerHealthSummary<Topics>;
   readonly ViewServerProvider: (props: ViewServerProviderProps) => ReactNode;
 };
 
@@ -99,33 +105,14 @@ export const createViewServerReact = <const Topics extends TopicDefinitions>(
     return null;
   }
 
-  const providerKeyFromHealthPollInterval = (
-    interval: ViewServerProviderProps["healthPollInterval"],
-  ): string => {
-    if (interval === undefined) {
-      return "default";
-    }
-    if (interval === false) {
-      return "false";
-    }
-    return Duration.fromInputUnsafe(interval).toString();
-  };
-
   function ViewServerProvider(props: ViewServerProviderProps): ReactNode {
     const options = {
       url: props.url,
       ...(props.subscriptionBufferSize === undefined
         ? {}
         : { subscriptionBufferSize: props.subscriptionBufferSize }),
-      ...(props.healthPollInterval === undefined
-        ? {}
-        : { healthPollInterval: props.healthPollInterval }),
     } satisfies ViewServerClientOptions;
-    const providerKey = [
-      props.url,
-      String(props.subscriptionBufferSize ?? ""),
-      providerKeyFromHealthPollInterval(props.healthPollInterval),
-    ].join(":");
+    const providerKey = [props.url, String(props.subscriptionBufferSize ?? "")].join(":");
     return (
       <AtomReact.RegistryProvider>
         <RemoteClientAtom.Provider key={providerKey} value={options}>
@@ -135,17 +122,17 @@ export const createViewServerReact = <const Topics extends TopicDefinitions>(
     );
   }
 
-  const useLiveQuery: UseLiveQueryHook<Topics> = (topic, query) => {
-    const client = useClient();
-    type Row = LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>;
-    const queryKey = stableQueryKey(query);
+  const useSubscription = <Row,>(
+    subscriptionKey: string,
+    subscribe: () => Effect.Effect<ViewServerLiveSubscription<Row>, unknown>,
+  ): LiveQueryResult<Row> => {
     const liveAtom = useMemo(
       () =>
         Atom.make(
           Stream.scoped(
             Stream.unwrap(
               Effect.gen(function* () {
-                const subscription = yield* client.subscribe(topic, query);
+                const subscription = yield* subscribe();
                 return subscription.events.pipe(
                   Stream.scan(initialClientState<Row>(), applyEvent),
                   Stream.ensuring(subscription.close().pipe(Effect.ignore)),
@@ -154,15 +141,99 @@ export const createViewServerReact = <const Topics extends TopicDefinitions>(
             ),
           ),
         ),
-      [client, topic, queryKey],
+      [subscriptionKey],
     );
     const result = AtomReact.useAtomValue(liveAtom);
     return liveQueryResultFromAsyncResult<Row>(result);
   };
 
-  const useViewServerHealth = (): ViewServerHealth<Topics> => {
+  const useLiveQuery: UseLiveQueryHook<Topics> = (topic, query) => {
     const client = useClient();
-    return AtomReact.useAtomRef(client.health);
+    type Row = LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>;
+    const queryKey = stableQueryKey(query);
+    return useSubscription<Row>(`${client.health.key}:query:${topic}:${queryKey}`, () =>
+      client.subscribe(topic, query),
+    );
+  };
+
+  const connectionStatusFromLiveQueryStatus = (
+    status: LiveQueryResult<unknown>["status"],
+  ): ViewServerHealthConnectionStatus => {
+    if (status === "loading") {
+      return "connecting";
+    }
+    if (status === "ready" || status === "stale") {
+      return "connected";
+    }
+    return "disconnected";
+  };
+
+  const runtimeStatusFromHealthRows = (
+    rows: ReadonlyArray<ViewServerHealthTopicRow<Extract<keyof Topics, string>>>,
+    subscriptionStatus: LiveQueryResult<unknown>["status"],
+  ) => {
+    if (rows.some((row) => row.status === "stopping")) {
+      return "stopping";
+    }
+    if (rows.some((row) => row.status === "degraded")) {
+      return "degraded";
+    }
+    if (rows.some((row) => row.status === "starting")) {
+      return "starting";
+    }
+    return subscriptionStatus === "loading" ? "starting" : "ready";
+  };
+
+  const emptySummary = (
+    connectionStatus: ViewServerHealthConnectionStatus,
+  ): ViewServerHealthSummary<Topics> => ({
+    status: connectionStatus === "connected" ? "starting" : connectionStatus,
+    runtimeStatus: "starting",
+    connectionStatus,
+    unhealthyTopics: [],
+    updatedAtNanos: 0n,
+    maxKafkaLag: 0n,
+  });
+
+  const summaryFromRow = (
+    row: ViewServerHealthSummaryRow<Topics>,
+    connectionStatus: ViewServerHealthConnectionStatus,
+  ): ViewServerHealthSummary<Topics> => ({
+    status: connectionStatus === "connected" ? row.runtimeStatus : connectionStatus,
+    runtimeStatus: row.runtimeStatus,
+    connectionStatus,
+    unhealthyTopics: row.unhealthyTopics,
+    updatedAtNanos: row.updatedAtNanos,
+    maxKafkaLag: row.maxKafkaLag,
+  });
+
+  const useViewServerHealthSummary = (): ViewServerHealthSummary<Topics> => {
+    const client = useClient();
+    const result = useSubscription<ViewServerHealthSummaryRow<Topics>>(
+      `${client.health.key}:health-summary`,
+      client.subscribeHealthSummary,
+    );
+    const connectionStatus = connectionStatusFromLiveQueryStatus(result.status);
+    const row = result.rows[0];
+    return row === undefined
+      ? emptySummary(connectionStatus)
+      : summaryFromRow(row, connectionStatus);
+  };
+
+  const useViewServerHealth = (): ViewServerHealthDetails<Extract<keyof Topics, string>> => {
+    const client = useClient();
+    const result = useSubscription<ViewServerHealthTopicRow<Extract<keyof Topics, string>>>(
+      `${client.health.key}:health`,
+      client.subscribeHealth,
+    );
+    const connectionStatus = connectionStatusFromLiveQueryStatus(result.status);
+    const runtimeStatus = runtimeStatusFromHealthRows(result.rows, result.status);
+    return {
+      ...result,
+      runtimeStatus,
+      status: connectionStatus === "connected" ? runtimeStatus : connectionStatus,
+      connectionStatus,
+    };
   };
 
   return {
@@ -170,6 +241,7 @@ export const createViewServerReact = <const Topics extends TopicDefinitions>(
     [ViewServerReactClientProvider]: ViewServerClientProvider,
     useLiveQuery,
     useViewServerHealth,
+    useViewServerHealthSummary,
     ViewServerProvider,
   };
 };

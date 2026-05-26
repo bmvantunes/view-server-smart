@@ -158,6 +158,89 @@ describe("@view-server/in-memory", () => {
     }),
   );
 
+  it.effect("pushes summary and detailed health snapshots", () =>
+    Effect.gen(function* () {
+      const inMemory = yield* makeInMemoryViewServer(viewServer, {});
+      const summary = yield* inMemory.liveClient.subscribeHealthSummary();
+      const detail = yield* inMemory.liveClient.subscribeHealth();
+
+      const summaryFiber = yield* summary.events.pipe(
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const detailFiber = yield* detail.events.pipe(
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* inMemory.client.publish("orders", order("a", 10));
+
+      const summaryEvents = yield* Fiber.join(summaryFiber);
+      const detailEvents = yield* Fiber.join(detailFiber);
+      const summarySnapshots = Array.from(summaryEvents).filter(
+        (event) => event.type === "snapshot",
+      );
+      const detailSnapshots = Array.from(detailEvents).filter((event) => event.type === "snapshot");
+
+      expect(summarySnapshots).toHaveLength(2);
+      expect(detailSnapshots).toHaveLength(2);
+      expect(summarySnapshots[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "__view_server_health_summary",
+        queryId: "health-summary",
+        version: 0,
+        keys: ["summary"],
+        rows: [
+          {
+            id: "summary",
+            status: "ready",
+            runtimeStatus: "ready",
+            connectionStatus: "connected",
+            unhealthyTopics: [],
+            updatedAtNanos: summarySnapshots[0]?.rows[0]?.updatedAtNanos,
+            maxKafkaLag: 0n,
+          },
+        ],
+        totalRows: 1,
+      });
+      expect(summarySnapshots[1]?.rows[0]?.maxKafkaLag).toBe(0n);
+      expect(summarySnapshots[1]?.rows[0]?.updatedAtNanos).toBeGreaterThanOrEqual(
+        summarySnapshots[0]?.rows[0]?.updatedAtNanos ?? 0n,
+      );
+
+      expect(detailSnapshots[0]?.rows[0]).toStrictEqual({
+        id: "orders",
+        status: "ready",
+        rowCount: 0,
+        liveRowCount: 0,
+        deletedRowCount: 0,
+        version: 0,
+        mutationsPerSecond: 0,
+        rowsPerSecond: 0,
+        pendingMutationBatches: 0,
+        activeViews: 0,
+        activeSubscriptions: 0,
+        queuedEvents: 0,
+        maxQueueDepth: 0,
+        backpressureEvents: 0,
+        memoryBytes: 0,
+        tombstoneCount: 0,
+        compactionPending: false,
+        kafkaLag: 0n,
+        updatedAtNanos: detailSnapshots[0]?.rows[0]?.updatedAtNanos,
+      });
+      expect(detailSnapshots[1]?.rows[0]?.rowCount).toBe(1);
+
+      yield* summary.close();
+      yield* summary.close();
+      yield* detail.close();
+      yield* detail.close();
+      yield* inMemory.close;
+    }),
+  );
+
   it.effect("does not let stale detached health refreshes overwrite stopping health", () =>
     Effect.gen(function* () {
       const firstReadStarted = yield* Deferred.make<void>();

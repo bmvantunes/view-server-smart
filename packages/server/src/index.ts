@@ -4,11 +4,14 @@ import type {
   ViewServerConfig,
   ViewServerRuntimeClient,
 } from "@view-server/config";
+import { VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC } from "@view-server/config";
 import type { ViewServerLiveClient } from "@view-server/client";
 import {
   ViewServerRpcs,
   viewServerDecodeRawQuery,
   viewServerDecodeTopic,
+  viewServerEncodeHealthSummaryEvent,
+  viewServerEncodeHealthTopicEvent,
   viewServerEncodeLiveEvent,
 } from "@view-server/protocol";
 import { Context, Effect, Layer, ManagedRuntime, Stream } from "effect";
@@ -46,6 +49,20 @@ const makeHandlers = <const Topics extends TopicDefinitions>(
     "ViewServer.Subscribe": (payload) =>
       Stream.unwrap(
         Effect.gen(function* () {
+          if (payload.topic === VIEW_SERVER_HEALTH_SUMMARY_TOPIC) {
+            const subscription = yield* input.liveClient.subscribeHealthSummary();
+            return subscription.events.pipe(
+              Stream.mapEffect(viewServerEncodeHealthSummaryEvent),
+              Stream.ensuring(subscription.close().pipe(Effect.ignore)),
+            );
+          }
+          if (payload.topic === VIEW_SERVER_HEALTH_TOPIC) {
+            const subscription = yield* input.liveClient.subscribeHealth();
+            return subscription.events.pipe(
+              Stream.mapEffect(viewServerEncodeHealthTopicEvent),
+              Stream.ensuring(subscription.close().pipe(Effect.ignore)),
+            );
+          }
           const topic = yield* viewServerDecodeTopic(config, payload.topic);
           const query = yield* viewServerDecodeRawQuery(config, topic, payload.query);
           const subscription = yield* input.liveClient.subscribe(topic, query);

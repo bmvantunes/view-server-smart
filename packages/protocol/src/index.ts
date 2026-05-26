@@ -12,10 +12,13 @@ import type {
   TransportHealth,
   ViewServerBackpressureError,
   ViewServerHealth,
+  ViewServerHealthSummaryRow,
+  ViewServerHealthTopicRow,
   ViewServerRuntimeError,
   ViewServerTransportError,
   Where,
 } from "@view-server/config";
+import { VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC } from "@view-server/config";
 import { Effect, Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
@@ -23,6 +26,7 @@ type ViewServerProtocolEvent<Row> = SnapshotEvent<Row> | DeltaEvent<Row> | Statu
 
 const StringOrNull = Schema.NullOr(Schema.String);
 const NumberOrNull = Schema.NullOr(Schema.Number);
+const BigIntString = Schema.BigIntFromString;
 
 export const ViewServerBackpressureErrorSchema: Schema.Codec<ViewServerBackpressureError> =
   Schema.TaggedStruct("ViewServerBackpressureError", {
@@ -255,6 +259,56 @@ export const ViewServerWireEventSchema = Schema.Union([
 ]);
 
 export type ViewServerWireEvent = typeof ViewServerWireEventSchema.Type;
+
+export const ViewServerHealthSummaryRowSchema: Schema.Codec<
+  ViewServerHealthSummaryRow,
+  unknown,
+  never,
+  never
+> = Schema.Struct({
+  id: Schema.Literal("summary"),
+  status: Schema.Literals([
+    "ready",
+    "degraded",
+    "starting",
+    "stopping",
+    "connecting",
+    "connected",
+    "disconnected",
+  ]),
+  runtimeStatus: Schema.Literals(["ready", "degraded", "starting", "stopping"]),
+  connectionStatus: Schema.Literals(["connecting", "connected", "disconnected"]),
+  unhealthyTopics: Schema.Array(Schema.String),
+  updatedAtNanos: BigIntString,
+  maxKafkaLag: BigIntString,
+});
+
+export const ViewServerHealthTopicRowSchema: Schema.Codec<
+  ViewServerHealthTopicRow,
+  unknown,
+  never,
+  never
+> = Schema.Struct({
+  id: Schema.String,
+  status: Schema.Literals(["ready", "degraded", "starting", "stopping"]),
+  rowCount: Schema.Number,
+  liveRowCount: Schema.Number,
+  deletedRowCount: Schema.Number,
+  version: Schema.Number,
+  mutationsPerSecond: Schema.Number,
+  rowsPerSecond: Schema.Number,
+  pendingMutationBatches: Schema.Number,
+  activeViews: Schema.Number,
+  activeSubscriptions: Schema.Number,
+  queuedEvents: Schema.Number,
+  maxQueueDepth: Schema.Number,
+  backpressureEvents: Schema.Number,
+  memoryBytes: Schema.Number,
+  tombstoneCount: Schema.Number,
+  compactionPending: Schema.Boolean,
+  kafkaLag: BigIntString,
+  updatedAtNanos: BigIntString,
+});
 
 export const ViewServerWireRawQuerySchema = Schema.Struct({
   select: Schema.Array(Schema.String),
@@ -871,6 +925,181 @@ export const viewServerDecodeLiveEvent = Effect.fn("ViewServerProtocol.event.dec
     ...event,
     operations,
   });
+});
+
+const encodeSystemRow = Effect.fn("ViewServerProtocol.system.row.encode")(function* <Row>(
+  topic: string,
+  schema: Schema.Codec<Row, unknown, never, never>,
+  row: Row,
+) {
+  const encoded = yield* Schema.encodeUnknownEffect(Schema.toCodecJson(schema))(row).pipe(
+    Effect.mapError((error) => invalidRow(topic, `Invalid system row: ${error.message}`)),
+  );
+  return yield* Schema.decodeUnknownEffect(ViewServerWireRowSchema)(encoded).pipe(Effect.orDie);
+});
+
+const decodeSystemRow = Effect.fn("ViewServerProtocol.system.row.decode")(function* <Row>(
+  topic: string,
+  schema: Schema.Codec<Row, unknown, never, never>,
+  row: ViewServerWireRow,
+) {
+  return yield* Schema.decodeUnknownEffect(Schema.toCodecJson(schema))(row).pipe(
+    Effect.mapError((error) => invalidRow(topic, `Invalid system row: ${error.message}`)),
+  );
+});
+
+const encodeSystemLiveEvent = Effect.fn("ViewServerProtocol.system.event.encode")(function* <Row>(
+  expectedTopic: string,
+  schema: Schema.Codec<Row, unknown, never, never>,
+  event: ViewServerProtocolEvent<Row>,
+) {
+  if (event.topic !== expectedTopic) {
+    return yield* Effect.fail(
+      invalidRow(
+        expectedTopic,
+        `Received event for ${event.topic} while subscribed to ${expectedTopic}`,
+      ),
+    );
+  }
+  if (event.type === "status") {
+    return encodeStatusEvent(event);
+  }
+  if (event.type === "snapshot") {
+    const rows = yield* Effect.forEach(event.rows, (row) =>
+      encodeSystemRow(expectedTopic, schema, row),
+    );
+    return {
+      ...event,
+      rows,
+    };
+  }
+  type WireDeltaOperation = Extract<
+    ViewServerWireEvent,
+    { readonly type: "delta" }
+  >["operations"][number];
+  const operations: Array<WireDeltaOperation> = [];
+  for (const operation of event.operations) {
+    if (operation.type === "insert" || operation.type === "update") {
+      const row = yield* encodeSystemRow(expectedTopic, schema, operation.row);
+      operations.push({
+        ...operation,
+        row,
+      });
+    } else {
+      operations.push(operation);
+    }
+  }
+  return {
+    ...event,
+    operations,
+  };
+});
+
+const decodeSystemLiveEvent = Effect.fn("ViewServerProtocol.system.event.decode")(function* <Row>(
+  expectedTopic: string,
+  schema: Schema.Codec<Row, unknown, never, never>,
+  event: ViewServerWireEvent,
+) {
+  if (event.topic !== expectedTopic) {
+    return yield* Effect.fail(
+      invalidRow(
+        expectedTopic,
+        `Received event for ${event.topic} while subscribed to ${expectedTopic}`,
+      ),
+    );
+  }
+  if (event.type === "status") {
+    return event;
+  }
+  if (event.type === "snapshot") {
+    const rows = yield* Effect.forEach(event.rows, (row) =>
+      decodeSystemRow(expectedTopic, schema, row),
+    );
+    return {
+      ...event,
+      rows,
+    };
+  }
+  type DecodedDeltaOperation = Extract<
+    ViewServerProtocolEvent<Row>,
+    { readonly type: "delta" }
+  >["operations"][number];
+  const operations: Array<DecodedDeltaOperation> = [];
+  for (const operation of event.operations) {
+    if (operation.type === "insert" || operation.type === "update") {
+      const row = yield* decodeSystemRow(expectedTopic, schema, operation.row);
+      operations.push({
+        ...operation,
+        row,
+      });
+    } else {
+      operations.push(operation);
+    }
+  }
+  return {
+    ...event,
+    operations,
+  };
+});
+
+function typedHealthSummaryEvent<Topics extends TopicDefinitions>(
+  event: ViewServerProtocolEvent<ViewServerHealthSummaryRow>,
+): ViewServerProtocolEvent<ViewServerHealthSummaryRow<Topics>>;
+function typedHealthSummaryEvent(
+  event: ViewServerProtocolEvent<ViewServerHealthSummaryRow>,
+): ViewServerProtocolEvent<ViewServerHealthSummaryRow> {
+  return event;
+}
+
+function typedHealthTopicEvent<Topics extends TopicDefinitions>(
+  event: ViewServerProtocolEvent<ViewServerHealthTopicRow>,
+): ViewServerProtocolEvent<ViewServerHealthTopicRow<Extract<keyof Topics, string>>>;
+function typedHealthTopicEvent(
+  event: ViewServerProtocolEvent<ViewServerHealthTopicRow>,
+): ViewServerProtocolEvent<ViewServerHealthTopicRow> {
+  return event;
+}
+
+export const viewServerEncodeHealthSummaryEvent = Effect.fn(
+  "ViewServerProtocol.healthSummary.event.encode",
+)(function* (event: ViewServerProtocolEvent<ViewServerHealthSummaryRow>) {
+  return yield* encodeSystemLiveEvent(
+    VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+    ViewServerHealthSummaryRowSchema,
+    event,
+  );
+});
+
+export const viewServerDecodeHealthSummaryEvent = Effect.fn(
+  "ViewServerProtocol.healthSummary.event.decode",
+)(function* <const Topics extends TopicDefinitions>(event: ViewServerWireEvent) {
+  const decoded = yield* decodeSystemLiveEvent(
+    VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+    ViewServerHealthSummaryRowSchema,
+    event,
+  );
+  return typedHealthSummaryEvent<Topics>(decoded);
+});
+
+export const viewServerEncodeHealthTopicEvent = Effect.fn(
+  "ViewServerProtocol.healthTopic.event.encode",
+)(function* (event: ViewServerProtocolEvent<ViewServerHealthTopicRow>) {
+  return yield* encodeSystemLiveEvent(
+    VIEW_SERVER_HEALTH_TOPIC,
+    ViewServerHealthTopicRowSchema,
+    event,
+  );
+});
+
+export const viewServerDecodeHealthTopicEvent = Effect.fn(
+  "ViewServerProtocol.healthTopic.event.decode",
+)(function* <const Topics extends TopicDefinitions>(event: ViewServerWireEvent) {
+  const decoded = yield* decodeSystemLiveEvent(
+    VIEW_SERVER_HEALTH_TOPIC,
+    ViewServerHealthTopicRowSchema,
+    event,
+  );
+  return typedHealthTopicEvent<Topics>(decoded);
 });
 
 function typedHealth<Topics extends TopicDefinitions>(

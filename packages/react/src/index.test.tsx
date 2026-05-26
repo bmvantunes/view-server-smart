@@ -1,8 +1,14 @@
 import { describe, expect, inject, it, vi } from "@effect/vitest";
+import type { ViewServerLiveClient } from "@view-server/client";
 import { makeViewServerClient } from "@view-server/client/remote";
-import { defineViewServerConfig } from "@view-server/config";
+import {
+  defineViewServerConfig,
+  VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+  VIEW_SERVER_HEALTH_TOPIC,
+  type ViewServerHealthTopicRow,
+} from "@view-server/config";
 import { createInMemoryViewServer as createCoreInMemoryViewServer } from "@view-server/in-memory";
-import { Duration, Effect, Schema } from "effect";
+import { Effect, Schema, Stream } from "effect";
 import { Component, type ReactNode } from "react";
 import { render } from "vitest-browser-react";
 import { createViewServerReact } from "./index";
@@ -46,7 +52,7 @@ const viewServer = defineViewServerConfig({
 });
 
 const react = createViewServerReact(viewServer);
-const { useLiveQuery, useViewServerHealth } = react;
+const { useLiveQuery, useViewServerHealth, useViewServerHealthSummary } = react;
 const ViewServerClientProvider = react[ViewServerReactClientProvider];
 
 const createInMemoryViewServer = (options?: ViewServerInMemoryOptions) =>
@@ -62,6 +68,58 @@ const order = (id: string, price: number): OrderRow => ({
   region: "usa",
   updatedAt: price,
 });
+
+const healthTopicRow = (
+  status: "ready" | "degraded" | "starting" | "stopping",
+): ViewServerHealthTopicRow<"orders"> => ({
+  id: "orders",
+  status,
+  rowCount: 0,
+  liveRowCount: 0,
+  deletedRowCount: 0,
+  version: 0,
+  mutationsPerSecond: 0,
+  rowsPerSecond: 0,
+  pendingMutationBatches: 0,
+  activeViews: 0,
+  activeSubscriptions: 0,
+  queuedEvents: 0,
+  maxQueueDepth: 0,
+  backpressureEvents: 0,
+  memoryBytes: 0,
+  tombstoneCount: 0,
+  compactionPending: false,
+  kafkaLag: 0n,
+  updatedAtNanos: 1n,
+});
+
+const fakeHealthClient = (
+  status: "ready" | "degraded" | "starting" | "stopping",
+): {
+  readonly close: Effect.Effect<void>;
+  readonly client: ViewServerLiveClient<typeof viewServer.topics>;
+} => {
+  const inMemory = createCoreInMemoryViewServer(viewServer);
+  return {
+    close: inMemory.close,
+    client: {
+      ...inMemory.liveClient,
+      subscribeHealth: () =>
+        Effect.succeed({
+          events: Stream.make({
+            type: "snapshot",
+            topic: VIEW_SERVER_HEALTH_TOPIC,
+            queryId: "health",
+            version: 1,
+            keys: ["orders"],
+            rows: [healthTopicRow(status)],
+            totalRows: 1,
+          }),
+          close: () => Effect.void,
+        }),
+    },
+  };
+};
 
 class ProviderErrorBoundary extends Component<
   { readonly children: ReactNode },
@@ -134,7 +192,7 @@ describe("createViewServerReact", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     function HealthView() {
-      const health = useViewServerHealth();
+      const health = useViewServerHealthSummary();
       return <output role="status">{health.status}</output>;
     }
 
@@ -150,6 +208,248 @@ describe("createViewServerReact", () => {
       .toBeVisible();
     await missingProvider.unmount();
     consoleError.mockRestore();
+  });
+
+  it("merges disconnected summary subscription status into public health status", async () => {
+    const inMemory = createCoreInMemoryViewServer(viewServer);
+    const disconnectedClient = {
+      ...inMemory.liveClient,
+      subscribeHealthSummary: () =>
+        Effect.succeed({
+          events: Stream.make({
+            type: "status",
+            topic: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+            queryId: "health-summary",
+            status: "error",
+            code: "TransportError",
+            message: "socket closed",
+          }),
+          close: () => Effect.void,
+        }),
+    } satisfies ViewServerLiveClient<typeof viewServer.topics>;
+
+    function HealthView() {
+      const health = useViewServerHealthSummary();
+      return (
+        <output role="status">
+          {health.runtimeStatus}:{health.connectionStatus}:{health.status}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <ViewServerClientProvider client={disconnectedClient}>
+        <HealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(view.getByText("starting:disconnected:disconnected", { exact: true }))
+      .toBeVisible();
+    await view.unmount();
+    await Effect.runPromise(inMemory.close);
+  });
+
+  it("derives detailed runtime status from pushed health rows", async () => {
+    const stopping = fakeHealthClient("stopping");
+    const degraded = fakeHealthClient("degraded");
+    const starting = fakeHealthClient("starting");
+
+    function HealthView() {
+      const health = useViewServerHealth();
+      return (
+        <output role="status">
+          {health.runtimeStatus}:{health.connectionStatus}:{health.status}
+        </output>
+      );
+    }
+
+    const view = await render(
+      <ViewServerClientProvider client={stopping.client}>
+        <HealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(view.getByText("stopping:connected:stopping", { exact: true }))
+      .toBeVisible();
+
+    await view.rerender(
+      <ViewServerClientProvider client={degraded.client}>
+        <HealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(view.getByText("degraded:connected:degraded", { exact: true }))
+      .toBeVisible();
+
+    await view.rerender(
+      <ViewServerClientProvider client={starting.client}>
+        <HealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(view.getByText("starting:connected:starting", { exact: true }))
+      .toBeVisible();
+
+    await view.unmount();
+    await Effect.runPromise(stopping.close);
+    await Effect.runPromise(degraded.close);
+    await Effect.runPromise(starting.close);
+  });
+
+  it("derives health status while summary and detail streams are connecting or disconnected", async () => {
+    const summaryConnectedNoRowRuntime = createCoreInMemoryViewServer(viewServer);
+    const summaryDisconnectedWithRowRuntime = createCoreInMemoryViewServer(viewServer);
+    const detailConnectingRuntime = createCoreInMemoryViewServer(viewServer);
+    const detailDisconnectedWithRowRuntime = createCoreInMemoryViewServer(viewServer);
+    const summaryConnectedNoRowClient = {
+      ...summaryConnectedNoRowRuntime.liveClient,
+      subscribeHealthSummary: () =>
+        Effect.succeed({
+          events: Stream.make({
+            type: "status",
+            topic: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+            queryId: "health-summary",
+            status: "ready",
+            code: "Ready",
+          }),
+          close: () => Effect.void,
+        }),
+    } satisfies ViewServerLiveClient<typeof viewServer.topics>;
+    const summaryDisconnectedWithRowClient = {
+      ...summaryDisconnectedWithRowRuntime.liveClient,
+      subscribeHealthSummary: () =>
+        Effect.succeed({
+          events: Stream.make(
+            {
+              type: "snapshot",
+              topic: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+              queryId: "health-summary",
+              version: 1,
+              keys: ["summary"],
+              rows: [
+                {
+                  id: "summary",
+                  status: "degraded",
+                  runtimeStatus: "degraded",
+                  connectionStatus: "connected",
+                  unhealthyTopics: ["orders"],
+                  updatedAtNanos: 1n,
+                  maxKafkaLag: 0n,
+                },
+              ],
+              totalRows: 1,
+            },
+            {
+              type: "status",
+              topic: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+              queryId: "health-summary",
+              status: "error",
+              code: "TransportError",
+              message: "socket closed",
+            },
+          ),
+          close: () => Effect.void,
+        }),
+    } satisfies ViewServerLiveClient<typeof viewServer.topics>;
+    const detailConnectingClient = {
+      ...detailConnectingRuntime.liveClient,
+      subscribeHealth: () =>
+        Effect.succeed({
+          events: Stream.fromEffect(Effect.never),
+          close: () => Effect.void,
+        }),
+    } satisfies ViewServerLiveClient<typeof viewServer.topics>;
+    const detailDisconnectedWithRowClient = {
+      ...detailDisconnectedWithRowRuntime.liveClient,
+      subscribeHealth: () =>
+        Effect.succeed({
+          events: Stream.make(
+            {
+              type: "snapshot",
+              topic: VIEW_SERVER_HEALTH_TOPIC,
+              queryId: "health",
+              version: 1,
+              keys: ["orders"],
+              rows: [healthTopicRow("ready")],
+              totalRows: 1,
+            },
+            {
+              type: "status",
+              topic: VIEW_SERVER_HEALTH_TOPIC,
+              queryId: "health",
+              status: "error",
+              code: "TransportError",
+              message: "socket closed",
+            },
+          ),
+          close: () => Effect.void,
+        }),
+    } satisfies ViewServerLiveClient<typeof viewServer.topics>;
+
+    function SummaryHealthView() {
+      const health = useViewServerHealthSummary();
+      return (
+        <output role="status">
+          {health.runtimeStatus}:{health.connectionStatus}:{health.status}
+        </output>
+      );
+    }
+
+    function DetailedHealthView() {
+      const health = useViewServerHealth();
+      return (
+        <output role="status">
+          {health.runtimeStatus}:{health.connectionStatus}:{health.status}
+        </output>
+      );
+    }
+
+    const summaryConnectedView = await render(
+      <ViewServerClientProvider client={summaryConnectedNoRowClient}>
+        <SummaryHealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(summaryConnectedView.getByText("starting:connected:starting", { exact: true }))
+      .toBeVisible();
+    await summaryConnectedView.unmount();
+
+    const summaryDisconnectedView = await render(
+      <ViewServerClientProvider client={summaryDisconnectedWithRowClient}>
+        <SummaryHealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(
+        summaryDisconnectedView.getByText("degraded:disconnected:disconnected", { exact: true }),
+      )
+      .toBeVisible();
+    await summaryDisconnectedView.unmount();
+
+    const detailConnectingView = await render(
+      <ViewServerClientProvider client={detailConnectingClient}>
+        <DetailedHealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(detailConnectingView.getByText("starting:connecting:connecting", { exact: true }))
+      .toBeVisible();
+    await detailConnectingView.unmount();
+
+    const detailDisconnectedView = await render(
+      <ViewServerClientProvider client={detailDisconnectedWithRowClient}>
+        <DetailedHealthView />
+      </ViewServerClientProvider>,
+    );
+    await expect
+      .element(detailDisconnectedView.getByText("ready:disconnected:disconnected", { exact: true }))
+      .toBeVisible();
+    await detailDisconnectedView.unmount();
+
+    await Effect.runPromise(summaryConnectedNoRowRuntime.close);
+    await Effect.runPromise(summaryDisconnectedWithRowRuntime.close);
+    await Effect.runPromise(detailConnectingRuntime.close);
+    await Effect.runPromise(detailDisconnectedWithRowRuntime.close);
   });
 
   it("switches hook clients when the generic provider client prop changes", async () => {
@@ -265,9 +565,10 @@ describe("createViewServerReact", () => {
     }
     function HealthView() {
       const health = useViewServerHealth();
+      const rowCount = health.rows[0]?.rowCount ?? 0;
       return (
         <output aria-label="health" role="status">
-          {health.engine.topics.orders.rowCount}
+          {rowCount}
         </output>
       );
     }
@@ -310,7 +611,7 @@ describe("createViewServerReact", () => {
       );
     }
     function HealthView(props: { readonly label: string }) {
-      const health = useViewServerHealth();
+      const health = useViewServerHealthSummary();
       return (
         <output aria-label={props.label} role="status">
           {props.label}: {health.status}
@@ -355,25 +656,31 @@ describe("createViewServerReact", () => {
 
     const remoteProbe = await Effect.runPromise(
       makeViewServerClient(viewServer, {
-        healthPollInterval: "10 millis",
         url: inject("viewServerRemoteUrl"),
       }),
     );
-    await expect
-      .poll(() => remoteProbe.health.value.engine.topics.orders.activeSubscriptions)
-      .toBe(1);
+    const readRemoteOrderSubscriptions = async () => {
+      const subscription = await Effect.runPromise(remoteProbe.subscribeHealth());
+      const events = await Effect.runPromise(
+        subscription.events.pipe(Stream.take(1), Stream.runCollect),
+      );
+      await Effect.runPromise(subscription.close());
+      const event = events[0];
+      return event?.type === "snapshot"
+        ? (event.rows.find((row) => row.id === "orders")?.activeSubscriptions ?? -1)
+        : -1;
+    };
+    await expect.poll(readRemoteOrderSubscriptions).toBe(1);
 
     await remoteView.unmount();
 
-    await expect
-      .poll(() => remoteProbe.health.value.engine.topics.orders.activeSubscriptions)
-      .toBe(0);
+    await expect.poll(readRemoteOrderSubscriptions).toBe(0);
     await Effect.runPromise(remoteProbe.close);
   });
 
   it("owns remote client creation from provider URL and options", async () => {
     function HealthView(props: { readonly label: string }) {
-      const health = useViewServerHealth();
+      const health = useViewServerHealthSummary();
       return (
         <output aria-label={props.label} role="status">
           {props.label}: {health.status}
@@ -381,68 +688,28 @@ describe("createViewServerReact", () => {
       );
     }
 
-    const disabledPollingView = await render(
-      <react.ViewServerProvider
-        healthPollInterval={false}
-        subscriptionBufferSize={8}
-        url={inject("viewServerRemoteUrl")}
-      >
-        <HealthView label="disabled polling health" />
+    const remoteProviderView = await render(
+      <react.ViewServerProvider subscriptionBufferSize={8} url={inject("viewServerRemoteUrl")}>
+        <HealthView label="remote provider health" />
       </react.ViewServerProvider>,
     );
     await expect
-      .element(disabledPollingView.getByText("disabled polling health: ready", { exact: true }))
+      .element(remoteProviderView.getByText("remote provider health: ready", { exact: true }))
       .toBeVisible();
-    await disabledPollingView.unmount();
-
-    const stringPollingView = await render(
-      <react.ViewServerProvider healthPollInterval="1 second" url={inject("viewServerRemoteUrl")}>
-        <HealthView label="string polling health" />
-      </react.ViewServerProvider>,
-    );
-    await expect
-      .element(stringPollingView.getByText("string polling health: ready", { exact: true }))
-      .toBeVisible();
-    await stringPollingView.unmount();
-
-    const durationPollingView = await render(
-      <react.ViewServerProvider
-        healthPollInterval={Duration.millis(1_000)}
-        url={inject("viewServerRemoteUrl")}
-      >
-        <HealthView label="duration polling health" />
-      </react.ViewServerProvider>,
-    );
-    await expect
-      .element(durationPollingView.getByText("duration polling health: ready", { exact: true }))
-      .toBeVisible();
-    await durationPollingView.unmount();
-
-    const bigintPollingView = await render(
-      <react.ViewServerProvider
-        healthPollInterval={1_000_000_000n}
-        url={inject("viewServerRemoteUrl")}
-      >
-        <HealthView label="bigint polling health" />
-      </react.ViewServerProvider>,
-    );
-    await expect
-      .element(bigintPollingView.getByText("bigint polling health: ready", { exact: true }))
-      .toBeVisible();
-    await bigintPollingView.unmount();
+    await remoteProviderView.unmount();
   });
 
   it("recreates remote provider clients when URL options change", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     function HealthView() {
-      const health = useViewServerHealth();
+      const health = useViewServerHealthSummary();
       return <output role="status">{health.status}</output>;
     }
 
     const provider = await render(
       <ProviderErrorBoundary>
-        <react.ViewServerProvider healthPollInterval={false} url={inject("viewServerRemoteUrl")}>
+        <react.ViewServerProvider url={inject("viewServerRemoteUrl")}>
           <HealthView />
         </react.ViewServerProvider>
       </ProviderErrorBoundary>,
@@ -451,7 +718,7 @@ describe("createViewServerReact", () => {
 
     await provider.rerender(
       <ProviderErrorBoundary>
-        <react.ViewServerProvider healthPollInterval={false} url="ws://127.0.0.1:1/rpc">
+        <react.ViewServerProvider url="ws://127.0.0.1:1/rpc">
           <HealthView />
         </react.ViewServerProvider>
       </ProviderErrorBoundary>,
@@ -465,7 +732,7 @@ describe("createViewServerReact", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     function HealthView() {
-      const health = useViewServerHealth();
+      const health = useViewServerHealthSummary();
       return <output role="status">{health.status}</output>;
     }
 
@@ -747,7 +1014,7 @@ describe("createViewServerReact", () => {
     const { ViewServerInMemoryProvider, client } = createInMemoryViewServer();
 
     function HealthView() {
-      const health = useViewServerHealth();
+      const health = useViewServerHealthSummary();
       return (
         <output aria-label="health" role="status">
           {health.status}

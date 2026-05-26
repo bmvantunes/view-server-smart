@@ -1,6 +1,10 @@
 import { NodeHttpServer } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { defineViewServerConfig } from "@view-server/config";
+import {
+  defineViewServerConfig,
+  VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+  VIEW_SERVER_HEALTH_TOPIC,
+} from "@view-server/config";
 import {
   Context,
   Effect,
@@ -113,6 +117,38 @@ const health = (rowCount: number, activeSubscriptions: number): ViewServerWireHe
   },
 });
 
+const healthSummaryWireRow = (): typeof ViewServerWireRowSchema.Type => ({
+  id: "summary",
+  status: "ready",
+  runtimeStatus: "ready",
+  connectionStatus: "connected",
+  unhealthyTopics: [],
+  updatedAtNanos: "1",
+  maxKafkaLag: "0",
+});
+
+const healthTopicWireRow = (): typeof ViewServerWireRowSchema.Type => ({
+  id: "orders",
+  status: "ready",
+  rowCount: 0,
+  liveRowCount: 0,
+  deletedRowCount: 0,
+  version: 0,
+  mutationsPerSecond: 0,
+  rowsPerSecond: 0,
+  pendingMutationBatches: 0,
+  activeViews: 0,
+  activeSubscriptions: 0,
+  queuedEvents: 0,
+  maxQueueDepth: 0,
+  backpressureEvents: 0,
+  memoryBytes: 0,
+  tombstoneCount: 0,
+  compactionPending: false,
+  kafkaLag: "0",
+  updatedAtNanos: "1",
+});
+
 const readLimit = (query: unknown): number | undefined => {
   if (typeof query !== "object" || query === null || !("limit" in query)) {
     return undefined;
@@ -120,6 +156,23 @@ const readLimit = (query: unknown): number | undefined => {
   const value = query.limit;
   return typeof value === "number" ? value : undefined;
 };
+
+const snapshotEvent = (
+  topic: string,
+  rows: ReadonlyArray<typeof ViewServerWireRowSchema.Type>,
+): ViewServerWireEvent => ({
+  type: "snapshot",
+  topic,
+  queryId: "query-remote",
+  version: rows.length,
+  keys: rows.map((row) => {
+    const id = row["id"];
+    const encoded = typeof id === "string" ? id : JSON.stringify(id);
+    return encoded === undefined ? "undefined" : encoded;
+  }),
+  rows,
+  totalRows: rows.length,
+});
 
 const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(function* () {
   const path = "/rpc";
@@ -140,6 +193,34 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
           }),
         "ViewServer.Subscribe": (payload) => {
           lastSubscribeQuery = payload.query;
+          if (payload.topic === VIEW_SERVER_HEALTH_SUMMARY_TOPIC) {
+            return Stream.unwrap(
+              Effect.sync(() => {
+                activeSubscriptions += 1;
+                return Stream.succeed(snapshotEvent(payload.topic, [healthSummaryWireRow()])).pipe(
+                  Stream.ensuring(
+                    Effect.sync(() => {
+                      activeSubscriptions -= 1;
+                    }),
+                  ),
+                );
+              }),
+            );
+          }
+          if (payload.topic === VIEW_SERVER_HEALTH_TOPIC) {
+            return Stream.unwrap(
+              Effect.sync(() => {
+                activeSubscriptions += 1;
+                return Stream.succeed(snapshotEvent(payload.topic, [healthTopicWireRow()])).pipe(
+                  Stream.ensuring(
+                    Effect.sync(() => {
+                      activeSubscriptions -= 1;
+                    }),
+                  ),
+                );
+              }),
+            );
+          }
           const limit = readLimit(payload.query);
           if (limit === 994) {
             return Stream.fail<ViewServerRpcError>({
@@ -189,19 +270,7 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
           return Stream.unwrap(
             Effect.sync(() => {
               activeSubscriptions += 1;
-              return Stream.succeed<ViewServerWireEvent>({
-                type: "snapshot",
-                topic: payload.topic,
-                queryId: "query-remote",
-                version: rows.length,
-                keys: rows.map((row) => {
-                  const id = row["id"];
-                  const encoded = typeof id === "string" ? id : JSON.stringify(id);
-                  return encoded === undefined ? "undefined" : encoded;
-                }),
-                rows,
-                totalRows: rows.length,
-              }).pipe(
+              return Stream.succeed(snapshotEvent(payload.topic, rows)).pipe(
                 Stream.concat(Stream.fromQueue(events)),
                 Stream.ensuring(
                   Effect.sync(() => {
@@ -285,83 +354,73 @@ describe("remote ViewServer client", () => {
     });
   });
 
-  it.live(
-    "subscribes, receives external live events, refreshes health, and closes over Effect RPC WebSocket",
-    () =>
-      Effect.gen(function* () {
-        const server = yield* makeTestRpcServer();
-        const client = yield* makeViewServerClient(viewServer, {
-          url: server.url,
-          healthPollInterval: "10 millis",
-        });
-        expect(server.healthRequests()).toBe(1);
-        const subscription = yield* client.subscribe("orders", {
-          select: ["id", "price"],
-          limit: 10,
-        });
-        expect(server.healthRequests()).toBe(2);
-        const eventsFiber = yield* subscription.events.pipe(
-          Stream.take(3),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-        yield* Effect.sleep("10 millis");
+  it.live("subscribes, receives external live events, and closes over Effect RPC WebSocket", () =>
+    Effect.gen(function* () {
+      const server = yield* makeTestRpcServer();
+      const client = yield* makeViewServerClient(viewServer, {
+        url: server.url,
+      });
+      expect(server.healthRequests()).toBe(1);
+      const subscription = yield* client.subscribe("orders", {
+        select: ["id", "price"],
+        limit: 10,
+      });
+      expect(server.healthRequests()).toBe(1);
+      const eventsFiber = yield* subscription.events.pipe(
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* Effect.sleep("10 millis");
 
-        yield* server.emit({
-          type: "delta",
-          topic: "orders",
-          queryId: "query-remote",
-          fromVersion: 0,
-          toVersion: 1,
-          operations: [
-            { type: "insert", key: "queued", row: { id: "queued", price: 5 }, index: 0 },
-          ],
-          totalRows: 1,
-        });
-        yield* Effect.sleep("10 millis");
+      yield* server.emit({
+        type: "delta",
+        topic: "orders",
+        queryId: "query-remote",
+        fromVersion: 0,
+        toVersion: 1,
+        operations: [{ type: "insert", key: "queued", row: { id: "queued", price: 5 }, index: 0 }],
+        totalRows: 1,
+      });
+      yield* Effect.sleep("10 millis");
 
-        yield* server.emitInsert("orders", order("a", 10));
-        const events = yield* Fiber.join(eventsFiber);
-        expect(events[0]).toStrictEqual({
-          type: "snapshot",
-          topic: "orders",
-          queryId: "query-remote",
-          version: 0,
-          keys: [],
-          rows: [],
-          totalRows: 0,
-        });
-        expect(events[1]).toStrictEqual({
-          type: "delta",
-          topic: "orders",
-          queryId: "query-remote",
-          fromVersion: 0,
-          toVersion: 1,
-          operations: [
-            { type: "insert", key: "queued", row: { id: "queued", price: 5 }, index: 0 },
-          ],
-          totalRows: 1,
-        });
-        expect(events[2]).toStrictEqual({
-          type: "delta",
-          topic: "orders",
-          queryId: "query-remote",
-          fromVersion: 0,
-          toVersion: 1,
-          operations: [{ type: "insert", key: "a", row: { id: "a", price: 10 }, index: 0 }],
-          totalRows: 1,
-        });
+      yield* server.emitInsert("orders", order("a", 10));
+      const events = yield* Fiber.join(eventsFiber);
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "orders",
+        queryId: "query-remote",
+        version: 0,
+        keys: [],
+        rows: [],
+        totalRows: 0,
+      });
+      expect(events[1]).toStrictEqual({
+        type: "delta",
+        topic: "orders",
+        queryId: "query-remote",
+        fromVersion: 0,
+        toVersion: 1,
+        operations: [{ type: "insert", key: "queued", row: { id: "queued", price: 5 }, index: 0 }],
+        totalRows: 1,
+      });
+      expect(events[2]).toStrictEqual({
+        type: "delta",
+        topic: "orders",
+        queryId: "query-remote",
+        fromVersion: 0,
+        toVersion: 1,
+        operations: [{ type: "insert", key: "a", row: { id: "a", price: 10 }, index: 0 }],
+        totalRows: 1,
+      });
 
-        yield* Effect.sleep("30 millis");
-        expect(client.health.value.engine.topics.orders.rowCount).toBe(1);
+      yield* Effect.sleep("10 millis");
+      expect(client.health.value.engine.topics.orders.activeSubscriptions).toBe(0);
 
-        yield* Effect.sleep("10 millis");
-        expect(client.health.value.engine.topics.orders.activeSubscriptions).toBe(0);
-
-        yield* client.close;
-        expect(client.health.value.status).toBe("stopping");
-        yield* server.close;
-      }),
+      yield* client.close;
+      expect(client.health.value.status).toBe("stopping");
+      yield* server.close;
+    }),
   );
 
   it.live("closes the remote subscription scope when stream consumption finalizes", () =>
@@ -386,41 +445,79 @@ describe("remote ViewServer client", () => {
     }),
   );
 
-  it.live("polls remote health on a cadence without live query activity", () =>
+  it.live("subscribes to pushed remote health summary", () =>
     Effect.gen(function* () {
       const server = yield* makeTestRpcServer();
-      const client = yield* makeViewServerClient(viewServer, {
-        url: server.url,
-        healthPollInterval: "10 millis",
+      const client = yield* makeViewServerClient(viewServer, { url: server.url });
+      const subscription = yield* client.subscribeHealthSummary();
+      const events = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+        queryId: "query-remote",
+        version: 1,
+        keys: ["summary"],
+        rows: [
+          {
+            id: "summary",
+            status: "ready",
+            runtimeStatus: "ready",
+            connectionStatus: "connected",
+            unhealthyTopics: [],
+            updatedAtNanos: 1n,
+            maxKafkaLag: 0n,
+          },
+        ],
+        totalRows: 1,
       });
-      expect(client.health.value.engine.topics.orders.rowCount).toBe(0);
 
-      server.setRows([{ id: "polled", price: 50 }]);
-      yield* Effect.sleep("30 millis");
-
-      expect(client.health.value.engine.topics.orders.rowCount).toBe(1);
-
+      yield* subscription.close();
       yield* client.close;
       yield* server.close;
     }),
   );
 
-  it.live("does not poll remote health when the cadence is disabled", () =>
+  it.live("subscribes to pushed detailed remote health rows", () =>
     Effect.gen(function* () {
       const server = yield* makeTestRpcServer();
-      const client = yield* makeViewServerClient(viewServer, {
-        url: server.url,
-        healthPollInterval: false,
+      const client = yield* makeViewServerClient(viewServer, { url: server.url });
+      const subscription = yield* client.subscribeHealth();
+      const events = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: VIEW_SERVER_HEALTH_TOPIC,
+        queryId: "query-remote",
+        version: 1,
+        keys: ["orders"],
+        rows: [
+          {
+            id: "orders",
+            status: "ready",
+            rowCount: 0,
+            liveRowCount: 0,
+            deletedRowCount: 0,
+            version: 0,
+            mutationsPerSecond: 0,
+            rowsPerSecond: 0,
+            pendingMutationBatches: 0,
+            activeViews: 0,
+            activeSubscriptions: 0,
+            queuedEvents: 0,
+            maxQueueDepth: 0,
+            backpressureEvents: 0,
+            memoryBytes: 0,
+            tombstoneCount: 0,
+            compactionPending: false,
+            kafkaLag: 0n,
+            updatedAtNanos: 1n,
+          },
+        ],
+        totalRows: 1,
       });
-      expect(server.healthRequests()).toBe(1);
-      expect(client.health.value.engine.topics.orders.rowCount).toBe(0);
 
-      server.setRows([{ id: "not-polled", price: 50 }]);
-      yield* Effect.sleep("30 millis");
-
-      expect(server.healthRequests()).toBe(1);
-      expect(client.health.value.engine.topics.orders.rowCount).toBe(0);
-
+      yield* subscription.close();
       yield* client.close;
       yield* server.close;
     }),
@@ -487,6 +584,7 @@ describe("remote ViewServer client", () => {
         },
         limit: 10,
       });
+      yield* Effect.sleep("10 millis");
       expect(server.lastSubscribeQuery()).toStrictEqual({
         select: ["id"],
         where: {
@@ -499,6 +597,7 @@ describe("remote ViewServer client", () => {
       const noLimit = yield* client.subscribe("orders", {
         select: ["id"],
       });
+      yield* Effect.sleep("10 millis");
       expect(server.lastSubscribeQuery()).toStrictEqual({
         select: ["id"],
       });

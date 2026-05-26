@@ -36,7 +36,7 @@ const viewServer = defineViewServerConfig({
 });
 
 const react = createViewServerReact(viewServer);
-const { ViewServerProvider, useLiveQuery, useViewServerHealth } = react;
+const { ViewServerProvider, useLiveQuery, useViewServerHealth, useViewServerHealthSummary } = react;
 const ViewServerClientProvider = react[ViewServerReactClientProvider];
 
 const createInMemoryViewServer = (options?: ViewServerInMemoryOptions) =>
@@ -190,6 +190,7 @@ describe("React type contracts", () => {
 
   it("keeps health and in-memory client keyed by configured topics", () => {
     const health = useViewServerHealth();
+    const healthSummary = useViewServerHealthSummary();
     const provider = ViewServerProvider({ url: "ws://127.0.0.1:8080/rpc", children: null });
     const clientProvider = ViewServerClientProvider({ client: liveClient, children: null });
     const inMemoryViewServer = createInMemoryViewServer({ subscriptionQueueCapacity: 1 });
@@ -203,7 +204,11 @@ describe("React type contracts", () => {
       updatedAt: 1,
     });
 
-    expectTypeOf(health.engine.topics.orders.rowCount).toEqualTypeOf<number>();
+    expectTypeOf(health.rows[0]?.rowCount).toEqualTypeOf<number | undefined>();
+    expectTypeOf(health.rows[0]?.id).toEqualTypeOf<"orders" | undefined>();
+    expectTypeOf(healthSummary.status).toEqualTypeOf<
+      "ready" | "degraded" | "starting" | "stopping" | "connecting" | "connected" | "disconnected"
+    >();
     expectTypeOf(provider).toEqualTypeOf<ReactNode>();
     expectTypeOf(clientProvider).toEqualTypeOf<ReactNode>();
     expectTypeOf<Parameters<Client["publish"]>>().toEqualTypeOf<

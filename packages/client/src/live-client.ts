@@ -8,6 +8,8 @@ import type {
   TopicRow,
   ValidateLiveQuery,
   ViewServerHealth,
+  ViewServerHealthSummaryRow,
+  ViewServerHealthTopicRow,
   ViewServerRuntimeError,
   ViewServerTransportError,
 } from "@view-server/config";
@@ -30,6 +32,14 @@ export type ViewServerLiveClient<Topics extends TopicDefinitions> = {
     query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
   ) => Effect.Effect<
     ViewServerLiveSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
+    ViewServerRuntimeError | ViewServerTransportError
+  >;
+  readonly subscribeHealthSummary: () => Effect.Effect<
+    ViewServerLiveSubscription<ViewServerHealthSummaryRow<Topics>>,
+    ViewServerRuntimeError | ViewServerTransportError
+  >;
+  readonly subscribeHealth: () => Effect.Effect<
+    ViewServerLiveSubscription<ViewServerHealthTopicRow<Extract<keyof Topics, string>>>,
     ViewServerRuntimeError | ViewServerTransportError
   >;
   readonly health: AtomRef.ReadonlyRef<ViewServerHealth<Topics>>;

@@ -7,20 +7,25 @@ import type {
   TopicRow,
   ValidateLiveQuery,
   ViewServerConfig,
+  ViewServerHealthSummaryRow,
+  ViewServerHealthTopicRow,
   ViewServerRuntimeError,
   ViewServerTransportError,
 } from "@view-server/config";
+import { VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC } from "@view-server/config";
 import {
   ViewServerRpcs,
   viewServerDecodeHealth,
+  viewServerDecodeHealthSummaryEvent,
+  viewServerDecodeHealthTopicEvent,
   viewServerDecodeLiveEvent,
   viewServerEncodeRawQuery,
   type ViewServerRpcError,
+  type ViewServerWireEvent,
   type ViewServerWireHealth,
   type ViewServerWireRawQuery,
 } from "@view-server/protocol";
 import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Queue, Scope, Stream } from "effect";
-import type * as Duration from "effect/Duration";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
@@ -35,7 +40,6 @@ export type ViewServerRemoteClientError = ViewServerRuntimeError | ViewServerTra
 export type ViewServerClientOptions = {
   readonly url: string;
   readonly subscriptionBufferSize?: number;
-  readonly healthPollInterval?: Duration.Input | false;
 };
 
 export type ViewServerRemoteClient<Topics extends TopicDefinitions> = ViewServerLiveClient<Topics>;
@@ -122,8 +126,11 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     rpc["ViewServer.Health"](undefined).pipe(Effect.mapError(mapViewServerRemoteError));
 
   const subscribeRpc = <Row>(
-    topic: Extract<keyof Topics, string>,
+    topic: string,
     query: ViewServerWireRawQuery,
+    decodeEvent: (
+      event: ViewServerWireEvent,
+    ) => Effect.Effect<ViewServerLiveEvent<Row>, ViewServerRuntimeError>,
   ): Stream.Stream<ViewServerLiveEvent<Row>, ViewServerRemoteClientError> =>
     rpc["ViewServer.Subscribe"](
       {
@@ -133,17 +140,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
       {
         streamBufferSize: options.subscriptionBufferSize ?? 1_024,
       },
-    ).pipe(
-      Stream.mapError(mapViewServerRemoteError),
-      Stream.mapEffect((event) =>
-        viewServerDecodeLiveEvent<Topics, typeof topic, Row>(
-          config,
-          topic,
-          new Set(query.select),
-          event,
-        ),
-      ),
-    );
+    ).pipe(Stream.mapError(mapViewServerRemoteError), Stream.mapEffect(decodeEvent));
 
   const initialHealth = yield* cleanupOnConstructionFailure(
     healthRpc().pipe(Effect.flatMap((next) => viewServerDecodeHealth(config, next))),
@@ -151,37 +148,6 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   const health = AtomRef.make(initialHealth);
   const subscriptionBufferSize = options.subscriptionBufferSize ?? 1_024;
   const clientScope = yield* Scope.make("parallel");
-
-  const updateHealth = Effect.fn("ViewServerClient.remote.health.update")(function* (
-    next: typeof initialHealth,
-  ) {
-    yield* Effect.sync(() => {
-      health.update(() => next);
-    });
-  });
-
-  const refreshHealth = healthRpc().pipe(
-    Effect.flatMap((next) => viewServerDecodeHealth(config, next)),
-    Effect.flatMap(updateHealth),
-  );
-
-  const pollHealth = Effect.fn("ViewServerClient.remote.health.poll")(function* (
-    interval: Duration.Input,
-  ) {
-    while (true) {
-      yield* Effect.sleep(interval);
-      yield* refreshHealth.pipe(Effect.ignore);
-    }
-  });
-
-  const healthPollInterval = options.healthPollInterval ?? "1 second";
-  if (healthPollInterval !== false) {
-    yield* pollHealth(healthPollInterval).pipe(
-      Effect.ignore,
-      Effect.forkIn(clientScope, { startImmediately: true }),
-      Effect.ignore,
-    );
-  }
 
   const close = Scope.close(clientScope, Exit.void).pipe(
     Effect.andThen(managedRuntime.disposeEffect),
@@ -195,17 +161,11 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     ),
   );
 
-  const subscribe = Effect.fn("ViewServerClient.remote.subscribe")(function* <
-    Topic extends Extract<keyof Topics, string>,
-    const Query extends { readonly select: ReadonlyArray<unknown> },
-  >(
-    topic: Topic,
-    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
-  ) {
-    type Row = LiveQueryRow<TopicRow<Topics, Topic>, Query>;
-    const wireQuery = yield* viewServerEncodeRawQuery(config, topic, query);
+  const streamToSubscription = Effect.fn("ViewServerClient.remote.subscription.make")(function* <
+    Row,
+  >(topic: string, source: Stream.Stream<ViewServerLiveEvent<Row>, ViewServerRemoteClientError>) {
     const scope = yield* Scope.fork(clientScope, "parallel");
-    const stream = subscribeRpc<Row>(topic, wireQuery).pipe(
+    const stream = source.pipe(
       Stream.catch((error) => Stream.make(subscriptionFailureStatus(topic, error))),
     );
     const queue = yield* Queue.bounded<ViewServerLiveEvent<Row>, Cause.Done>(
@@ -215,19 +175,59 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
       Effect.forkIn(scope, { startImmediately: true }),
       Effect.ignore,
     );
-    yield* refreshHealth.pipe(Effect.ignore);
-    const closeSubscription = Scope.close(scope, Exit.void).pipe(
-      Effect.andThen(refreshHealth),
-      Effect.ignore,
-    );
+    const closeSubscription = Scope.close(scope, Exit.void).pipe(Effect.ignore);
     return {
       events: Stream.fromQueue(queue).pipe(Stream.ensuring(closeSubscription)),
       close: () => closeSubscription,
     } satisfies ViewServerLiveSubscription<Row>;
   });
 
+  const subscribe = Effect.fn("ViewServerClient.remote.subscribe")(function* <
+    Topic extends Extract<keyof Topics, string>,
+    const Query extends { readonly select: ReadonlyArray<unknown> },
+  >(
+    topic: Topic,
+    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
+  ) {
+    type Row = LiveQueryRow<TopicRow<Topics, Topic>, Query>;
+    const wireQuery = yield* viewServerEncodeRawQuery(config, topic, query);
+    const stream = subscribeRpc<Row>(topic, wireQuery, (event) =>
+      viewServerDecodeLiveEvent<Topics, Topic, Row>(
+        config,
+        topic,
+        new Set(wireQuery.select),
+        event,
+      ),
+    );
+    return yield* streamToSubscription(topic, stream);
+  });
+
+  const subscribeHealthSummary = Effect.fn("ViewServerClient.remote.healthSummary.subscribe")(
+    function* () {
+      type Row = ViewServerHealthSummaryRow<Topics>;
+      const stream = subscribeRpc<Row>(
+        VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+        { select: ["id"] },
+        viewServerDecodeHealthSummaryEvent<Topics>,
+      );
+      return yield* streamToSubscription(VIEW_SERVER_HEALTH_SUMMARY_TOPIC, stream);
+    },
+  );
+
+  const subscribeHealth = Effect.fn("ViewServerClient.remote.health.subscribe")(function* () {
+    type Row = ViewServerHealthTopicRow<Extract<keyof Topics, string>>;
+    const stream = subscribeRpc<Row>(
+      VIEW_SERVER_HEALTH_TOPIC,
+      { select: ["id"] },
+      viewServerDecodeHealthTopicEvent<Topics>,
+    );
+    return yield* streamToSubscription(VIEW_SERVER_HEALTH_TOPIC, stream);
+  });
+
   return {
     subscribe,
+    subscribeHealthSummary,
+    subscribeHealth,
     health: health.map((value) => value),
     close,
   };

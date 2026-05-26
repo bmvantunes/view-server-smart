@@ -58,6 +58,19 @@ export type {
   TopicRuntimeHealth,
   TransportHealth,
   ViewServerHealth,
+  ViewServerHealthConnectionStatus,
+  ViewServerHealthDetails,
+  ViewServerHealthStatus,
+  ViewServerHealthSummary,
+  ViewServerHealthSummaryRow,
+  ViewServerHealthTopicRow,
+} from "./health-contract";
+export {
+  VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+  VIEW_SERVER_HEALTH_TOPIC,
+  viewServerHealthSummaryFromHealth,
+  viewServerHealthSummaryRowFromHealth,
+  viewServerHealthTopicRowsFromHealth,
 } from "./health-contract";
 export type {
   ViewServerBackpressureError,
