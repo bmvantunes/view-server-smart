@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
+    "@view-server/client": "workspace:*",
     "@view-server/config": "workspace:*",
     "@view-server/protocol": "workspace:*",
     "effect": "catalog:"
@@ -25,7 +26,6 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "@view-server/client": "workspace:*",
     "@view-server/in-memory": "workspace:*",
     "@vitest/coverage-istanbul": "catalog:",
     "@vitest/runner": "catalog:",

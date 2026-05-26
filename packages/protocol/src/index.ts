@@ -2,7 +2,6 @@ import type {
   DeltaEvent,
   ExactRawQuery,
   FieldKey,
-  LiveQueryRow,
   OrderBy,
   RowSchema,
   SnapshotEvent,
@@ -11,38 +10,16 @@ import type {
   TopicRow,
   TopicRuntimeHealth,
   TransportHealth,
-  ValidateLiveQuery,
   ViewServerBackpressureError,
   ViewServerHealth,
   ViewServerRuntimeError,
   ViewServerTransportError,
   Where,
 } from "@view-server/config";
-import { Effect, Schema, type Stream } from "effect";
-import type * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import { Effect, Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
-export type ViewServerLiveEvent<Row> = SnapshotEvent<Row> | DeltaEvent<Row> | StatusEvent;
-
-export type ViewServerLiveSubscription<Row> = {
-  readonly events: Stream.Stream<ViewServerLiveEvent<Row>>;
-  readonly close: () => Effect.Effect<void, ViewServerTransportError>;
-};
-
-export type ViewServerLiveClient<Topics extends TopicDefinitions> = {
-  readonly subscribe: <
-    Topic extends Extract<keyof Topics, string>,
-    const Query extends { readonly select: ReadonlyArray<unknown> },
-  >(
-    topic: Topic,
-    query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query> & ValidateLiveQuery<Query>,
-  ) => Effect.Effect<
-    ViewServerLiveSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
-    ViewServerRuntimeError | ViewServerTransportError
-  >;
-  readonly health: AtomRef.ReadonlyRef<ViewServerHealth<Topics>>;
-  readonly close: Effect.Effect<void>;
-};
+type ViewServerProtocolEvent<Row> = SnapshotEvent<Row> | DeltaEvent<Row> | StatusEvent;
 
 const StringOrNull = Schema.NullOr(Schema.String);
 const NumberOrNull = Schema.NullOr(Schema.Number);
@@ -791,7 +768,7 @@ export const viewServerEncodeLiveEvent = Effect.fn("ViewServerProtocol.event.enc
   config: { readonly topics: Topics },
   expectedTopic: Extract<keyof Topics, string>,
   selectedFields: ReadonlySet<string>,
-  event: ViewServerLiveEvent<object>,
+  event: ViewServerProtocolEvent<object>,
 ) {
   if (event.topic !== expectedTopic) {
     return yield* Effect.fail(
@@ -836,11 +813,11 @@ export const viewServerEncodeLiveEvent = Effect.fn("ViewServerProtocol.event.enc
 });
 
 function typedLiveEvent<Row>(
-  event: ViewServerLiveEvent<Record<string, unknown>>,
-): ViewServerLiveEvent<Row>;
+  event: ViewServerProtocolEvent<Record<string, unknown>>,
+): ViewServerProtocolEvent<Row>;
 function typedLiveEvent(
-  event: ViewServerLiveEvent<Record<string, unknown>>,
-): ViewServerLiveEvent<Record<string, unknown>> {
+  event: ViewServerProtocolEvent<Record<string, unknown>>,
+): ViewServerProtocolEvent<Record<string, unknown>> {
   return event;
 }
 
@@ -875,7 +852,7 @@ export const viewServerDecodeLiveEvent = Effect.fn("ViewServerProtocol.event.dec
     });
   }
   type DecodedDeltaOperation = Extract<
-    ViewServerLiveEvent<Record<string, unknown>>,
+    ViewServerProtocolEvent<Record<string, unknown>>,
     { readonly type: "delta" }
   >["operations"][number];
   const operations: Array<DecodedDeltaOperation> = [];

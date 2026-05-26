@@ -291,6 +291,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+      '@view-server/client':
+        specifier: workspace:*
+        version: link:../client
       '@view-server/config':
         specifier: workspace:*
         version: link:../config
@@ -307,9 +310,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.1
-      '@view-server/client':
-        specifier: workspace:*
-        version: link:../client
       '@view-server/in-memory':
         specifier: workspace:*
         version: link:../in-memory

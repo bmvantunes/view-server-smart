@@ -15,9 +15,6 @@ import {
   viewServerDecodeHealth,
   viewServerDecodeLiveEvent,
   viewServerEncodeRawQuery,
-  type ViewServerLiveClient,
-  type ViewServerLiveEvent,
-  type ViewServerLiveSubscription,
   type ViewServerRpcError,
   type ViewServerWireHealth,
   type ViewServerWireRawQuery,
@@ -27,6 +24,11 @@ import type * as Duration from "effect/Duration";
 import * as AtomRef from "effect/unstable/reactivity/AtomRef";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
+import type {
+  ViewServerLiveClient,
+  ViewServerLiveEvent,
+  ViewServerLiveSubscription,
+} from "./live-client";
 
 export type ViewServerRemoteClientError = ViewServerRuntimeError | ViewServerTransportError;
 

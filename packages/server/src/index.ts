@@ -4,12 +4,12 @@ import type {
   ViewServerConfig,
   ViewServerRuntimeClient,
 } from "@view-server/config";
+import type { ViewServerLiveClient } from "@view-server/client";
 import {
   ViewServerRpcs,
   viewServerDecodeRawQuery,
   viewServerDecodeTopic,
   viewServerEncodeLiveEvent,
-  type ViewServerLiveClient,
 } from "@view-server/protocol";
 import { Context, Effect, Layer, ManagedRuntime, Stream } from "effect";
 import { HttpRouter, HttpServer, HttpServerError } from "effect/unstable/http";

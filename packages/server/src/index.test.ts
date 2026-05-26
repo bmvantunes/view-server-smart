@@ -1,13 +1,10 @@
 import { NodeSocket } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
+import type { ViewServerLiveEvent } from "@view-server/client";
 import { makeViewServerClient } from "@view-server/client/remote";
 import { defineViewServerConfig } from "@view-server/config";
 import { createInMemoryViewServer } from "@view-server/in-memory";
-import {
-  ViewServerRpcErrorSchema,
-  ViewServerRpcs,
-  type ViewServerLiveEvent,
-} from "@view-server/protocol";
+import { ViewServerRpcErrorSchema, ViewServerRpcs } from "@view-server/protocol";
 import {
   Context,
   Effect,
