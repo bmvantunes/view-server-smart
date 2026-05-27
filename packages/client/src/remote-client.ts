@@ -184,16 +184,6 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   const subscriptionBufferSize = options.subscriptionBufferSize ?? 1_024;
   const clientScope = yield* Scope.make("parallel");
 
-  const refreshHealth = Effect.fn("ViewServerClient.remote.health.refresh")(function* () {
-    const nextHealth = yield* healthRpc().pipe(
-      Effect.flatMap((next) => viewServerDecodeHealth(config, next)),
-    );
-    yield* Effect.sync(() => {
-      health.update(() => nextHealth);
-    });
-    return nextHealth;
-  });
-
   const updateHealthSummaryRef = (event: ViewServerLiveEvent<ViewServerHealthSummaryRow<Topics>>) =>
     Effect.sync(() => {
       if (event.type === "snapshot") {
@@ -255,6 +245,50 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
       }
     });
 
+  const updateLiveTopicHealth = <Topic extends Extract<keyof Topics, string>>(
+    topic: Topic,
+    update: (current: TopicRuntimeHealth) => TopicRuntimeHealth,
+  ) =>
+    Effect.sync(() => {
+      health.update((current) => {
+        const topics: Record<string, TopicRuntimeHealth> = {
+          ...current.engine.topics,
+          [topic]: update(current.engine.topics[topic]),
+        };
+        return {
+          ...current,
+          engine: {
+            topics: typedHealthTopics<Topics>(topics),
+          },
+        };
+      });
+    });
+
+  const updateSubscriptionCount = <Topic extends Extract<keyof Topics, string>>(
+    topic: Topic,
+    delta: 1 | -1,
+  ) =>
+    Effect.gen(function* () {
+      yield* updateLiveTopicHealth(topic, (current) => {
+        const activeSubscriptions = Math.max(0, current.activeSubscriptions + delta);
+        return {
+          ...current,
+          activeViews: Math.max(0, current.activeViews + delta),
+          activeSubscriptions,
+        };
+      });
+      yield* Effect.sync(() => {
+        health.update((current) => ({
+          ...current,
+          transport: {
+            ...current.transport,
+            activeStreams: Math.max(0, current.transport.activeStreams + delta),
+            activeSubscriptions: Math.max(0, current.transport.activeSubscriptions + delta),
+          },
+        }));
+      });
+    });
+
   const close = Scope.close(clientScope, Exit.void).pipe(
     Effect.andThen(managedRuntime.disposeEffect),
     Effect.andThen(
@@ -287,19 +321,13 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     const queue = yield* Queue.bounded<ViewServerLiveEvent<Row>, Cause.Done>(
       subscriptionBufferSize,
     );
+    yield* Scope.addFinalizer(scope, lifecycle.onClose.pipe(Effect.ignore));
     yield* Stream.runIntoQueue(stream, queue).pipe(
       Effect.forkIn(scope, { startImmediately: true }),
       Effect.ignore,
     );
     yield* lifecycle.onOpen;
-    let closed = false;
-    const closeSubscription = Effect.suspend(() => {
-      if (closed) {
-        return Effect.void;
-      }
-      closed = true;
-      return Scope.close(scope, Exit.void).pipe(Effect.andThen(lifecycle.onClose), Effect.ignore);
-    });
+    const closeSubscription = Scope.close(scope, Exit.void).pipe(Effect.ignore);
     return {
       events: Stream.fromQueue(queue).pipe(Stream.ensuring(closeSubscription)),
       close: () => closeSubscription,
@@ -315,14 +343,6 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   ) {
     type Row = LiveQueryRow<TopicRow<Topics, Topic>, Query>;
     const wireQuery = yield* viewServerEncodeRawQuery(config, topic, query);
-    let refreshedOpenHealth = false;
-    const refreshOpenHealthOnce = Effect.suspend(() => {
-      if (refreshedOpenHealth) {
-        return Effect.void;
-      }
-      refreshedOpenHealth = true;
-      return refreshHealth().pipe(Effect.ignore);
-    });
     const stream = subscribeRpc<Row>(topic, wireQuery, (event) =>
       viewServerDecodeLiveEvent<Topics, Topic, Row>(
         config,
@@ -330,10 +350,10 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
         new Set(wireQuery.select),
         event,
       ),
-    ).pipe(Stream.tap(() => refreshOpenHealthOnce));
+    );
     return yield* streamToSubscription(topic, stream, {
-      onOpen: Effect.void,
-      onClose: refreshHealth().pipe(Effect.ignore),
+      onOpen: updateSubscriptionCount(topic, 1),
+      onClose: updateSubscriptionCount(topic, -1),
     });
   });
 
