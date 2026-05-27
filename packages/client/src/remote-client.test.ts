@@ -402,6 +402,9 @@ describe("remote ViewServer client", () => {
         Effect.forkChild,
       );
       yield* Effect.sleep("10 millis");
+      expect(server.healthRequests()).toBe(2);
+      expect(client.health.value.engine.topics.orders.activeSubscriptions).toBe(1);
+      expect(client.health.value.transport.activeSubscriptions).toBe(1);
 
       yield* server.emit({
         type: "delta",
@@ -413,9 +416,15 @@ describe("remote ViewServer client", () => {
         totalRows: 1,
       });
       yield* Effect.sleep("10 millis");
+      expect(server.healthRequests()).toBe(2);
 
       yield* server.emitInsert("orders", order("a", 10));
       const events = yield* Fiber.join(eventsFiber);
+      expect(server.healthRequests()).toBe(3);
+      expect(client.health.value.engine.topics.orders.rowCount).toBe(1);
+      expect(client.health.value.engine.topics.orders.liveRowCount).toBe(1);
+      expect(client.health.value.engine.topics.orders.version).toBe(1);
+      expect(client.health.value.version).toBe(1);
       expect(events[0]).toStrictEqual({
         type: "snapshot",
         topic: "orders",
@@ -446,6 +455,7 @@ describe("remote ViewServer client", () => {
 
       yield* Effect.sleep("10 millis");
       expect(client.health.value.engine.topics.orders.activeSubscriptions).toBe(0);
+      expect(client.health.value.transport.activeSubscriptions).toBe(0);
 
       yield* client.close;
       expect(client.health.value.status).toBe("stopping");

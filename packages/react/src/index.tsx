@@ -214,10 +214,14 @@ export const createViewServerReact = <const Topics extends TopicDefinitions>(
     const detailConnectionStatus = connectionStatusFromLiveQueryStatus(result.status);
     const connectionStatus =
       summary.connectionStatus === "connected" ? detailConnectionStatus : summary.connectionStatus;
+    const status = connectionStatus === "connected" ? summary.runtimeStatus : connectionStatus;
+    const statusCode =
+      status !== "ready" && result.statusCode === "Ready" ? undefined : result.statusCode;
     return {
       ...result,
       runtimeStatus: summary.runtimeStatus,
-      status: connectionStatus === "connected" ? summary.runtimeStatus : connectionStatus,
+      status,
+      statusCode,
       connectionStatus,
     };
   };

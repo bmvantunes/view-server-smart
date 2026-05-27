@@ -184,6 +184,16 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   const subscriptionBufferSize = options.subscriptionBufferSize ?? 1_024;
   const clientScope = yield* Scope.make("parallel");
 
+  const refreshHealth = Effect.fn("ViewServerClient.remote.health.refresh")(function* () {
+    const nextHealth = yield* healthRpc().pipe(
+      Effect.flatMap((next) => viewServerDecodeHealth(config, next)),
+    );
+    yield* Effect.sync(() => {
+      health.update(() => nextHealth);
+    });
+    return nextHealth;
+  });
+
   const updateHealthSummaryRef = (event: ViewServerLiveEvent<ViewServerHealthSummaryRow<Topics>>) =>
     Effect.sync(() => {
       if (event.type === "snapshot") {
@@ -259,7 +269,17 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
 
   const streamToSubscription = Effect.fn("ViewServerClient.remote.subscription.make")(function* <
     Row,
-  >(topic: string, source: Stream.Stream<ViewServerLiveEvent<Row>, ViewServerRemoteClientError>) {
+  >(
+    topic: string,
+    source: Stream.Stream<ViewServerLiveEvent<Row>, ViewServerRemoteClientError>,
+    lifecycle: {
+      readonly onOpen: Effect.Effect<void>;
+      readonly onClose: Effect.Effect<void>;
+    } = {
+      onOpen: Effect.void,
+      onClose: Effect.void,
+    },
+  ) {
     const scope = yield* Scope.fork(clientScope, "parallel");
     const stream = source.pipe(
       Stream.catch((error) => Stream.make(subscriptionFailureStatus(topic, error))),
@@ -271,7 +291,15 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
       Effect.forkIn(scope, { startImmediately: true }),
       Effect.ignore,
     );
-    const closeSubscription = Scope.close(scope, Exit.void).pipe(Effect.ignore);
+    yield* lifecycle.onOpen;
+    let closed = false;
+    const closeSubscription = Effect.suspend(() => {
+      if (closed) {
+        return Effect.void;
+      }
+      closed = true;
+      return Scope.close(scope, Exit.void).pipe(Effect.andThen(lifecycle.onClose), Effect.ignore);
+    });
     return {
       events: Stream.fromQueue(queue).pipe(Stream.ensuring(closeSubscription)),
       close: () => closeSubscription,
@@ -287,6 +315,14 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   ) {
     type Row = LiveQueryRow<TopicRow<Topics, Topic>, Query>;
     const wireQuery = yield* viewServerEncodeRawQuery(config, topic, query);
+    let refreshedOpenHealth = false;
+    const refreshOpenHealthOnce = Effect.suspend(() => {
+      if (refreshedOpenHealth) {
+        return Effect.void;
+      }
+      refreshedOpenHealth = true;
+      return refreshHealth().pipe(Effect.ignore);
+    });
     const stream = subscribeRpc<Row>(topic, wireQuery, (event) =>
       viewServerDecodeLiveEvent<Topics, Topic, Row>(
         config,
@@ -294,8 +330,11 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
         new Set(wireQuery.select),
         event,
       ),
-    );
-    return yield* streamToSubscription(topic, stream);
+    ).pipe(Stream.tap(() => refreshOpenHealthOnce));
+    return yield* streamToSubscription(topic, stream, {
+      onOpen: Effect.void,
+      onClose: refreshHealth().pipe(Effect.ignore),
+    });
   });
 
   const subscribeHealthSummary = Effect.fn("ViewServerClient.remote.healthSummary.subscribe")(

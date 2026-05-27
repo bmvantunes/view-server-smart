@@ -285,7 +285,7 @@ describe("createViewServerReact", () => {
       const health = useViewServerHealth();
       return (
         <output role="status">
-          {health.runtimeStatus}:{health.connectionStatus}:{health.status}
+          {`${health.runtimeStatus}:${health.connectionStatus}:${health.status}:${health.statusCode ?? "none"}`}
         </output>
       );
     }
@@ -296,7 +296,7 @@ describe("createViewServerReact", () => {
       </ViewServerClientProvider>,
     );
     await expect
-      .element(view.getByText("stopping:connected:stopping", { exact: true }))
+      .element(view.getByText("stopping:connected:stopping:none", { exact: true }))
       .toBeVisible();
 
     await view.rerender(
@@ -305,7 +305,7 @@ describe("createViewServerReact", () => {
       </ViewServerClientProvider>,
     );
     await expect
-      .element(view.getByText("degraded:connected:degraded", { exact: true }))
+      .element(view.getByText("degraded:connected:degraded:none", { exact: true }))
       .toBeVisible();
 
     await view.rerender(
@@ -314,7 +314,7 @@ describe("createViewServerReact", () => {
       </ViewServerClientProvider>,
     );
     await expect
-      .element(view.getByText("starting:connected:starting", { exact: true }))
+      .element(view.getByText("starting:connected:starting:none", { exact: true }))
       .toBeVisible();
 
     await view.unmount();
@@ -426,7 +426,7 @@ describe("createViewServerReact", () => {
       const health = useViewServerHealth();
       return (
         <output role="status">
-          {health.runtimeStatus}:{health.connectionStatus}:{health.status}
+          {`${health.runtimeStatus}:${health.connectionStatus}:${health.status}:${health.statusCode ?? "none"}`}
         </output>
       );
     }
@@ -460,7 +460,7 @@ describe("createViewServerReact", () => {
     );
     await expect
       .element(
-        detailSummaryDisconnectedView.getByText("degraded:disconnected:disconnected", {
+        detailSummaryDisconnectedView.getByText("degraded:disconnected:disconnected:none", {
           exact: true,
         }),
       )
@@ -473,7 +473,7 @@ describe("createViewServerReact", () => {
       </ViewServerClientProvider>,
     );
     await expect
-      .element(detailConnectingView.getByText("ready:connecting:connecting", { exact: true }))
+      .element(detailConnectingView.getByText("ready:connecting:connecting:none", { exact: true }))
       .toBeVisible();
     await detailConnectingView.unmount();
 
@@ -483,7 +483,11 @@ describe("createViewServerReact", () => {
       </ViewServerClientProvider>,
     );
     await expect
-      .element(detailDisconnectedView.getByText("ready:disconnected:disconnected", { exact: true }))
+      .element(
+        detailDisconnectedView.getByText("ready:disconnected:disconnected:TransportError", {
+          exact: true,
+        }),
+      )
       .toBeVisible();
     await detailDisconnectedView.unmount();
 
