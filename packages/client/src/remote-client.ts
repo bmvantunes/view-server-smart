@@ -193,10 +193,29 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     });
   });
 
-  const refreshHealthInBackground = refreshHealth().pipe(
-    Effect.ignore,
-    Effect.forkIn(clientScope, { startImmediately: true }),
-    Effect.ignore,
+  let healthRefreshScheduled = false;
+  const requestHealthRefresh = Effect.fn("ViewServerClient.remote.health.refresh.request")(
+    function* () {
+      const shouldSchedule = yield* Effect.sync(() => {
+        if (healthRefreshScheduled) {
+          return false;
+        }
+        healthRefreshScheduled = true;
+        return true;
+      });
+      if (shouldSchedule) {
+        yield* Effect.sleep("20 millis").pipe(
+          Effect.andThen(refreshHealth()),
+          Effect.ensuring(
+            Effect.sync(() => {
+              healthRefreshScheduled = false;
+            }),
+          ),
+          Effect.forkIn(clientScope, { startImmediately: true }),
+          Effect.ignore,
+        );
+      }
+    },
   );
 
   const updateHealthSummaryRef = (event: ViewServerLiveEvent<ViewServerHealthSummaryRow<Topics>>) =>
@@ -225,7 +244,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
         }
       });
       if (shouldRefreshHealth) {
-        yield* refreshHealthInBackground;
+        yield* requestHealthRefresh();
       }
     });
 
@@ -272,7 +291,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
         }
       });
       if (shouldRefreshHealth) {
-        yield* refreshHealthInBackground;
+        yield* requestHealthRefresh();
       }
     });
 

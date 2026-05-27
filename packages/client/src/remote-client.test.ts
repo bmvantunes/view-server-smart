@@ -624,6 +624,7 @@ describe("remote ViewServer client", () => {
       );
       yield* Effect.sleep("10 millis");
       expect(client.health.value.status).toBe("degraded");
+      expect(server.healthRequests()).toBe(1);
       const refreshedHealth = health(0, 0);
       const refreshedKafka = {
         regions: {
@@ -695,7 +696,7 @@ describe("remote ViewServer client", () => {
         totalRows: 1,
       });
       yield* Fiber.join(summaryEventsFiber);
-      yield* Effect.sleep("10 millis");
+      yield* Effect.sleep("50 millis");
       expect(client.health.value.status).toBe("ready");
       expect(client.health.value.version).toBe(42);
       expect(client.health.value.uptimeMs).toBe(1234);
@@ -703,6 +704,7 @@ describe("remote ViewServer client", () => {
       expect(client.health.value.transport.messagesPerSecond).toBe(44);
       expect(client.health.value.transport.lastError).toBe("previous slow client");
       expect(client.health.value.kafka).toStrictEqual(refreshedKafka);
+      expect(server.healthRequests()).toBe(2);
       yield* summarySubscription.close();
 
       const healthSubscription = yield* client.subscribeHealth();
