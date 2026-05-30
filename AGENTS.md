@@ -156,6 +156,16 @@ These issues block merge until fixed or explicitly accepted by the user:
 
 ## Before Saying Done
 
+0 - implement the feature request and review [plans/](plans/) before merging.
+1 - run effect, vitest, and improve-codebase-architecture reviews with three separate agents.
+2 - wait for all review agents to report.
+3 - if any issues are found, fix them, commit/push, and return to step 1 until all agents agree there are no problems.
+4 - open a Pull Request on GitHub.
+5 - wait for Codex Cloud review.
+6 - if Codex Cloud reports issues, fix them, commit/push, and return to step 1.
+7 - once all reviews are clean, merge the Pull Request and proceed to the next request.
+8 - if you changed a public API, add Vitest type tests for inference and rejection behavior (including `@ts-expect-error` cases where applicable).
+
 - Run the relevant focused tests first, then the package-level tests.
 - Run `vp check`.
 - Run strict Effect diagnostics.

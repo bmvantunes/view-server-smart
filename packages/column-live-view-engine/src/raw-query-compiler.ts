@@ -12,6 +12,7 @@ import {
 import type { QueryEvaluation, StoredRowOf } from "./query-result";
 
 type RowObject = object;
+const compiledRawQueryBrand: unique symbol = Symbol("CompiledRawQuery");
 
 export class InvalidQueryError extends Schema.TaggedErrorClass<InvalidQueryError>()(
   "InvalidQueryError",
@@ -23,7 +24,7 @@ export class InvalidQueryError extends Schema.TaggedErrorClass<InvalidQueryError
 
 export type RuntimeRawQuery = {
   readonly select: ReadonlyArray<string>;
-  readonly where?: object;
+  readonly where?: Record<string, unknown>;
   readonly orderBy?: ReadonlyArray<{
     readonly field: string;
     readonly direction: "asc" | "desc";
@@ -42,6 +43,8 @@ export type RawQueryCompilerMetadata = {
 };
 
 export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject> = {
+  readonly [compiledRawQueryBrand]: true;
+  readonly query: RuntimeRawQuery;
   readonly matches: (row: Row) => boolean;
   readonly compare: (left: StoredRowOf<Row>, right: StoredRowOf<Row>) => number;
   readonly project: (row: Row) => ResultRow;
@@ -219,7 +222,7 @@ const decodeRawQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.decode")((
 
   const decoded: {
     select: Array<string>;
-    where?: object;
+    where?: Record<string, unknown>;
     orderBy?: Array<{ readonly field: string; readonly direction: "asc" | "desc" }>;
     offset?: number;
     limit?: number;
@@ -603,6 +606,8 @@ const compileRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
 ): CompiledRawQuery<Row, ResultRow> => {
   const orderBy = query.orderBy ?? [];
   return {
+    [compiledRawQueryBrand]: true,
+    query,
     matches: compileMatches(query.where),
     compare: (left, right) => compareRows(left, right, orderBy),
     project: compileProjection(query.select),

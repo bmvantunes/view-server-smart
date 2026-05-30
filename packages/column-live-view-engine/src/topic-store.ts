@@ -1,24 +1,43 @@
 import { Effect, Schema, Semaphore } from "effect";
-import type { StatusEvent } from "@view-server/config";
-import type { HealthTopicStoreState } from "./engine-health";
-import type { LiveTopicStoreState, LiveTopicSubscriber } from "./live-subscription";
+import type { StatusEvent, TopicRuntimeHealth } from "@view-server/config";
+import { activeStoreRawQueryExecutionCount, clearStoreRawQueryExecutions } from "./active-query";
+import { createTopicHealthLedger } from "./topic-health-ledger";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
 import { cloneRow, fieldValue, isPlainRecord } from "./row-values";
+import type { LiveTopicSubscriber } from "./live-subscription";
 
 type RowObject = object;
 
-export type InvalidRowErrorFactory<Error> = (topic: string, message: string) => Error;
+type InvalidRowErrorFactory<Error> = (topic: string, message: string) => Error;
 
-export class TopicStore<Row extends RowObject>
-  implements HealthTopicStoreState<Row>, LiveTopicStoreState<Row>
-{
-  readonly rows = new Map<string, Row>();
-  readonly subscribers = new Set<LiveTopicSubscriber<Row>>();
+export type TopicStoreHealthView = {
+  readonly topic: string;
+  readonly status: "ready" | "degraded";
+  readonly rowCount: number;
+  readonly liveRowCount: number;
+  readonly deletedRowCount: number;
+  readonly version: number;
+  readonly lastMutationAt: number | null;
+  readonly mutationsPerSecond: number;
+  readonly rowsPerSecond: number;
+  readonly pendingMutationBatches: number;
+  readonly activeViews: number;
+  readonly activeSubscriptions: number;
+  readonly queuedEvents: number;
+  readonly maxQueueDepth: number;
+  readonly backpressureEvents: number;
+  readonly memoryBytes: number;
+  readonly tombstoneCount: number;
+  readonly compactionPending: boolean;
+};
+
+export class TopicStore {
+  readonly rows = new Map<string, object>();
+  readonly subscribers = new Set<LiveTopicSubscriber>();
   readonly mutationSemaphore = Semaphore.makeUnsafe(1);
   readonly rawQueryMetadata: RawQueryCompilerMetadata;
+  readonly healthLedger = createTopicHealthLedger();
   version = 0;
-  maxQueueDepth = 0;
-  backpressureEvents = 0;
 
   constructor(
     readonly topic: string,
@@ -30,10 +49,7 @@ export class TopicStore<Row extends RowObject>
   }
 }
 
-const resetStatusEvent = <Row extends RowObject>(
-  store: TopicStore<Row>,
-  subscriber: LiveTopicSubscriber<Row>,
-): StatusEvent => ({
+const resetStatusEvent = (store: TopicStore, subscriber: LiveTopicSubscriber): StatusEvent => ({
   type: "status",
   topic: store.topic,
   queryId: subscriber.queryId,
@@ -42,9 +58,9 @@ const resetStatusEvent = <Row extends RowObject>(
   message: "Subscription closed because the engine reset.",
 });
 
-const engineClosedStatusEvent = <Row extends RowObject>(
-  store: TopicStore<Row>,
-  subscriber: LiveTopicSubscriber<Row>,
+const engineClosedStatusEvent = (
+  store: TopicStore,
+  subscriber: LiveTopicSubscriber,
 ): StatusEvent => ({
   type: "status",
   topic: store.topic,
@@ -54,9 +70,9 @@ const engineClosedStatusEvent = <Row extends RowObject>(
   message: "Subscription closed because the engine closed.",
 });
 
-const commitTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.commit")(function* <
-  Row extends RowObject,
->(store: TopicStore<Row>) {
+const commitTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.commit")(function* (
+  store: TopicStore,
+) {
   store.version += 1;
   store.onCommit();
   for (const subscriber of store.subscribers) {
@@ -64,9 +80,83 @@ const commitTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.commit")(fun
   }
 });
 
-export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset")(function* <
-  Row extends RowObject,
->(store: TopicStore<Row>) {
+export const collectTopicStoreHealth = Effect.fn("ColumnLiveViewEngine.topicStore.health")(
+  function* (store: TopicStore, closed: boolean) {
+    const totals = store.healthLedger.snapshot();
+    let queuedEvents = 0;
+
+    for (const subscriber of store.subscribers) {
+      const currentQueuedEvents = yield* subscriber.queuedEvents;
+      queuedEvents += currentQueuedEvents;
+    }
+
+    const activeSubscriptions = store.subscribers.size;
+    const activeViews = yield* activeStoreRawQueryExecutionCount(store);
+    const rowCount = store.rows.size;
+    const status: TopicRuntimeHealth["status"] = closed ? "degraded" : "ready";
+
+    return {
+      topic: store.topic,
+      status,
+      rowCount,
+      liveRowCount: rowCount,
+      deletedRowCount: 0,
+      version: store.version,
+      lastMutationAt: null,
+      mutationsPerSecond: 0,
+      rowsPerSecond: 0,
+      pendingMutationBatches: 0,
+      activeViews,
+      activeSubscriptions,
+      queuedEvents,
+      maxQueueDepth: totals.maxQueueDepth,
+      backpressureEvents: totals.backpressureEvents,
+      memoryBytes: 0,
+      tombstoneCount: 0,
+      compactionPending: false,
+    } satisfies TopicStoreHealthView;
+  },
+);
+
+export const registerTopicStoreSubscription = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.subscribe.add",
+)((store: TopicStore, subscriber: LiveTopicSubscriber) =>
+  Effect.sync(() => {
+    store.healthLedger.openSubscription(subscriber);
+    store.subscribers.add(subscriber);
+  }),
+);
+
+export const unregisterTopicStoreSubscription = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.subscribe.remove",
+)((store: TopicStore, subscriber: LiveTopicSubscriber) =>
+  Effect.sync(() => {
+    store.healthLedger.closeSubscription(subscriber);
+    store.subscribers.delete(subscriber);
+  }),
+);
+
+export const trackTopicStoreSubscriptionQueueDepth = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.subscribe.queueDepth",
+)((store: TopicStore, subscriber: LiveTopicSubscriber, queueDepth: number) =>
+  Effect.sync(() => {
+    store.healthLedger.updateQueueDepth(subscriber, queueDepth);
+    subscriber.maxQueueDepth = Math.max(subscriber.maxQueueDepth, queueDepth);
+  }),
+);
+
+export const reportTopicStoreSubscriptionBackpressure = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.subscribe.backpressure",
+)((store: TopicStore, subscriber: LiveTopicSubscriber) =>
+  Effect.sync(() => {
+    store.healthLedger.markBackpressure(subscriber);
+    subscriber.backpressureEvents += 1;
+  }),
+);
+
+export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset")(function* (
+  store: TopicStore,
+) {
   yield* store.mutationSemaphore.withPermits(1)(
     Effect.gen(function* () {
       store.rows.clear();
@@ -76,28 +166,30 @@ export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset"
         yield* subscriber.closeWithStatus(resetStatusEvent(store, subscriber));
       }
       store.subscribers.clear();
-      store.maxQueueDepth = 0;
-      store.backpressureEvents = 0;
+      store.healthLedger.reset();
+      yield* clearStoreRawQueryExecutions(store);
     }),
   );
 });
 
 export const closeTopicStoreSubscriptions = Effect.fn(
   "ColumnLiveViewEngine.topicStore.closeSubscriptions",
-)(function* <Row extends RowObject>(store: TopicStore<Row>) {
+)(function* (store: TopicStore) {
   yield* store.mutationSemaphore.withPermits(1)(
     Effect.gen(function* () {
       for (const subscriber of store.subscribers) {
         subscriber.closed = true;
         yield* subscriber.closeWithStatus(engineClosedStatusEvent(store, subscriber));
+        store.healthLedger.closeSubscription(subscriber);
       }
       store.subscribers.clear();
+      yield* clearStoreRawQueryExecutions(store);
     }),
   );
 });
 
 const decodeRow = Effect.fn("ColumnLiveViewEngine.topicStore.decodeRow")(function* <Error>(
-  store: TopicStore<object>,
+  store: TopicStore,
   row: RowObject,
   invalidRow: InvalidRowErrorFactory<Error>,
 ) {
@@ -110,11 +202,10 @@ const decodeRow = Effect.fn("ColumnLiveViewEngine.topicStore.decodeRow")(functio
   });
 });
 
-const rowKey = Effect.fn("ColumnLiveViewEngine.topicStore.rowKey")(function* <Error>(
-  store: TopicStore<object>,
-  row: RowObject,
-  invalidRow: InvalidRowErrorFactory<Error>,
-) {
+const rowKey = Effect.fn("ColumnLiveViewEngine.topicStore.rowKey")(function* <
+  Error,
+  Row extends RowObject,
+>(store: TopicStore, row: Row, invalidRow: InvalidRowErrorFactory<Error>) {
   const key = fieldValue(row, store.keyField);
   if (typeof key !== "string") {
     return yield* Effect.fail(
@@ -125,11 +216,7 @@ const rowKey = Effect.fn("ColumnLiveViewEngine.topicStore.rowKey")(function* <Er
 });
 
 const validatePatchKeys = Effect.fn("ColumnLiveViewEngine.topicStore.patchKeys.validate")(
-  function* <Error>(
-    store: TopicStore<object>,
-    patch: unknown,
-    invalidRow: InvalidRowErrorFactory<Error>,
-  ) {
+  function* <Error>(store: TopicStore, patch: unknown, invalidRow: InvalidRowErrorFactory<Error>) {
     if (!isPlainRecord(patch)) {
       return yield* Effect.fail(invalidRow(store.topic, "Patch must be a plain object."));
     }
@@ -145,7 +232,8 @@ const validatePatchKeys = Effect.fn("ColumnLiveViewEngine.topicStore.patchKeys.v
 
 export const publishTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.publish")(function* <
   Error,
->(store: TopicStore<object>, row: RowObject, invalidRow: InvalidRowErrorFactory<Error>) {
+  Row extends RowObject,
+>(store: TopicStore, row: Row, invalidRow: InvalidRowErrorFactory<Error>) {
   const decoded = yield* decodeRow(store, row, invalidRow);
   const key = yield* rowKey(store, decoded, invalidRow);
   yield* store.mutationSemaphore.withPermits(1)(
@@ -157,9 +245,9 @@ export const publishTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.p
 });
 
 export const publishTopicStoreRows = Effect.fn("ColumnLiveViewEngine.topicStore.publishMany")(
-  function* <Error>(
-    store: TopicStore<object>,
-    rows: ReadonlyArray<RowObject>,
+  function* <Error, Row extends RowObject>(
+    store: TopicStore,
+    rows: ReadonlyArray<Row>,
     invalidRow: InvalidRowErrorFactory<Error>,
   ) {
     const decodedRows = yield* Effect.forEach(rows, (row) => decodeRow(store, row, invalidRow));
@@ -183,7 +271,7 @@ export const publishTopicStoreRows = Effect.fn("ColumnLiveViewEngine.topicStore.
 export const patchTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.patch")(function* <
   Patch extends Partial<RowObject>,
   Error,
->(store: TopicStore<object>, key: string, patch: Patch, invalidRow: InvalidRowErrorFactory<Error>) {
+>(store: TopicStore, key: string, patch: Patch, invalidRow: InvalidRowErrorFactory<Error>) {
   yield* store.mutationSemaphore.withPermits(1)(
     Effect.gen(function* () {
       yield* validatePatchKeys(store, patch, invalidRow);
@@ -202,9 +290,10 @@ export const patchTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.pat
   );
 });
 
-export const deleteTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.delete")(function* <
-  Row extends RowObject,
->(store: TopicStore<Row>, key: string) {
+export const deleteTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.delete")(function* (
+  store: TopicStore,
+  key: string,
+) {
   yield* store.mutationSemaphore.withPermits(1)(
     Effect.gen(function* () {
       store.rows.delete(key);

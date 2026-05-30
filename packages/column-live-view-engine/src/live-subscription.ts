@@ -1,7 +1,13 @@
 import type { DeltaEvent, SnapshotEvent, StatusEvent } from "@view-server/config";
-import { Cause, Effect, Option, Queue, type Semaphore, Stream } from "effect";
-import { evaluateCompiledRawQuery, type CompiledRawQuery } from "./raw-query-compiler";
-import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
+import { Cause, Effect, Option, Queue, Stream } from "effect";
+import type { RawQueryExecution } from "./active-query";
+import type { TopicStore } from "./topic-store";
+import {
+  registerTopicStoreSubscription,
+  reportTopicStoreSubscriptionBackpressure,
+  trackTopicStoreSubscriptionQueueDepth,
+  unregisterTopicStoreSubscription,
+} from "./topic-store";
 
 type RowObject = object;
 
@@ -10,20 +16,10 @@ type LiveSubscriptionEvent<Row extends RowObject> =
   | DeltaEvent<Row>
   | StatusEvent;
 
-export type LiveTopicStoreState<Row extends RowObject> = {
-  readonly topic: string;
-  readonly rows: ReadonlyMap<string, Row>;
-  readonly version: number;
-  readonly subscribers: Set<LiveTopicSubscriber<Row>>;
-  readonly mutationSemaphore: Semaphore.Semaphore;
-  maxQueueDepth: number;
-  backpressureEvents: number;
-};
-
-export type LiveTopicSubscriber<Row extends RowObject> = {
+export type LiveTopicSubscriber = {
   readonly topic: string;
   readonly queryId: string;
-  readonly notify: (store: LiveTopicStoreState<Row>) => Effect.Effect<void>;
+  readonly notify: (store: TopicStore) => Effect.Effect<void>;
   readonly queuedEvents: Effect.Effect<number>;
   readonly end: Effect.Effect<void>;
   readonly closeWithStatus: (event: StatusEvent) => Effect.Effect<void>;
@@ -32,11 +28,12 @@ export type LiveTopicSubscriber<Row extends RowObject> = {
   closed: boolean;
 };
 
-type MakeLiveSubscriptionOptions<StoreRow extends RowObject, ResultRow extends RowObject> = {
-  readonly store: LiveTopicStoreState<StoreRow>;
+type MakeLiveSubscriptionOptions<ResultRow extends RowObject> = {
+  readonly store: TopicStore;
   readonly queryId: string;
-  readonly compiled: CompiledRawQuery<StoreRow, ResultRow>;
   readonly queueCapacity: number;
+  readonly execution: RawQueryExecution<ResultRow>;
+  readonly release: Effect.Effect<void>;
 };
 
 export type LiveSubscription<ResultRow extends RowObject> = {
@@ -56,74 +53,62 @@ const backpressureStatusEvent = (
   message: "Subscription closed because its event queue exceeded capacity.",
 });
 
-const updateQueueDepth = <Row extends RowObject>(
-  store: LiveTopicStoreState<Row>,
-  subscriber: LiveTopicSubscriber<Row>,
-  queueDepth: number,
-): void => {
-  subscriber.maxQueueDepth = Math.max(subscriber.maxQueueDepth, queueDepth);
-  store.maxQueueDepth = Math.max(store.maxQueueDepth, subscriber.maxQueueDepth);
-};
-
 const closeForBackpressure = Effect.fn(
   "ColumnLiveViewEngine.liveSubscription.closeForBackpressure",
-)(function* <Row extends RowObject, ResultRow extends RowObject>(
-  store: LiveTopicStoreState<Row>,
-  subscriber: LiveTopicSubscriber<Row>,
+)(function* <ResultRow extends RowObject>(
+  store: TopicStore,
+  subscriber: LiveTopicSubscriber,
   queue: Queue.Queue<LiveSubscriptionEvent<ResultRow>, Cause.Done>,
+  release: Effect.Effect<void>,
 ) {
-  subscriber.backpressureEvents += 1;
-  store.backpressureEvents += 1;
   subscriber.closed = true;
-  store.subscribers.delete(subscriber);
+  yield* reportTopicStoreSubscriptionBackpressure(store, subscriber);
+  yield* unregisterTopicStoreSubscription(store, subscriber);
+  yield* release;
   yield* Queue.takeAll(queue).pipe(Effect.ignore);
   yield* Queue.offer(queue, backpressureStatusEvent(store, subscriber)).pipe(Effect.ignore);
   yield* Queue.end(queue);
 });
 
 export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscription.make")(
-  function* <StoreRow extends RowObject, ResultRow extends RowObject>(
-    options: MakeLiveSubscriptionOptions<StoreRow, ResultRow>,
-  ) {
-    const { compiled, queryId, queueCapacity, store } = options;
+  function* <ResultRow extends RowObject>(options: MakeLiveSubscriptionOptions<ResultRow>) {
+    const { execution, queryId, queueCapacity, store } = options;
+    const { release } = options;
     const queue = yield* Queue.dropping<LiveSubscriptionEvent<ResultRow>, Cause.Done>(
       queueCapacity,
     );
-    let evaluation = evaluateCompiledRawQuery(store, compiled);
+    const cursor = execution.createCursor();
 
-    const subscriber: LiveTopicSubscriber<StoreRow> = {
+    const releaseExecution = release;
+
+    const subscriber: LiveTopicSubscriber = {
       topic: store.topic,
       queryId,
-      notify: (currentStore) =>
+      notify: () =>
         Effect.gen(function* () {
-          const previous = evaluation;
-          const next = evaluateCompiledRawQuery(currentStore, compiled);
-          const operations = deltaOperations(previous, next);
-          if (operations.length === 0 && previous.totalRows === next.totalRows) {
+          const nextEvent = yield* execution.next(queryId, cursor);
+          if (Option.isNone(nextEvent)) {
             return;
           }
-
-          const offered = yield* Queue.offer(
-            queue,
-            deltaEvent(currentStore, queryId, previous.version, next, operations),
-          );
+          const offered = yield* Queue.offer(queue, nextEvent.value);
           if (!offered) {
-            yield* closeForBackpressure(currentStore, subscriber, queue);
+            yield* closeForBackpressure(store, subscriber, queue, releaseExecution);
             return;
           }
 
           const queueDepth = yield* Queue.size(queue);
-          updateQueueDepth(currentStore, subscriber, queueDepth);
-          evaluation = next;
+          yield* trackTopicStoreSubscriptionQueueDepth(store, subscriber, queueDepth);
         }),
       queuedEvents: Queue.size(queue),
       end: Queue.end(queue),
       closeWithStatus: (event) =>
         Effect.gen(function* () {
+          subscriber.closed = true;
           let drained = yield* Queue.poll(queue);
           while (Option.isSome(drained)) {
             drained = yield* Queue.poll(queue);
           }
+          yield* releaseExecution;
           yield* Queue.offer(queue, event).pipe(Effect.ignore);
           yield* Queue.end(queue);
         }),
@@ -132,16 +117,17 @@ export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscrip
       closed: false,
     };
 
-    store.subscribers.add(subscriber);
-    yield* Queue.offer(queue, snapshotEvent(store, queryId, evaluation));
-    updateQueueDepth(store, subscriber, yield* Queue.size(queue));
+    yield* registerTopicStoreSubscription(store, subscriber);
+    yield* Queue.offer(queue, execution.initial(queryId));
+    yield* trackTopicStoreSubscriptionQueueDepth(store, subscriber, yield* Queue.size(queue));
 
     const close = Effect.fn("ColumnLiveViewEngine.liveSubscription.close")(function* () {
       yield* store.mutationSemaphore.withPermits(1)(
         Effect.gen(function* () {
           if (!subscriber.closed) {
             subscriber.closed = true;
-            store.subscribers.delete(subscriber);
+            yield* unregisterTopicStoreSubscription(store, subscriber);
+            yield* releaseExecution;
             yield* subscriber.end;
           }
         }),

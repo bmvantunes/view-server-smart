@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { UnsupportedQueryError } from "./engine-errors";
 import { makeLiveSubscription } from "./live-subscription";
+import { acquireRawQueryExecution, releaseRawQueryExecution } from "./active-query";
 import {
   evaluateCompiledRawQuery,
   prepareRawQuery,
@@ -11,9 +12,9 @@ import type { TopicStore } from "./topic-store";
 
 type RowObject = object;
 
-export type ExecutableQuery<StoreRow extends RowObject, ResultRow extends RowObject> = {
+export type ExecutableQuery<ResultRow extends RowObject> = {
   readonly kind: "raw";
-  readonly compiled: CompiledRawQuery<StoreRow, ResultRow>;
+  readonly compiled: CompiledRawQuery<object, ResultRow>;
 };
 
 export const isGroupedQuery = (query: unknown): boolean =>
@@ -29,15 +30,11 @@ const unsupportedGroupedQuery = (topic: string) =>
   });
 
 export const prepareExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecution.prepare")(
-  function* <StoreRow extends RowObject, ResultRow extends RowObject>(
-    topic: string,
-    store: TopicStore<StoreRow>,
-    query: unknown,
-  ) {
+  function* <ResultRow extends RowObject>(topic: string, store: TopicStore, query: unknown) {
     if (isGroupedQuery(query)) {
       return yield* unsupportedGroupedQuery(topic);
     }
-    const compiled = yield* prepareRawQuery<StoreRow, ResultRow>(
+    const compiled = yield* prepareRawQuery<object, ResultRow>(
       topic,
       store.rawQueryMetadata,
       query,
@@ -45,42 +42,47 @@ export const prepareExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecu
     return {
       kind: "raw",
       compiled,
-    } satisfies ExecutableQuery<StoreRow, ResultRow>;
+    } satisfies ExecutableQuery<ResultRow>;
   },
 );
 
-export const evaluateExecutableQuery = <StoreRow extends RowObject, ResultRow extends RowObject>(
-  store: TopicStore<StoreRow>,
-  executable: ExecutableQuery<StoreRow, ResultRow>,
-): QueryEvaluation<ResultRow> => evaluateCompiledRawQuery(store, executable.compiled);
+export const evaluateExecutableQuery = <ResultRow extends RowObject>(
+  store: TopicStore,
+  executable: ExecutableQuery<ResultRow>,
+): QueryEvaluation<ResultRow> =>
+  evaluateCompiledRawQuery(
+    {
+      rows: store.rows,
+      version: store.version,
+    },
+    executable.compiled,
+  );
 
 export const snapshotExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecution.snapshot")(
-  function* <StoreRow extends RowObject, ResultRow extends RowObject>(
-    topic: string,
-    store: TopicStore<StoreRow>,
-    query: unknown,
-  ) {
-    const executable = yield* prepareExecutableQuery<StoreRow, ResultRow>(topic, store, query);
+  function* <ResultRow extends RowObject>(topic: string, store: TopicStore, query: unknown) {
+    const executable = yield* prepareExecutableQuery<ResultRow>(topic, store, query);
     return liveQueryResult(evaluateExecutableQuery(store, executable));
   },
 );
 
 export const subscribeExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecution.subscribe")(
-  function* <StoreRow extends RowObject, ResultRow extends RowObject>(
+  function* <ResultRow extends RowObject>(
     topic: string,
-    store: TopicStore<StoreRow>,
+    store: TopicStore,
     query: unknown,
     input: {
       readonly queryId: string;
       readonly queueCapacity: number;
     },
   ) {
-    const executable = yield* prepareExecutableQuery<StoreRow, ResultRow>(topic, store, query);
+    const executable = yield* prepareExecutableQuery<ResultRow>(topic, store, query);
+    const execution = yield* acquireRawQueryExecution(store, executable.compiled);
     return yield* makeLiveSubscription({
       store,
       queryId: input.queryId,
-      compiled: executable.compiled,
+      execution,
       queueCapacity: input.queueCapacity,
+      release: releaseRawQueryExecution(store, executable.compiled),
     });
   },
 );

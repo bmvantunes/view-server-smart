@@ -829,7 +829,7 @@ describe("remote ViewServer client", () => {
       });
       yield* Effect.sleep("10 millis");
 
-      expect(client.health.value.engine.topics.orders.activeViews).toBe(8);
+      expect(client.health.value.engine.topics.orders.activeViews).toBe(7);
       expect(client.health.value.engine.topics.orders.activeSubscriptions).toBe(3);
       expect(client.health.value.transport.activeStreams).toBe(3);
       expect(client.health.value.transport.activeSubscriptions).toBe(3);

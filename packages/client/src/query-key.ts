@@ -67,6 +67,22 @@ const stableObjectName = (value: object): string => {
 
 const stableTokenSortKey = (value: StableQueryToken): string => JSON.stringify(value);
 
+const withCycleTracking = <T extends object>(
+  value: T,
+  active: WeakSet<object>,
+  visit: () => StableQueryToken,
+): StableQueryToken => {
+  if (active.has(value)) {
+    return ["cycle"];
+  }
+  active.add(value);
+  try {
+    return visit();
+  } finally {
+    active.delete(value);
+  }
+};
+
 const stableQueryValue = (value: unknown, active: WeakSet<object>): StableQueryToken => {
   if (value === null) {
     return ["null"];
@@ -96,22 +112,13 @@ const stableQueryValue = (value: unknown, active: WeakSet<object>): StableQueryT
     return ["function", stableFunctionName(value), stableObjectIdentity(value)];
   }
   if (Array.isArray(value)) {
-    if (active.has(value)) {
-      return ["cycle"];
-    }
-    active.add(value);
-    try {
-      return ["array", value.map((entry) => stableQueryValue(entry, active))];
-    } finally {
-      active.delete(value);
-    }
-  }
-  if (active.has(value)) {
-    return ["cycle"];
+    return withCycleTracking(value, active, () => [
+      "array",
+      value.map((entry) => stableQueryValue(entry, active)),
+    ]);
   }
   if (value instanceof Map) {
-    active.add(value);
-    try {
+    return withCycleTracking(value, active, () => {
       const entries: Array<StableMapEntry> = [];
       for (const [key, entry] of value.entries()) {
         entries.push([stableQueryValue(key, active), stableQueryValue(entry, active)]);
@@ -122,13 +129,10 @@ const stableQueryValue = (value: unknown, active: WeakSet<object>): StableQueryT
           stableTokenSortKey(left[0]).localeCompare(stableTokenSortKey(right[0])),
         ),
       ];
-    } finally {
-      active.delete(value);
-    }
+    });
   }
   if (value instanceof Set) {
-    active.add(value);
-    try {
+    return withCycleTracking(value, active, () => {
       const entries: Array<StableQueryToken> = [];
       for (const entry of value.values()) {
         entries.push(stableQueryValue(entry, active));
@@ -139,24 +143,17 @@ const stableQueryValue = (value: unknown, active: WeakSet<object>): StableQueryT
           stableTokenSortKey(left).localeCompare(stableTokenSortKey(right)),
         ),
       ];
-    } finally {
-      active.delete(value);
-    }
+    });
   }
   if (!isPlainObject(value)) {
     return ["nonPlainObject", stableObjectName(value), stableObjectIdentity(value)];
   }
-  active.add(value);
-  try {
-    return [
-      "object",
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, stableQueryValue(entry, active)]),
-    ];
-  } finally {
-    active.delete(value);
-  }
+  return withCycleTracking(value, active, () => [
+    "object",
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, stableQueryValue(entry, active)]),
+  ]);
 };
 
 export const stableQueryKey = (query: object): string =>

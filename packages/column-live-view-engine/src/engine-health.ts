@@ -1,8 +1,7 @@
-import type { LiveTopicSubscriber } from "./live-subscription";
 import { Effect } from "effect";
 import type { TopicRuntimeHealth } from "@view-server/config";
-
-type RowObject = object;
+import { collectTopicStoreHealth } from "./topic-store";
+import type { TopicStore } from "./topic-store";
 
 export type ColumnLiveViewTopicHealth = TopicRuntimeHealth;
 
@@ -14,14 +13,6 @@ export type ColumnLiveViewEngineHealth<Topics extends object = Record<string, ob
   };
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
-  readonly maxQueueDepth: number;
-  readonly backpressureEvents: number;
-};
-
-export type HealthTopicStoreState<Row extends RowObject> = {
-  readonly rows: ReadonlyMap<string, Row>;
-  readonly subscribers: ReadonlySet<LiveTopicSubscriber<Row>>;
-  readonly version: number;
   readonly maxQueueDepth: number;
   readonly backpressureEvents: number;
 };
@@ -41,8 +32,8 @@ function exactTopicHealth(
 }
 
 export const collectColumnLiveViewEngineHealth = Effect.fn("ColumnLiveViewEngine.health.collect")(
-  function* <Topics extends object, Row extends RowObject>(
-    stores: ReadonlyMap<Extract<keyof Topics, string>, HealthTopicStoreState<Row>>,
+  function* <Topics extends object>(
+    stores: ReadonlyMap<Extract<keyof Topics, string>, TopicStore>,
     engineState: EngineHealthRuntimeState,
   ) {
     const topics: Record<string, ColumnLiveViewTopicHealth> = {};
@@ -54,33 +45,27 @@ export const collectColumnLiveViewEngineHealth = Effect.fn("ColumnLiveViewEngine
     const engineVersion = engineState.version();
 
     for (const [topic, store] of stores) {
-      activeSubscriptions += store.subscribers.size;
-      let topicQueuedEvents = 0;
-      let topicMaxQueueDepth = store.maxQueueDepth;
-      let topicBackpressureEvents = store.backpressureEvents;
-
-      for (const subscriber of store.subscribers) {
-        const subscriberQueueDepth = yield* subscriber.queuedEvents;
-        topicQueuedEvents += subscriberQueueDepth;
-        topicMaxQueueDepth = Math.max(topicMaxQueueDepth, subscriber.maxQueueDepth);
-        topicBackpressureEvents += subscriber.backpressureEvents;
-      }
+      const topicHealth = yield* collectTopicStoreHealth(store, closed);
+      activeSubscriptions += topicHealth.activeSubscriptions;
+      const topicQueuedEvents = topicHealth.queuedEvents;
+      const topicMaxQueueDepth = topicHealth.maxQueueDepth;
+      const topicBackpressureEvents = topicHealth.backpressureEvents;
 
       queuedEvents += topicQueuedEvents;
       maxQueueDepth = Math.max(maxQueueDepth, topicMaxQueueDepth);
       backpressureEvents += topicBackpressureEvents;
       topics[topic] = {
-        status: closed ? "degraded" : "ready",
+        status: topicHealth.status,
         rowCount: store.rows.size,
         liveRowCount: store.rows.size,
         deletedRowCount: 0,
-        version: store.version,
+        version: topicHealth.version,
         lastMutationAt: null,
         mutationsPerSecond: 0,
         rowsPerSecond: 0,
         pendingMutationBatches: 0,
-        activeViews: store.subscribers.size,
-        activeSubscriptions: store.subscribers.size,
+        activeViews: topicHealth.activeViews,
+        activeSubscriptions: topicHealth.activeSubscriptions,
         queuedEvents: topicQueuedEvents,
         maxQueueDepth: topicMaxQueueDepth,
         backpressureEvents: topicBackpressureEvents,

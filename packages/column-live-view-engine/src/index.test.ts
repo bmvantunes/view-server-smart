@@ -19,7 +19,7 @@ import {
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
 } from "./index";
-import { rowsEqual } from "./row-values";
+import { cloneRecord, cloneRow, fieldValue, rowsEqual } from "./row-values";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -944,6 +944,29 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     }),
   );
 
+  it.effect("reports current queued events after subscribers consume snapshots", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      const firstSubscription = yield* engine.subscribe("orders", { select: ["id"] });
+      const secondSubscription = yield* engine.subscribe("orders", { select: ["id"] });
+      const takeFirst = yield* makeEventReader(firstSubscription);
+      const takeSecond = yield* makeEventReader(secondSubscription);
+
+      yield* takeFirst(1);
+      yield* takeSecond(1);
+
+      const health = yield* engine.health();
+      expect(health.activeSubscriptions).toBe(2);
+      expect(health.queuedEvents).toBe(0);
+      expect(health.topics["orders"].activeViews).toBe(1);
+      expect(health.topics["orders"].activeSubscriptions).toBe(2);
+      expect(health.topics["orders"].queuedEvents).toBe(0);
+
+      yield* firstSubscription.close();
+      yield* secondSubscription.close();
+    }),
+  );
+
   it.effect("emits publish, patch, and delete deltas that converge to fresh snapshots", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
@@ -1676,6 +1699,21 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 describe("ColumnLiveViewEngine validation and health", () => {
   it("treats rows with different selected column counts as different", () => {
     expect(rowsEqual({ id: "1" }, { id: "1", note: "new" })).toBe(false);
+  });
+
+  it("ignores inherited row properties", () => {
+    const inheritedRecord = Object.create({ inherited: "hidden" });
+    inheritedRecord["id"] = "1";
+    inheritedRecord["status"] = "open";
+
+    const inheritedRow = Object.create({ inherited: "hidden" });
+    inheritedRow["id"] = "1";
+    inheritedRow["status"] = "open";
+
+    expect(cloneRecord(inheritedRecord)).toStrictEqual({ id: "1", status: "open" });
+    expect(cloneRow(inheritedRow)).toStrictEqual({ id: "1", status: "open" });
+    expect(fieldValue(inheritedRow, "inherited")).toBeUndefined();
+    expect(rowsEqual(inheritedRow, { id: "1", status: "open" })).toBe(true);
   });
 
   it.effect("fails invalid row publishes with a typed schema error", () =>
