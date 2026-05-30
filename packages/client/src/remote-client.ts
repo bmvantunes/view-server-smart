@@ -323,7 +323,6 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
         const activeSubscriptions = Math.max(0, current.activeSubscriptions + delta);
         return {
           ...current,
-          activeViews: Math.max(0, current.activeViews + delta),
           activeSubscriptions,
         };
       });

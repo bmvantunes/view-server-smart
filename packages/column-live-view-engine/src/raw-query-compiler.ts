@@ -12,6 +12,7 @@ import {
 import type { QueryEvaluation, StoredRowOf } from "./query-result";
 
 type RowObject = object;
+const compiledRawQueryBrand: unique symbol = Symbol("CompiledRawQuery");
 
 export class InvalidQueryError extends Schema.TaggedErrorClass<InvalidQueryError>()(
   "InvalidQueryError",
@@ -42,6 +43,7 @@ export type RawQueryCompilerMetadata = {
 };
 
 export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject> = {
+  readonly [compiledRawQueryBrand]: true;
   readonly query: RuntimeRawQuery;
   readonly matches: (row: Row) => boolean;
   readonly compare: (left: StoredRowOf<Row>, right: StoredRowOf<Row>) => number;
@@ -604,6 +606,7 @@ const compileRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
 ): CompiledRawQuery<Row, ResultRow> => {
   const orderBy = query.orderBy ?? [];
   return {
+    [compiledRawQueryBrand]: true,
     query,
     matches: compileMatches(query.where),
     compare: (left, right) => compareRows(left, right, orderBy),

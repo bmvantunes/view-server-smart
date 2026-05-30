@@ -1,13 +1,9 @@
 import { Effect, Option } from "effect";
 import { isBigDecimal } from "effect/BigDecimal";
 import type { DeltaEvent, SnapshotEvent } from "@view-server/config";
-import {
-  evaluateCompiledRawQuery,
-  type CompiledRawQuery,
-  type RuntimeRawQuery,
-} from "./raw-query-compiler";
+import { type CompiledRawQuery, type RuntimeRawQuery } from "./raw-query-compiler";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
-import type { QueryEvaluation } from "./query-result";
+import type { QueryEvaluation, StoredRowOf } from "./query-result";
 import { isPlainRecord } from "./row-values";
 
 type RowObject = object;
@@ -18,7 +14,7 @@ type ActiveQueryStoreState = {
   readonly topic: string;
 };
 
-type RawQueryExecutionCursor<ResultRow extends RowObject> = {
+export type RawQueryExecutionCursor<ResultRow extends RowObject> = {
   evaluation: QueryEvaluation<ResultRow>;
 };
 
@@ -37,76 +33,143 @@ export type RawQueryExecution<ResultRow extends RowObject> = {
   ) => RawQueryExecutionUpdate<ResultRow>;
 };
 
+type ActiveQueryBaseExecution = {
+  readonly latest: () => ActiveQueryBaseEvaluation;
+};
+
 type RawQueryExecutionSlot = {
-  readonly execution: RawQueryExecution<object>;
+  readonly execution: ActiveQueryBaseExecution;
   refs: number;
 };
 
-const coerceRawQueryExecution = <ToResultRow extends RowObject, FromResultRow extends RowObject>(
-  execution: RawQueryExecution<FromResultRow>,
-): RawQueryExecution<ToResultRow> => {
-  // Internal cache seam: executions are shared by normalized runtime query shape and retyped per subscriber.
-  return execution as unknown as RawQueryExecution<ToResultRow>;
+type ActiveQueryBaseEvaluation = {
+  readonly keys: ReadonlyArray<string>;
+  readonly window: ReadonlyArray<StoredRowOf<object>>;
+  readonly totalRows: number;
+  readonly version: number;
 };
 
 type QueryExecutionCache = WeakMap<ActiveQueryStoreState, Map<string, RawQueryExecutionSlot>>;
 
 const activeQueryExecutionCache: QueryExecutionCache = new WeakMap();
 
+const objectIdentities = new WeakMap<object, number>();
+const symbolIdentities = new Map<symbol, number>();
+let nextObjectIdentity = 0;
+let nextSymbolIdentity = 0;
+
+type QueryValueToken =
+  | readonly ["null"]
+  | readonly ["undefined"]
+  | readonly ["boolean", boolean]
+  | readonly ["number", string]
+  | readonly ["string", string]
+  | readonly ["bigint", string]
+  | readonly ["bigDecimal", string]
+  | readonly ["symbol", number]
+  | readonly ["function", string, number]
+  | readonly ["array", ReadonlyArray<QueryValueToken>]
+  | readonly ["object", ReadonlyArray<readonly [string, QueryValueToken]>]
+  | readonly ["nonPlainObject", string, number];
+
+type QueryCacheToken = readonly [
+  "raw",
+  ReadonlyArray<readonly [string, QueryValueToken]>,
+  ReadonlyArray<readonly [string, "asc" | "desc"]>,
+  QueryValueToken,
+  QueryValueToken,
+];
+
+const stableObjectIdentity = (value: object): number => {
+  const existing = objectIdentities.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+  nextObjectIdentity += 1;
+  objectIdentities.set(value, nextObjectIdentity);
+  return nextObjectIdentity;
+};
+
+const stableSymbolIdentity = (value: symbol): number => {
+  const existing = symbolIdentities.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+  nextSymbolIdentity += 1;
+  symbolIdentities.set(value, nextSymbolIdentity);
+  return nextSymbolIdentity;
+};
+
+const stableObjectName = (value: object): string => Object.prototype.toString.call(value);
+
+const stableFunctionName = (value: { readonly name: string }): string =>
+  value.name === "" ? "anonymous" : value.name;
+
 const isRecordLike = (value: unknown): value is Record<string, unknown> =>
   isPlainRecord(value) || isBigDecimal(value);
 
-const encodeQueryValue = (value: unknown): string => {
-  if (isBigDecimal(value)) {
-    return `bigdecimal:${value.toString()}`;
+const stableNumberValue = (value: number): string => {
+  if (Object.is(value, -0)) {
+    return "-0";
   }
-  if (value === null || value === undefined) {
-    return `${value}`;
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(encodeQueryValue).join(",")}]`;
-  }
-  if (isRecordLike(value)) {
-    return `object({${Object.keys(value)
-      .toSorted()
-      .map((key) => `${key}:${encodeQueryValue(value[key])}`)
-      .join(",")}})`;
-  }
-  if (typeof value === "string") {
-    return `string:${JSON.stringify(value)}`;
-  }
-  if (typeof value === "number") {
-    if (Number.isNaN(value)) {
-      return "number:NaN";
-    }
-    if (!Number.isFinite(value)) {
-      return `number:${String(value)}`;
-    }
-    return `number:${value}`;
-  }
-  const fallback =
-    JSON.stringify(value, (_key, entry) =>
-      typeof entry === "bigint" ? entry.toString() : entry,
-    ) ?? "[unserializable]";
-  return `${typeof value}:${fallback}`;
+  return String(value);
 };
 
-const canonicalizeWhere = (where: Record<string, unknown>): string =>
-  `{${Object.keys(where)
+const encodeQueryValue = (value: unknown): QueryValueToken => {
+  if (isBigDecimal(value)) {
+    return ["bigDecimal", value.toString()];
+  }
+  if (value === null) {
+    return ["null"];
+  }
+  if (Array.isArray(value)) {
+    return ["array", value.map(encodeQueryValue)];
+  }
+  if (isRecordLike(value)) {
+    return [
+      "object",
+      Object.keys(value)
+        .toSorted()
+        .map((key) => [key, encodeQueryValue(value[key])]),
+    ];
+  }
+  switch (typeof value) {
+    case "string":
+      return ["string", value];
+    case "number":
+      return ["number", stableNumberValue(value)];
+    case "bigint":
+      return ["bigint", value.toString()];
+    case "boolean":
+      return ["boolean", value];
+    case "symbol":
+      return ["symbol", stableSymbolIdentity(value)];
+    case "function":
+      return ["function", stableFunctionName(value), stableObjectIdentity(value)];
+    case "object":
+      return ["nonPlainObject", stableObjectName(value), stableObjectIdentity(value)];
+  }
+  return ["undefined"];
+};
+
+const canonicalizeWhere = (
+  where: Record<string, unknown>,
+): ReadonlyArray<readonly [string, QueryValueToken]> =>
+  Object.keys(where)
     .toSorted()
-    .map((field) => `${field}:${encodeQueryValue(where[field])}`)
-    .join(",")}}`;
+    .map((field) => [field, encodeQueryValue(where[field])]);
 
 const queryCacheKey = (query: RuntimeRawQuery): string => {
-  const orderBy =
-    query.orderBy === undefined
-      ? "orderBy:"
-      : `orderBy:${query.orderBy.map((entry) => `${entry.field}:${entry.direction}`).join(";")}`;
-  const selectKey = `select:[${query.select.map(encodeQueryValue).join(",")}]`;
-  const whereKey = query.where === undefined ? "where:" : `where:${canonicalizeWhere(query.where)}`;
-  const offsetKey = query.offset === undefined ? "offset:" : `offset:${query.offset}`;
-  const limitKey = query.limit === undefined ? "limit:" : `limit:${query.limit}`;
-  return `${selectKey}|${whereKey}|${orderBy}|${offsetKey}|${limitKey}`;
+  const orderBy: ReadonlyArray<readonly [string, "asc" | "desc"]> =
+    query.orderBy === undefined ? [] : query.orderBy.map((entry) => [entry.field, entry.direction]);
+  const token: QueryCacheToken = [
+    "raw",
+    query.where === undefined ? [] : canonicalizeWhere(query.where),
+    orderBy,
+    encodeQueryValue(query.offset),
+    encodeQueryValue(query.limit),
+  ];
+  return JSON.stringify(token);
 };
 
 const getActiveQueryMap = (store: ActiveQueryStoreState): Map<string, RawQueryExecutionSlot> => {
@@ -131,44 +194,59 @@ const getActiveQueryEntry = <ResultRow extends RowObject>(
   return { map, key };
 };
 
-const evaluateQuery = <ResultRow extends RowObject>(
+const evaluateBaseQuery = (
   store: ActiveQueryStoreState,
-  compiled: CompiledRawQuery<object, ResultRow>,
-): QueryEvaluation<ResultRow> =>
-  evaluateCompiledRawQuery(
-    {
-      rows: store.rows,
-      version: store.version,
-    },
-    compiled,
+  compiled: CompiledRawQuery<object, object>,
+): ActiveQueryBaseEvaluation => {
+  const filtered = Array.from(store.rows, ([key, row]) => ({ key, row })).filter((entry) =>
+    compiled.matches(entry.row),
+  );
+  const ordered = filtered.toSorted(compiled.compare);
+  const offset = compiled.offset;
+  const window = ordered.slice(
+    offset,
+    compiled.limit === undefined ? undefined : offset + compiled.limit,
   );
 
-export const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.make")(function* <
-  ResultRow extends RowObject,
->(store: ActiveQueryStoreState, compiled: CompiledRawQuery<object, ResultRow>) {
-  let snapshot = {
-    evaluation: evaluateCompiledRawQuery(store, compiled),
+  return {
+    keys: window.map((entry) => entry.key),
+    window,
+    totalRows: filtered.length,
     version: store.version,
   };
+};
 
-  const latestEvaluation = () => {
-    if (snapshot.version !== store.version) {
-      snapshot = {
-        evaluation: evaluateQuery(store, compiled),
-        version: store.version,
-      };
-    }
-    return snapshot.evaluation;
+const projectBaseEvaluation = <ResultRow extends RowObject>(
+  compiled: CompiledRawQuery<object, ResultRow>,
+  evaluation: ActiveQueryBaseEvaluation,
+): QueryEvaluation<ResultRow> => {
+  const window = evaluation.window.map((entry) => ({
+    key: entry.key,
+    row: compiled.project(entry.row),
+  }));
+
+  return {
+    rows: window.map((entry) => entry.row),
+    keys: evaluation.keys,
+    window,
+    totalRows: evaluation.totalRows,
+    version: evaluation.version,
   };
+};
 
-  const createCursor = () => ({
-    evaluation: latestEvaluation(),
-  });
+const leaseRawQueryExecution = <ResultRow extends RowObject>(
+  store: ActiveQueryStoreState,
+  execution: ActiveQueryBaseExecution,
+  compiled: CompiledRawQuery<object, ResultRow>,
+): RawQueryExecution<ResultRow> => {
+  const latestEvaluation = () => projectBaseEvaluation(compiled, execution.latest());
 
-  return yield* Effect.succeed({
-    initial: (queryId: string) => snapshotEvent(store, queryId, latestEvaluation()),
-    createCursor,
-    next: (queryId: string, cursor: RawQueryExecutionCursor<ResultRow>) =>
+  return {
+    initial: (queryId) => snapshotEvent(store, queryId, latestEvaluation()),
+    createCursor: () => ({
+      evaluation: latestEvaluation(),
+    }),
+    next: (queryId, cursor) =>
       Effect.sync(() => {
         const previous = cursor.evaluation;
         const next = latestEvaluation();
@@ -179,8 +257,32 @@ export const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery
         cursor.evaluation = next;
         return Option.some(deltaEvent(store, queryId, previous.version, next, operations));
       }),
-  });
-});
+  };
+};
+
+export const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.make")(
+  (store: ActiveQueryStoreState, canonicalCompiled: CompiledRawQuery<object, object>) =>
+    Effect.sync(() => {
+      let snapshot = {
+        evaluation: evaluateBaseQuery(store, canonicalCompiled),
+        version: store.version,
+      };
+
+      const latest = () => {
+        if (snapshot.version !== store.version) {
+          snapshot = {
+            evaluation: evaluateBaseQuery(store, canonicalCompiled),
+            version: store.version,
+          };
+        }
+        return snapshot.evaluation;
+      };
+
+      return {
+        latest,
+      };
+    }),
+);
 
 export const acquireRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.acquire")(
   function* <ResultRow extends RowObject>(
@@ -192,40 +294,40 @@ export const acquireRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
     if (existing !== undefined) {
       const entry = existing;
       entry.refs += 1;
-      return yield* Effect.succeed(coerceRawQueryExecution<ResultRow, object>(entry.execution));
+      return leaseRawQueryExecution(store, entry.execution, compiled);
     }
 
     const execution = yield* makeRawQueryExecution(store, compiled);
     map.set(key, {
-      // Internal cache seam: store and later rebind execution type for each caller row projection.
-      execution: execution as unknown as RawQueryExecution<object>,
+      execution,
       refs: 1,
     });
-    return yield* Effect.succeed(coerceRawQueryExecution<ResultRow, ResultRow>(execution));
+    return leaseRawQueryExecution(store, execution, compiled);
   },
 );
 
 export const releaseRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.release")(
-  function* <ResultRow extends RowObject>(
+  <ResultRow extends RowObject>(
     store: ActiveQueryStoreState,
     compiled: CompiledRawQuery<object, ResultRow>,
-  ) {
-    const { map, key } = getActiveQueryEntry(store, compiled);
-    const existing = map.get(key);
-    if (existing === undefined) {
-      return yield* Effect.succeed(undefined);
-    }
-    const entry = existing;
-    if (entry.refs > 1) {
-      entry.refs -= 1;
-      return yield* Effect.succeed(undefined);
-    }
-    map.delete(key);
-    if (map.size === 0) {
-      activeQueryExecutionCache.delete(store);
-    }
-    return yield* Effect.succeed(undefined);
-  },
+  ) =>
+    Effect.sync(() => {
+      const { map, key } = getActiveQueryEntry(store, compiled);
+      const existing = map.get(key);
+      if (existing === undefined) {
+        return undefined;
+      }
+      const entry = existing;
+      if (entry.refs > 1) {
+        entry.refs -= 1;
+        return undefined;
+      }
+      map.delete(key);
+      if (map.size === 0) {
+        activeQueryExecutionCache.delete(store);
+      }
+      return undefined;
+    }),
 );
 
 export const clearStoreRawQueryExecutions = Effect.fn(
@@ -234,4 +336,10 @@ export const clearStoreRawQueryExecutions = Effect.fn(
   Effect.sync(() => {
     activeQueryExecutionCache.delete(store);
   }),
+);
+
+export const activeStoreRawQueryExecutionCount = Effect.fn(
+  "ColumnLiveViewEngine.activeQuery.countStore",
+)((store: ActiveQueryStoreState) =>
+  Effect.sync(() => activeQueryExecutionCache.get(store)?.size ?? 0),
 );

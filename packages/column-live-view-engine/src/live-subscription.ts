@@ -79,9 +79,7 @@ export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscrip
     );
     const cursor = execution.createCursor();
 
-    const releaseExecution = Effect.gen(function* () {
-      yield* release;
-    });
+    const releaseExecution = release;
 
     const subscriber: LiveTopicSubscriber = {
       topic: store.topic,

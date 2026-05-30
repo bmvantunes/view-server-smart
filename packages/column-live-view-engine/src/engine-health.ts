@@ -64,7 +64,7 @@ export const collectColumnLiveViewEngineHealth = Effect.fn("ColumnLiveViewEngine
         mutationsPerSecond: 0,
         rowsPerSecond: 0,
         pendingMutationBatches: 0,
-        activeViews: topicHealth.activeSubscriptions,
+        activeViews: topicHealth.activeViews,
         activeSubscriptions: topicHealth.activeSubscriptions,
         queuedEvents: topicQueuedEvents,
         maxQueueDepth: topicMaxQueueDepth,

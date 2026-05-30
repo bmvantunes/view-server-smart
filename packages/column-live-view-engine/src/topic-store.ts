@@ -1,6 +1,6 @@
 import { Effect, Schema, Semaphore } from "effect";
 import type { StatusEvent, TopicRuntimeHealth } from "@view-server/config";
-import { clearStoreRawQueryExecutions } from "./active-query";
+import { activeStoreRawQueryExecutionCount, clearStoreRawQueryExecutions } from "./active-query";
 import { createTopicHealthLedger } from "./topic-health-ledger";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
 import { cloneRow, fieldValue, isPlainRecord } from "./row-values";
@@ -81,33 +81,41 @@ const commitTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.commit")(fun
 });
 
 export const collectTopicStoreHealth = Effect.fn("ColumnLiveViewEngine.topicStore.health")(
-  (store: TopicStore, closed: boolean) =>
-    Effect.sync(() => {
-      const totals = store.healthLedger.snapshot();
-      const rowCount = store.rows.size;
-      const status: TopicRuntimeHealth["status"] = closed ? "degraded" : "ready";
+  function* (store: TopicStore, closed: boolean) {
+    const totals = store.healthLedger.snapshot();
+    let queuedEvents = 0;
 
-      return {
-        topic: store.topic,
-        status,
-        rowCount,
-        liveRowCount: rowCount,
-        deletedRowCount: 0,
-        version: store.version,
-        lastMutationAt: null,
-        mutationsPerSecond: 0,
-        rowsPerSecond: 0,
-        pendingMutationBatches: 0,
-        activeViews: totals.activeSubscriptions,
-        activeSubscriptions: totals.activeSubscriptions,
-        queuedEvents: totals.queuedEvents,
-        maxQueueDepth: totals.maxQueueDepth,
-        backpressureEvents: totals.backpressureEvents,
-        memoryBytes: 0,
-        tombstoneCount: 0,
-        compactionPending: false,
-      } satisfies TopicStoreHealthView;
-    }),
+    for (const subscriber of store.subscribers) {
+      const currentQueuedEvents = yield* subscriber.queuedEvents;
+      queuedEvents += currentQueuedEvents;
+    }
+
+    const activeSubscriptions = store.subscribers.size;
+    const activeViews = yield* activeStoreRawQueryExecutionCount(store);
+    const rowCount = store.rows.size;
+    const status: TopicRuntimeHealth["status"] = closed ? "degraded" : "ready";
+
+    return {
+      topic: store.topic,
+      status,
+      rowCount,
+      liveRowCount: rowCount,
+      deletedRowCount: 0,
+      version: store.version,
+      lastMutationAt: null,
+      mutationsPerSecond: 0,
+      rowsPerSecond: 0,
+      pendingMutationBatches: 0,
+      activeViews,
+      activeSubscriptions,
+      queuedEvents,
+      maxQueueDepth: totals.maxQueueDepth,
+      backpressureEvents: totals.backpressureEvents,
+      memoryBytes: 0,
+      tombstoneCount: 0,
+      compactionPending: false,
+    } satisfies TopicStoreHealthView;
+  },
 );
 
 export const registerTopicStoreSubscription = Effect.fn(
@@ -159,11 +167,7 @@ export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset"
       }
       store.subscribers.clear();
       store.healthLedger.reset();
-      yield* clearStoreRawQueryExecutions({
-        rows: store.rows,
-        version: store.version,
-        topic: store.topic,
-      });
+      yield* clearStoreRawQueryExecutions(store);
     }),
   );
 });
@@ -179,11 +183,7 @@ export const closeTopicStoreSubscriptions = Effect.fn(
         store.healthLedger.closeSubscription(subscriber);
       }
       store.subscribers.clear();
-      yield* clearStoreRawQueryExecutions({
-        rows: store.rows,
-        version: store.version,
-        topic: store.topic,
-      });
+      yield* clearStoreRawQueryExecutions(store);
     }),
   );
 });
