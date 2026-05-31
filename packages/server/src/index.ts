@@ -34,8 +34,8 @@ export type ViewServerWebSocketServerInput<Topics extends TopicDefinitions> = {
 export type ViewServerWebSocketServerOptions = {
   readonly host?: string;
   readonly port?: number;
-  readonly path?: HttpRouter.PathInput;
-  readonly healthPath?: HttpRouter.PathInput;
+  readonly path?: `/${string}`;
+  readonly healthPath?: `/${string}`;
 };
 
 export type ViewServerWebSocketServer = {
@@ -110,7 +110,7 @@ const makeHandlers = <const Topics extends TopicDefinitions>(
 
 const makeHealthRoute = <const Topics extends TopicDefinitions>(
   input: ViewServerWebSocketServerInput<Topics>,
-  path: HttpRouter.PathInput,
+  path: `/${string}`,
 ) =>
   HttpRouter.add(
     "GET",

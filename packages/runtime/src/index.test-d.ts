@@ -88,12 +88,27 @@ describe("runtime type contracts", () => {
       // @ts-expect-error runtime paths must be absolute HTTP paths.
       rpcPath: "runtime-rpc",
     });
+    const invalidHealthPathOptions = makeViewServerRuntime(viewServer, {
+      // @ts-expect-error runtime health paths must be absolute HTTP paths.
+      healthPath: "runtime-health",
+    });
+    const invalidWildcardRpcPathOptions = makeViewServerRuntime(viewServer, {
+      // @ts-expect-error runtime RPC path must be a concrete slash-prefixed client URL path.
+      rpcPath: "*",
+    });
+    const invalidWildcardHealthPathOptions = makeViewServerRuntime(viewServer, {
+      // @ts-expect-error runtime health path must be a concrete slash-prefixed client URL path.
+      healthPath: "*",
+    });
     expectTypeOf(invalidPublish).not.toBeAny();
     expectTypeOf(invalidSubscribe).not.toBeAny();
     expectTypeOf(invalidTopicPublish).not.toBeAny();
     expectTypeOf(invalidSnapshot).not.toBeAny();
     expectTypeOf(invalidOptions).not.toBeAny();
     expectTypeOf(invalidPathOptions).not.toBeAny();
+    expectTypeOf(invalidHealthPathOptions).not.toBeAny();
+    expectTypeOf(invalidWildcardRpcPathOptions).not.toBeAny();
+    expectTypeOf(invalidWildcardHealthPathOptions).not.toBeAny();
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("port");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("path");
   });
