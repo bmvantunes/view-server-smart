@@ -18,9 +18,9 @@ catalog:
   "@vitest/runner": 4.1.6
   effect: 4.0.0-beta.70
   typescript: 6.0.3
-  vite: npm:@voidzero-dev/vite-plus-core@latest
-  vitest: npm:@voidzero-dev/vite-plus-test@latest
-  vite-plus: latest
+  vite: npm:@voidzero-dev/vite-plus-core@0.1.23
+  vitest: npm:@voidzero-dev/vite-plus-test@0.1.23
+  vite-plus: 0.1.23
   "@effect/atom-react": 4.0.0-beta.70
   scheduler: 0.27.0
   vitest-browser-react: 2.2.0
