@@ -30,7 +30,7 @@ export type ViewServerRuntimeTopicDefinitions = TopicDefinitions &
     }
   >;
 
-type RuntimeHttpPath = `/${string}` | "*";
+type RuntimeHttpPath = `/${string}`;
 
 export type ViewServerRuntimeOptions = {
   readonly host?: string;
