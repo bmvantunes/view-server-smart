@@ -2,6 +2,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import type {
   TopicDefinitions,
   ViewServerConfig,
+  ViewServerHealth,
   ViewServerRuntimeClient,
 } from "@view-server/config";
 import { VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC } from "@view-server/config";
@@ -16,7 +17,7 @@ import {
   viewServerEncodeLiveEvent,
 } from "@view-server/protocol";
 import { Context, Effect, Layer, ManagedRuntime, Stream } from "effect";
-import { HttpRouter, HttpServer, HttpServerError } from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerError, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as Http from "node:http";
 
@@ -34,12 +35,39 @@ export type ViewServerWebSocketServerOptions = {
   readonly host?: string;
   readonly port?: number;
   readonly path?: HttpRouter.PathInput;
+  readonly healthPath?: HttpRouter.PathInput;
 };
 
 export type ViewServerWebSocketServer = {
   readonly url: string;
+  readonly healthUrl: string;
   readonly close: Effect.Effect<void>;
 };
+
+export type Jsonify<T> = T extends bigint
+  ? string
+  : T extends string | number | boolean | null
+    ? T
+    : T extends ReadonlyArray<infer Item>
+      ? ReadonlyArray<Jsonify<Item>>
+      : T extends object
+        ? { readonly [Key in keyof T]: Jsonify<T[Key]> }
+        : never;
+
+export type ViewServerHealthHttpJson<Topics extends TopicDefinitions = TopicDefinitions> = Jsonify<
+  ViewServerHealth<Topics>
+>;
+
+const jsonStringify = (value: unknown): string =>
+  JSON.stringify(value, (_key, nextValue: unknown) =>
+    typeof nextValue === "bigint" ? nextValue.toString() : nextValue,
+  );
+
+const jsonResponse = (status: number, value: unknown): HttpServerResponse.HttpServerResponse =>
+  HttpServerResponse.text(jsonStringify(value), {
+    status,
+    contentType: "application/json",
+  });
 
 const makeHandlers = <const Topics extends TopicDefinitions>(
   config: ViewServerConfig<Topics>,
@@ -80,6 +108,18 @@ const makeHandlers = <const Topics extends TopicDefinitions>(
       ),
   });
 
+const makeHealthRoute = <const Topics extends TopicDefinitions>(
+  input: ViewServerWebSocketServerInput<Topics>,
+  path: HttpRouter.PathInput,
+) =>
+  HttpRouter.add(
+    "GET",
+    path,
+    Effect.sync(() => input.liveClient.health.value).pipe(
+      Effect.map((health) => jsonResponse(health.status === "ready" ? 200 : 503, health)),
+    ),
+  );
+
 export const makeViewServerWebSocketServer: <const Topics extends TopicDefinitions>(
   config: ViewServerConfig<Topics>,
   input: ViewServerWebSocketServerInput<Topics>,
@@ -92,15 +132,18 @@ export const makeViewServerWebSocketServer: <const Topics extends TopicDefinitio
   options: ViewServerWebSocketServerOptions = {},
 ) {
   const path = options.path ?? "/rpc";
+  const healthPath = options.healthPath ?? "/health";
   const protocol = RpcServer.layerProtocolWebsocket({ path }).pipe(Layer.provide(HttpRouter.layer));
   const handlers = ViewServerRpcs.toLayer(makeHandlers(config, input));
+  const healthRoute = makeHealthRoute(input, healthPath);
+  const httpApp = Layer.merge(protocol, healthRoute);
   const rpcLayer = RpcServer.layer(ViewServerRpcs, {
     disableFatalDefects: true,
   }).pipe(
     Layer.provide(handlers),
     Layer.provideMerge(protocol),
     Layer.provide(
-      HttpRouter.serve(protocol, {
+      HttpRouter.serve(httpApp, {
         disableListenLog: true,
         disableLogger: true,
       }),
@@ -120,8 +163,10 @@ export const makeViewServerWebSocketServer: <const Topics extends TopicDefinitio
   const serverUrl = httpUrl.startsWith("http://0.0.0.0:")
     ? `ws://127.0.0.1:${httpUrl.slice("http://0.0.0.0:".length)}`
     : httpUrl.replace("http://", "ws://");
+  const publicHttpUrl = serverUrl.replace("ws://", "http://");
   return {
     url: `${serverUrl}${path}`,
+    healthUrl: `${publicHttpUrl}${healthPath}`,
     close: managedRuntime.disposeEffect,
   };
 });

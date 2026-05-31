@@ -1014,9 +1014,12 @@ Recommended packages:
 ```txt
 packages/config
 packages/column-live-view-engine
+packages/client
+packages/protocol
+packages/in-memory
+packages/server
 packages/runtime
 packages/react
-packages/testing
 apps/examples
 ```
 
@@ -1024,9 +1027,12 @@ Responsibilities:
 
 - `packages/config`: `defineViewServerConfig`, query DSL types, schema/topic typing, shared public types.
 - `packages/column-live-view-engine`: in-memory columnar store, snapshot, subscribe, deltas, grouped aggregates, health core.
-- `packages/runtime`: server runtime, Effect RPC/WebSocket adapter, HTTP `/health`, `/metrics`, TCP publish, Kafka ingest, graceful shutdown.
-- `packages/react`: `ViewServerProvider`, `createInMemoryViewServer`, `ViewServerInMemoryProvider`, `useLiveQuery`, `useViewServerHealth`.
-- `packages/testing`: test helpers only, no production-only shortcuts.
+- `packages/client`: transport-neutral live client contracts, query state, and remote client entrypoints.
+- `packages/protocol`: Effect RPC WebSocket wire schema and encode/decode boundary.
+- `packages/in-memory`: in-process runtime client backed by the engine.
+- `packages/server`: Effect RPC WebSocket server and same-server HTTP health endpoint.
+- `packages/runtime`: production composition of in-memory runtime, server, health URL, lifecycle, and future Kafka/TCP/gRPC ingestion adapters.
+- `packages/react`: production React provider/hooks plus a separate testing entrypoint for the in-memory provider.
 - `apps/examples`: minimal real app proving browser usage and runtime URL injection.
 
 All packages must have explicit public exports. Do not leak internals accidentally.

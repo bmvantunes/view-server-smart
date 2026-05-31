@@ -2,25 +2,28 @@
 
 ## Remote React provider
 
-Server code exposes a runtime through Effect RPC WebSocket:
+Server code starts a runtime through Effect RPC WebSocket and same-server
+`GET /health`:
 
 ```ts
-import { createInMemoryViewServer } from "@view-server/in-memory";
-import { createViewServerWebSocketServer } from "@view-server/server";
+import { createViewServerRuntime } from "@view-server/runtime";
 import { Effect } from "effect";
 import { viewServer } from "./view-server-config";
 
-const runtime = createInMemoryViewServer(viewServer);
-
-const server = await Effect.runPromise(
-  createViewServerWebSocketServer(viewServer, {
-    liveClient: runtime.liveClient,
-    runtime: runtime.client,
+const runtime = await Effect.runPromise(
+  createViewServerRuntime(viewServer, {
+    host: "127.0.0.1",
+    websocketPort: 8080,
   }),
 );
 
-console.log(server.url);
+console.log(runtime.url);
+console.log(runtime.healthUrl);
 ```
+
+`runtime.healthUrl` serves the cached runtime health snapshot for deployment
+readiness checks. Internal `bigint` health fields, such as Kafka lag, are encoded
+as decimal strings in the JSON response.
 
 Browser React code keeps using the normal provider and hooks:
 

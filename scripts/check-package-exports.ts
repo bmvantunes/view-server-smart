@@ -14,8 +14,10 @@ import * as protocolPackage from "@view-server/protocol";
 import type { ViewServerWireEvent } from "@view-server/protocol";
 import { createViewServerReact } from "@view-server/react";
 import { createInMemoryViewServerReact } from "@view-server/react/testing";
+import { createViewServerRuntime } from "@view-server/runtime";
+import type { ViewServerRuntime } from "@view-server/runtime";
 import { createViewServerWebSocketServer } from "@view-server/server";
-import type { ViewServerWebSocketServer } from "@view-server/server";
+import type { ViewServerHealthHttpJson, ViewServerWebSocketServer } from "@view-server/server";
 import * as configPackage from "@view-server/config";
 import * as healthPackage from "@view-server/config/health";
 import * as kafkaPackage from "@view-server/config/kafka";
@@ -24,6 +26,7 @@ import * as queryPackage from "@view-server/config/query";
 import * as runtimePackage from "@view-server/config/runtime";
 import * as reactPackage from "@view-server/react";
 import * as reactTestingPackage from "@view-server/react/testing";
+import * as runtimeRootPackage from "@view-server/runtime";
 import * as serverPackage from "@view-server/server";
 
 const requireExport = (moduleName: string, moduleValue: object, exportName: string) => {
@@ -73,6 +76,8 @@ rejectExport("@view-server/in-memory", inMemoryPackage, "makeHealthRefreshSchedu
 requireExport("@view-server/react", reactPackage, "createViewServerReact");
 rejectExport("@view-server/react", reactPackage, "createInMemoryViewServerReact");
 requireExport("@view-server/react/testing", reactTestingPackage, "createInMemoryViewServerReact");
+requireExport("@view-server/runtime", runtimeRootPackage, "makeViewServerRuntime");
+requireExport("@view-server/runtime", runtimeRootPackage, "createViewServerRuntime");
 requireExport("@view-server/server", serverPackage, "makeViewServerWebSocketServer");
 requireExport("@view-server/server", serverPackage, "createViewServerWebSocketServer");
 
@@ -84,6 +89,8 @@ const _healthType: ViewServerHealth<{ readonly orders: { readonly id: string } }
   undefined;
 const _subscriptionType: LiveSubscription<{ readonly id: string }> | undefined = undefined;
 const _serverType: ViewServerWebSocketServer | undefined = undefined;
+const _runtimeType: ViewServerRuntime<never> | undefined = undefined;
+const _healthHttpJsonType: ViewServerHealthHttpJson | undefined = undefined;
 const _wireEventType: ViewServerWireEvent | undefined = undefined;
 const _mappingInputType:
   | KafkaMappingInput<
@@ -102,9 +109,12 @@ void _queryType;
 void _healthType;
 void _subscriptionType;
 void _serverType;
+void _runtimeType;
+void _healthHttpJsonType;
 void _wireEventType;
 void _mappingInputType;
 void createInMemoryViewServer;
 void createViewServerReact;
 void createInMemoryViewServerReact;
+void createViewServerRuntime;
 void createViewServerWebSocketServer;

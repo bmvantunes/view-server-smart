@@ -1,8 +1,12 @@
 import { NodeSocket } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import type { ViewServerLiveEvent } from "@view-server/client";
+import type { ViewServerLiveClient, ViewServerLiveEvent } from "@view-server/client";
 import { makeViewServerClient } from "@view-server/client/remote";
-import { defineViewServerConfig, VIEW_SERVER_HEALTH_TOPIC } from "@view-server/config";
+import {
+  defineViewServerConfig,
+  VIEW_SERVER_HEALTH_TOPIC,
+  type ViewServerHealth,
+} from "@view-server/config";
 import { createInMemoryViewServer } from "@view-server/in-memory";
 import { ViewServerRpcErrorSchema, ViewServerRpcs } from "@view-server/protocol";
 import {
@@ -16,6 +20,7 @@ import {
   Stream,
 } from "effect";
 import { fromStringUnsafe } from "effect/BigDecimal";
+import * as AtomRef from "effect/unstable/reactivity/AtomRef";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import { makeViewServerWebSocketServer } from "./index";
@@ -34,6 +39,39 @@ const Quote = Schema.Struct({
   id: Schema.String,
   price: Schema.BigDecimal,
 });
+
+const HealthJson = Schema.Struct({
+  status: Schema.String,
+  engine: Schema.Struct({
+    topics: Schema.Struct({
+      orders: Schema.Struct({
+        rowCount: Schema.Number,
+      }),
+    }),
+  }),
+});
+
+const HealthKafkaJson = Schema.Struct({
+  status: Schema.String,
+  kafka: Schema.Struct({
+    topics: Schema.Struct({
+      source_orders: Schema.Struct({
+        regions: Schema.Struct({
+          usa: Schema.Struct({
+            consumerLagMessages: Schema.String,
+          }),
+        }),
+      }),
+    }),
+  }),
+});
+
+class ServerTestJsonParseError extends Schema.TaggedErrorClass<ServerTestJsonParseError>()(
+  "ServerTestJsonParseError",
+  {
+    cause: Schema.Unknown,
+  },
+) {}
 
 const BadJsonField = Schema.String.pipe(
   Schema.encodeTo(Schema.Any, {
@@ -109,6 +147,16 @@ const makeRawRpcClient = Effect.fn("ViewServerServer.test.rawRpcClient.make")(fu
     close: runtime.disposeEffect,
     rpc: Context.get(context, RawViewServerRpcClient),
   };
+});
+
+const fetchJson = Effect.fn("ViewServerServer.test.fetchJson")(function* (url: string) {
+  const response = yield* Effect.promise(() => fetch(url));
+  const text = yield* Effect.promise(() => response.text());
+  const value = yield* Effect.try({
+    try: (): unknown => JSON.parse(text),
+    catch: (cause) => new ServerTestJsonParseError({ cause }),
+  });
+  return { response, value };
 });
 
 describe("@view-server/server", () => {
@@ -190,6 +238,101 @@ describe("@view-server/server", () => {
       expect(afterClose.engine.topics.orders.activeSubscriptions).toBe(0);
 
       yield* client.close;
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("serves GET /health beside the websocket RPC endpoint", () =>
+    Effect.gen(function* () {
+      const inMemory = createInMemoryViewServer(viewServer);
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: inMemory.client,
+      });
+
+      yield* inMemory.client.publish("orders", order("a", 10));
+
+      const readyHealth = yield* fetchJson(server.healthUrl);
+      const readyBody = yield* Schema.decodeUnknownEffect(HealthJson)(readyHealth.value);
+      expect(readyHealth.response.status).toBe(200);
+      expect(readyBody.status).toBe("ready");
+      expect(readyBody.engine.topics.orders.rowCount).toBe(1);
+
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("serves cached health snapshots without rebuilding runtime health", () =>
+    Effect.gen(function* () {
+      const inMemory = createInMemoryViewServer(viewServer);
+      const baseHealth = yield* inMemory.client.health();
+      const degradedHealth: ViewServerHealth<typeof viewServer.topics> = {
+        ...baseHealth,
+        status: "degraded",
+        kafka: {
+          regions: {},
+          topics: {
+            source_orders: {
+              status: "ready",
+              sourceTopic: "source_orders",
+              viewServerTopic: "orders",
+              regions: {
+                usa: {
+                  connected: true,
+                  assignedPartitions: 1,
+                  messagesPerSecond: 0,
+                  bytesPerSecond: 0,
+                  decodedMessagesPerSecond: 0,
+                  decodeFailuresPerSecond: 0,
+                  lastMessageAt: null,
+                  lastCommitAt: null,
+                  consumerLagMessages: 42n,
+                  consumerLagMs: null,
+                  lagSampledAt: null,
+                  highWatermarkOffset: null,
+                  committedOffset: null,
+                  lastError: null,
+                },
+              },
+            },
+          },
+        },
+      };
+      const cachedHealth = AtomRef.make<ViewServerHealth<typeof viewServer.topics>>(degradedHealth);
+      const liveClient: ViewServerLiveClient<typeof viewServer.topics> = {
+        ...inMemory.liveClient,
+        health: cachedHealth,
+      };
+      let runtimeHealthCalls = 0;
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient,
+        runtime: {
+          health: () =>
+            Effect.sync(() => {
+              runtimeHealthCalls += 1;
+              return baseHealth;
+            }),
+        },
+      });
+
+      const firstHealth = yield* fetchJson(server.healthUrl);
+      const firstBody = yield* Schema.decodeUnknownEffect(HealthKafkaJson)(firstHealth.value);
+      expect(firstHealth.response.status).toBe(503);
+      expect(firstBody.status).toBe("degraded");
+      expect(firstBody.kafka.topics.source_orders.regions.usa.consumerLagMessages).toBe("42");
+      expect(runtimeHealthCalls).toBe(0);
+
+      yield* Effect.sync(() => {
+        cachedHealth.set(baseHealth);
+      });
+      const secondHealth = yield* fetchJson(server.healthUrl);
+      const secondBody = yield* Schema.decodeUnknownEffect(HealthJson)(secondHealth.value);
+      expect(secondHealth.response.status).toBe(200);
+      expect(secondBody.status).toBe("ready");
+      expect(runtimeHealthCalls).toBe(0);
+
       yield* server.close;
       yield* inMemory.close;
     }),
