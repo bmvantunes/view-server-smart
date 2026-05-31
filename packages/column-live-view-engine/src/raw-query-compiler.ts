@@ -53,8 +53,8 @@ export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject>
 };
 
 export type RawQueryRowStore<Row extends RowObject> = {
-  readonly rows: ReadonlyMap<string, Row>;
-  readonly version: number;
+  readonly rows: () => ReadonlyMap<string, Row>;
+  readonly version: () => number;
 };
 
 type FilterObject = {
@@ -629,7 +629,7 @@ export const evaluateCompiledRawQuery = <Row extends RowObject, ResultRow extend
   store: RawQueryRowStore<Row>,
   compiled: CompiledRawQuery<Row, ResultRow>,
 ): QueryEvaluation<ResultRow> => {
-  const filtered = Array.from(store.rows, ([key, row]) => ({ key, row })).filter((entry) =>
+  const filtered = Array.from(store.rows(), ([key, row]) => ({ key, row })).filter((entry) =>
     compiled.matches(entry.row),
   );
   const ordered = filtered.toSorted(compiled.compare);
@@ -648,6 +648,6 @@ export const evaluateCompiledRawQuery = <Row extends RowObject, ResultRow extend
     keys: window.map((entry) => entry.key),
     window,
     totalRows: filtered.length,
-    version: store.version,
+    version: store.version(),
   };
 };

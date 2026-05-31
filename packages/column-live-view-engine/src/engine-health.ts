@@ -56,22 +56,22 @@ export const collectColumnLiveViewEngineHealth = Effect.fn("ColumnLiveViewEngine
       backpressureEvents += topicBackpressureEvents;
       topics[topic] = {
         status: topicHealth.status,
-        rowCount: store.rows.size,
-        liveRowCount: store.rows.size,
-        deletedRowCount: 0,
+        rowCount: topicHealth.rowCount,
+        liveRowCount: topicHealth.liveRowCount,
+        deletedRowCount: topicHealth.deletedRowCount,
         version: topicHealth.version,
-        lastMutationAt: null,
-        mutationsPerSecond: 0,
-        rowsPerSecond: 0,
-        pendingMutationBatches: 0,
+        lastMutationAt: topicHealth.lastMutationAt,
+        mutationsPerSecond: topicHealth.mutationsPerSecond,
+        rowsPerSecond: topicHealth.rowsPerSecond,
+        pendingMutationBatches: topicHealth.pendingMutationBatches,
         activeViews: topicHealth.activeViews,
         activeSubscriptions: topicHealth.activeSubscriptions,
         queuedEvents: topicQueuedEvents,
         maxQueueDepth: topicMaxQueueDepth,
         backpressureEvents: topicBackpressureEvents,
-        memoryBytes: 0,
-        tombstoneCount: 0,
-        compactionPending: false,
+        memoryBytes: topicHealth.memoryBytes,
+        tombstoneCount: topicHealth.tombstoneCount,
+        compactionPending: topicHealth.compactionPending,
       };
     }
 

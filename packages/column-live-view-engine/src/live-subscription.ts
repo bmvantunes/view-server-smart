@@ -1,5 +1,5 @@
 import type { DeltaEvent, SnapshotEvent, StatusEvent } from "@view-server/config";
-import { Cause, Effect, Option, Queue, Stream } from "effect";
+import { Cause, Effect, Exit, Option, Queue, Stream } from "effect";
 import type { RawQueryExecution } from "./active-query";
 import type { TopicStore } from "./topic-store";
 import {
@@ -7,6 +7,7 @@ import {
   reportTopicStoreSubscriptionBackpressure,
   trackTopicStoreSubscriptionQueueDepth,
   unregisterTopicStoreSubscription,
+  withTopicStoreMutation,
 } from "./topic-store";
 
 type RowObject = object;
@@ -41,6 +42,47 @@ export type LiveSubscription<ResultRow extends RowObject> = {
   readonly close: () => Effect.Effect<void, never>;
 };
 
+type ClosableSubscription = {
+  readonly close: () => Effect.Effect<void, never>;
+};
+
+type LiveSubscriptionHandoffOptions = {
+  readonly beforeReturn?: Effect.Effect<void>;
+};
+
+type MarkAcquiredSubscription<ResultRow extends RowObject> = (
+  subscription: LiveSubscription<ResultRow>,
+) => Effect.Effect<void>;
+
+export const closeInterruptedAcquiredSubscription = Effect.fn(
+  "ColumnLiveViewEngine.liveSubscription.closeInterruptedAcquired",
+)(function* (exit: Exit.Exit<unknown, unknown>, subscription: ClosableSubscription | undefined) {
+  if (!Exit.hasInterrupts(exit) || subscription === undefined) {
+    return;
+  }
+  yield* subscription.close();
+});
+
+export const acquireLiveSubscriptionHandoff = Effect.fn(
+  "ColumnLiveViewEngine.liveSubscription.acquireHandoff",
+)(function* <ResultRow extends RowObject, Error, Requirements>(
+  acquire: (
+    markAcquired: MarkAcquiredSubscription<ResultRow>,
+  ) => Effect.Effect<LiveSubscription<ResultRow>, Error, Requirements>,
+  options: LiveSubscriptionHandoffOptions = {},
+) {
+  let acquiredSubscription: ClosableSubscription | undefined;
+  const markAcquired: MarkAcquiredSubscription<ResultRow> = (subscription) =>
+    Effect.sync(() => {
+      acquiredSubscription = subscription;
+    });
+
+  return yield* acquire(markAcquired).pipe(
+    Effect.tap(() => options.beforeReturn ?? Effect.void),
+    Effect.onExit((exit) => closeInterruptedAcquiredSubscription(exit, acquiredSubscription)),
+  );
+});
+
 const backpressureStatusEvent = (
   store: { readonly topic: string },
   subscriber: { readonly queryId: string },
@@ -61,13 +103,17 @@ const closeForBackpressure = Effect.fn(
   queue: Queue.Queue<LiveSubscriptionEvent<ResultRow>, Cause.Done>,
   release: Effect.Effect<void>,
 ) {
-  subscriber.closed = true;
-  yield* reportTopicStoreSubscriptionBackpressure(store, subscriber);
-  yield* unregisterTopicStoreSubscription(store, subscriber);
-  yield* release;
-  yield* Queue.takeAll(queue).pipe(Effect.ignore);
-  yield* Queue.offer(queue, backpressureStatusEvent(store, subscriber)).pipe(Effect.ignore);
-  yield* Queue.end(queue);
+  yield* Effect.uninterruptible(
+    Effect.gen(function* () {
+      subscriber.closed = true;
+      yield* reportTopicStoreSubscriptionBackpressure(store, subscriber);
+      yield* unregisterTopicStoreSubscription(store, subscriber);
+      yield* release;
+      yield* Queue.takeAll(queue).pipe(Effect.ignore);
+      yield* Queue.offer(queue, backpressureStatusEvent(store, subscriber)).pipe(Effect.ignore);
+      yield* Queue.end(queue);
+    }),
+  );
 });
 
 export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscription.make")(
@@ -122,7 +168,8 @@ export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscrip
     yield* trackTopicStoreSubscriptionQueueDepth(store, subscriber, yield* Queue.size(queue));
 
     const close = Effect.fn("ColumnLiveViewEngine.liveSubscription.close")(function* () {
-      yield* store.mutationSemaphore.withPermits(1)(
+      yield* withTopicStoreMutation(
+        store,
         Effect.gen(function* () {
           if (!subscriber.closed) {
             subscriber.closed = true;

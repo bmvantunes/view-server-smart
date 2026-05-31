@@ -2,15 +2,15 @@ import { Effect, Option } from "effect";
 import { isBigDecimal } from "effect/BigDecimal";
 import type { DeltaEvent, SnapshotEvent } from "@view-server/config";
 import { type CompiledRawQuery, type RuntimeRawQuery } from "./raw-query-compiler";
+import type { RawQueryRowStore } from "./raw-query-compiler";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 import type { QueryEvaluation, StoredRowOf } from "./query-result";
 import { isPlainRecord } from "./row-values";
 
 type RowObject = object;
 
-type ActiveQueryStoreState = {
-  readonly rows: ReadonlyMap<string, object>;
-  readonly version: number;
+export type ActiveQueryStoreState = RawQueryRowStore<object> & {
+  readonly identity: object;
   readonly topic: string;
 };
 
@@ -49,7 +49,7 @@ type ActiveQueryBaseEvaluation = {
   readonly version: number;
 };
 
-type QueryExecutionCache = WeakMap<ActiveQueryStoreState, Map<string, RawQueryExecutionSlot>>;
+type QueryExecutionCache = WeakMap<object, Map<string, RawQueryExecutionSlot>>;
 
 const activeQueryExecutionCache: QueryExecutionCache = new WeakMap();
 
@@ -173,12 +173,12 @@ const queryCacheKey = (query: RuntimeRawQuery): string => {
 };
 
 const getActiveQueryMap = (store: ActiveQueryStoreState): Map<string, RawQueryExecutionSlot> => {
-  const existing = activeQueryExecutionCache.get(store);
+  const existing = activeQueryExecutionCache.get(store.identity);
   if (existing !== undefined) {
     return existing;
   }
   const created = new Map<string, RawQueryExecutionSlot>();
-  activeQueryExecutionCache.set(store, created);
+  activeQueryExecutionCache.set(store.identity, created);
   return created;
 };
 
@@ -198,7 +198,9 @@ const evaluateBaseQuery = (
   store: ActiveQueryStoreState,
   compiled: CompiledRawQuery<object, object>,
 ): ActiveQueryBaseEvaluation => {
-  const filtered = Array.from(store.rows, ([key, row]) => ({ key, row })).filter((entry) =>
+  const storeRows = store.rows();
+  const storeVersion = store.version();
+  const filtered = Array.from(storeRows, ([key, row]) => ({ key, row })).filter((entry) =>
     compiled.matches(entry.row),
   );
   const ordered = filtered.toSorted(compiled.compare);
@@ -212,7 +214,7 @@ const evaluateBaseQuery = (
     keys: window.map((entry) => entry.key),
     window,
     totalRows: filtered.length,
-    version: store.version,
+    version: storeVersion,
   };
 };
 
@@ -265,14 +267,15 @@ export const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery
     Effect.sync(() => {
       let snapshot = {
         evaluation: evaluateBaseQuery(store, canonicalCompiled),
-        version: store.version,
+        version: store.version(),
       };
 
       const latest = () => {
-        if (snapshot.version !== store.version) {
+        const storeVersion = store.version();
+        if (snapshot.version !== storeVersion) {
           snapshot = {
             evaluation: evaluateBaseQuery(store, canonicalCompiled),
-            version: store.version,
+            version: storeVersion,
           };
         }
         return snapshot.evaluation;
@@ -324,7 +327,7 @@ export const releaseRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
       }
       map.delete(key);
       if (map.size === 0) {
-        activeQueryExecutionCache.delete(store);
+        activeQueryExecutionCache.delete(store.identity);
       }
       return undefined;
     }),
@@ -334,12 +337,12 @@ export const clearStoreRawQueryExecutions = Effect.fn(
   "ColumnLiveViewEngine.activeQuery.clearStore",
 )((store: ActiveQueryStoreState) =>
   Effect.sync(() => {
-    activeQueryExecutionCache.delete(store);
+    activeQueryExecutionCache.delete(store.identity);
   }),
 );
 
 export const activeStoreRawQueryExecutionCount = Effect.fn(
   "ColumnLiveViewEngine.activeQuery.countStore",
 )((store: ActiveQueryStoreState) =>
-  Effect.sync(() => activeQueryExecutionCache.get(store)?.size ?? 0),
+  Effect.sync(() => activeQueryExecutionCache.get(store.identity)?.size ?? 0),
 );

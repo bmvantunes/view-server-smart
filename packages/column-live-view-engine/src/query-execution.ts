@@ -8,7 +8,7 @@ import {
   type CompiledRawQuery,
 } from "./raw-query-compiler";
 import { liveQueryResult, type QueryEvaluation } from "./query-result";
-import type { TopicStore } from "./topic-store";
+import { topicStoreRawQueryMetadata, topicStoreReadModel, type TopicStore } from "./topic-store";
 
 type RowObject = object;
 
@@ -36,7 +36,7 @@ export const prepareExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecu
     }
     const compiled = yield* prepareRawQuery<object, ResultRow>(
       topic,
-      store.rawQueryMetadata,
+      topicStoreRawQueryMetadata(store),
       query,
     );
     return {
@@ -50,13 +50,7 @@ export const evaluateExecutableQuery = <ResultRow extends RowObject>(
   store: TopicStore,
   executable: ExecutableQuery<ResultRow>,
 ): QueryEvaluation<ResultRow> =>
-  evaluateCompiledRawQuery(
-    {
-      rows: store.rows,
-      version: store.version,
-    },
-    executable.compiled,
-  );
+  evaluateCompiledRawQuery(topicStoreReadModel(store), executable.compiled);
 
 export const snapshotExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecution.snapshot")(
   function* <ResultRow extends RowObject>(topic: string, store: TopicStore, query: unknown) {
@@ -76,13 +70,14 @@ export const subscribeExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExe
     },
   ) {
     const executable = yield* prepareExecutableQuery<ResultRow>(topic, store, query);
-    const execution = yield* acquireRawQueryExecution(store, executable.compiled);
+    const storeReadModel = topicStoreReadModel(store);
+    const execution = yield* acquireRawQueryExecution(storeReadModel, executable.compiled);
     return yield* makeLiveSubscription({
       store,
       queryId: input.queryId,
       execution,
       queueCapacity: input.queueCapacity,
-      release: releaseRawQueryExecution(store, executable.compiled),
+      release: releaseRawQueryExecution(storeReadModel, executable.compiled),
     });
   },
 );

@@ -6,6 +6,7 @@ import type {
   DecodableTopicDefinitions,
 } from "./engine-contract";
 import { EngineClosedError, InvalidRowError, InvalidTopicError } from "./engine-errors";
+import { acquireLiveSubscriptionHandoff, type LiveSubscription } from "./live-subscription";
 import { collectColumnLiveViewEngineHealth } from "./engine-health";
 import { snapshotExecutableQuery, subscribeExecutableQuery } from "./query-execution";
 import {
@@ -16,6 +17,7 @@ import {
   publishTopicStoreRows,
   resetTopicStore,
   TopicStore,
+  withTopicStoreMutation,
 } from "./topic-store";
 
 export { InvalidQueryError } from "./raw-query-compiler";
@@ -168,16 +170,30 @@ class InMemoryColumnLiveViewEngine<
   >(this: InMemoryColumnLiveViewEngine<Topics>, topic: Topic, query: Query & ExactRawQuery<TopicRow<Topics, Topic>, Query>) {
     yield* this.ensureOpen();
     const store = yield* this.getStore(topic);
-    const subscription = yield* store.mutationSemaphore.withPermits(1)(
-      Effect.gen({ self: this }, function* () {
-        yield* this.ensureOpen();
-        const queryId = `query-${this.nextQueryId}`;
-        this.nextQueryId += 1;
-        return yield* subscribeExecutableQuery<
-          LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>
-        >(topic, store, query, { queryId, queueCapacity: this.subscriptionQueueCapacity });
-      }),
-    );
+    type ResultRow = LiveQueryRow<TopicRow<Topics, typeof topic>, typeof query>;
+    const acquireSubscription = (
+      markAcquired: (subscription: LiveSubscription<ResultRow>) => Effect.Effect<void>,
+    ) =>
+      withTopicStoreMutation(
+        store,
+        Effect.gen({ self: this }, function* () {
+          yield* this.ensureOpen();
+          const queryId = `query-${this.nextQueryId}`;
+          this.nextQueryId += 1;
+          const acquiredSubscription = yield* subscribeExecutableQuery<ResultRow>(
+            topic,
+            store,
+            query,
+            {
+              queryId,
+              queueCapacity: this.subscriptionQueueCapacity,
+            },
+          );
+          yield* markAcquired(acquiredSubscription);
+          return acquiredSubscription;
+        }),
+      );
+    const subscription = yield* acquireLiveSubscriptionHandoff(acquireSubscription);
 
     return {
       events: subscription.events,
@@ -198,22 +214,28 @@ class InMemoryColumnLiveViewEngine<
     { self: this },
     function* (this: InMemoryColumnLiveViewEngine<Topics>) {
       yield* this.ensureOpen();
-      for (const store of this.stores.values()) {
-        yield* resetTopicStore(store);
-      }
-      this.engineVersion = 0;
+      yield* Effect.uninterruptible(
+        Effect.gen({ self: this }, function* () {
+          for (const store of this.stores.values()) {
+            yield* resetTopicStore(store);
+          }
+          this.engineVersion = 0;
+        }),
+      );
     },
   );
 
   readonly close: ColumnLiveViewEngine<Topics>["close"] = Effect.fn("ColumnLiveViewEngine.close")(
     { self: this },
     function* (this: InMemoryColumnLiveViewEngine<Topics>) {
-      if (!this.closed) {
-        this.closed = true;
-        for (const store of this.stores.values()) {
-          yield* closeTopicStoreSubscriptions(store);
-        }
-      }
+      yield* Effect.uninterruptible(
+        Effect.gen({ self: this }, function* () {
+          this.closed = true;
+          for (const store of this.stores.values()) {
+            yield* closeTopicStoreSubscriptions(store);
+          }
+        }),
+      );
     },
   );
 }

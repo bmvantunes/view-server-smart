@@ -6,7 +6,7 @@ import {
   type SnapshotEvent,
   type StatusEvent,
 } from "@view-server/config";
-import { Cause, Effect, Schema, Scope, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope, Stream } from "effect";
 import { fromStringUnsafe } from "effect/BigDecimal";
 import {
   createColumnLiveViewEngine,
@@ -19,7 +19,23 @@ import {
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
 } from "./index";
+import { acquireRawQueryExecution, activeStoreRawQueryExecutionCount } from "./active-query";
+import {
+  acquireLiveSubscriptionHandoff,
+  closeInterruptedAcquiredSubscription,
+  type LiveTopicSubscriber,
+} from "./live-subscription";
+import { prepareRawQuery } from "./raw-query-compiler";
 import { cloneRecord, cloneRow, fieldValue, rowsEqual } from "./row-values";
+import {
+  closeTopicStoreSubscriptions,
+  collectTopicStoreHealth,
+  registerTopicStoreSubscription,
+  resetTopicStore,
+  TopicStore,
+  topicStoreRawQueryMetadata,
+  topicStoreReadModel,
+} from "./topic-store";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -964,6 +980,54 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
       yield* firstSubscription.close();
       yield* secondSubscription.close();
+
+      const closed = yield* engine.health();
+      expect(closed.topics["orders"].activeViews).toBe(0);
+    }),
+  );
+
+  it.effect("keeps shared active-query projections separate across deltas", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [order("a", "open", 10, 1), order("b", "open", 20, 2)]);
+
+      const baseQuery = {
+        where: {
+          status: "open",
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+      } satisfies Omit<RawQuery<OrderRow>, "select">;
+      const idSubscription = yield* engine.subscribe("orders", {
+        ...baseQuery,
+        select: ["id"],
+      });
+      const priceSubscription = yield* engine.subscribe("orders", {
+        ...baseQuery,
+        select: ["id", "price"],
+      });
+      const takeId = yield* makeEventReader(idSubscription);
+      const takePrice = yield* makeEventReader(priceSubscription);
+      let idState = stateFromSnapshot(firstEvent(yield* takeId(1)));
+      let priceState = stateFromSnapshot(firstEvent(yield* takePrice(1)));
+
+      const shared = yield* engine.health();
+      expect(shared.topics["orders"].activeViews).toBe(1);
+
+      yield* engine.patch("orders", "a", { price: 30 });
+      idState = expectDeltaConverges(idState, firstEvent(yield* takeId(1)), [
+        { id: "b" },
+        { id: "a" },
+      ]);
+      priceState = expectDeltaConverges(priceState, firstEvent(yield* takePrice(1)), [
+        { id: "b", price: 20 },
+        { id: "a", price: 30 },
+      ]);
+
+      yield* idSubscription.close();
+      yield* priceSubscription.close();
+
+      const closed = yield* engine.health();
+      expect(closed.topics["orders"].activeViews).toBe(0);
     }),
   );
 
@@ -1066,6 +1130,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
       const closed = yield* engine.health();
       expect(closed.topics["orders"].activeSubscriptions).toBe(0);
+      expect(closed.topics["orders"].activeViews).toBe(0);
       expect(closed.activeSubscriptions).toBe(0);
     }),
   );
@@ -1112,6 +1177,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
       const health = yield* engine.health();
       expect(health.topics["orders"].activeSubscriptions).toBe(0);
+      expect(health.topics["orders"].activeViews).toBe(0);
       expect(health.activeSubscriptions).toBe(0);
     }),
   );
@@ -1139,6 +1205,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
       const health = yield* engine.health();
       expect(health.topics["orders"].activeSubscriptions).toBe(0);
+      expect(health.topics["orders"].activeViews).toBe(0);
       expect(health.activeSubscriptions).toBe(0);
     }),
   );
@@ -1158,7 +1225,169 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       const health = yield* engine.health();
       expect(health.status).toBe("stopping");
       expect(health.topics["orders"].activeSubscriptions).toBe(0);
+      expect(health.topics["orders"].activeViews).toBe(0);
       expect(health.activeSubscriptions).toBe(0);
+    }),
+  );
+
+  it.effect("only closes acquired subscriptions for interrupted exits", () =>
+    Effect.gen(function* () {
+      let closeCount = 0;
+      const subscription = {
+        events: Stream.empty,
+        close: () =>
+          Effect.sync(() => {
+            closeCount += 1;
+          }),
+      };
+
+      yield* closeInterruptedAcquiredSubscription(Exit.succeed(undefined), subscription);
+      yield* closeInterruptedAcquiredSubscription(Exit.interrupt(1), undefined);
+      expect(closeCount).toBe(0);
+
+      yield* closeInterruptedAcquiredSubscription(Exit.interrupt(1), subscription);
+      expect(closeCount).toBe(1);
+    }),
+  );
+
+  it.effect("closes acquired subscriptions when handoff is interrupted", () =>
+    Effect.gen(function* () {
+      const acquired = yield* Deferred.make<void>();
+      const keepHandoffOpen = yield* Deferred.make<void>();
+      let closeCount = 0;
+      const subscription = {
+        events: Stream.empty,
+        close: () =>
+          Effect.sync(() => {
+            closeCount += 1;
+          }),
+      };
+
+      const handoffFiber = yield* Effect.forkChild(
+        acquireLiveSubscriptionHandoff(
+          (markAcquired) =>
+            Effect.gen(function* () {
+              yield* markAcquired(subscription);
+              return subscription;
+            }),
+          {
+            beforeReturn: Effect.gen(function* () {
+              yield* Deferred.succeed(acquired, undefined);
+              yield* Deferred.await(keepHandoffOpen);
+            }),
+          },
+        ),
+      );
+
+      yield* Deferred.await(acquired);
+      yield* Fiber.interrupt(handoffFiber);
+      expect(closeCount).toBe(1);
+    }),
+  );
+
+  it.effect("closes acquired subscriptions when acquisition exits interrupted", () =>
+    Effect.gen(function* () {
+      const acquired = yield* Deferred.make<void>();
+      let closeCount = 0;
+      const subscription = {
+        events: Stream.empty,
+        close: () =>
+          Effect.sync(() => {
+            closeCount += 1;
+          }),
+      };
+
+      const handoffFiber = yield* Effect.forkChild(
+        acquireLiveSubscriptionHandoff((markAcquired) =>
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* markAcquired(subscription);
+              yield* Deferred.succeed(acquired, undefined);
+              yield* Effect.sleep("10 millis");
+              return subscription;
+            }),
+          ),
+        ),
+      );
+
+      yield* Deferred.await(acquired);
+      yield* Fiber.interrupt(handoffFiber);
+      expect(closeCount).toBe(1);
+    }),
+  );
+
+  it.effect("interrupted topic-store close still releases subscribers and active queries", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      const compiled = yield* prepareRawQuery("orders", topicStoreRawQueryMetadata(store), {
+        select: ["id"],
+      });
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), compiled);
+
+      const closeStarted = yield* Deferred.make<void>();
+      const subscriber: LiveTopicSubscriber = {
+        topic: "orders",
+        queryId: "query-close",
+        notify: () => Effect.void,
+        queuedEvents: Effect.succeed(0),
+        end: Effect.void,
+        closeWithStatus: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(closeStarted, undefined);
+            yield* Effect.sleep("10 millis");
+          }),
+        maxQueueDepth: 0,
+        backpressureEvents: 0,
+        closed: false,
+      };
+      yield* registerTopicStoreSubscription(store, subscriber);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
+
+      const closeFiber = yield* Effect.forkChild(closeTopicStoreSubscriptions(store));
+      yield* Deferred.await(closeStarted);
+      yield* Fiber.interrupt(closeFiber);
+
+      const health = yield* collectTopicStoreHealth(store, false);
+      expect(health.activeSubscriptions).toBe(0);
+      expect(health.activeViews).toBe(0);
+    }),
+  );
+
+  it.effect("interrupted topic-store reset still releases subscribers and active queries", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      const compiled = yield* prepareRawQuery("orders", topicStoreRawQueryMetadata(store), {
+        select: ["id"],
+      });
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), compiled);
+
+      const closeStarted = yield* Deferred.make<void>();
+      const subscriber: LiveTopicSubscriber = {
+        topic: "orders",
+        queryId: "query-reset",
+        notify: () => Effect.void,
+        queuedEvents: Effect.succeed(0),
+        end: Effect.void,
+        closeWithStatus: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(closeStarted, undefined);
+            yield* Effect.sleep("10 millis");
+          }),
+        maxQueueDepth: 0,
+        backpressureEvents: 0,
+        closed: false,
+      };
+      yield* registerTopicStoreSubscription(store, subscriber);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
+
+      const resetFiber = yield* Effect.forkChild(resetTopicStore(store));
+      yield* Deferred.await(closeStarted);
+      yield* Fiber.interrupt(resetFiber);
+
+      const health = yield* collectTopicStoreHealth(store, false);
+      expect(health.activeSubscriptions).toBe(0);
+      expect(health.activeViews).toBe(0);
+      expect(health.version).toBe(0);
     }),
   );
 
@@ -1628,6 +1857,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(health.activeSubscriptions).toBe(0);
       expect(health.backpressureEvents).toBe(1);
       expect(health.topics["orders"].activeSubscriptions).toBe(0);
+      expect(health.topics["orders"].activeViews).toBe(0);
       expect(health.topics["orders"].backpressureEvents).toBe(1);
       expect(health.topics["orders"].maxQueueDepth).toBe(1);
 
@@ -1680,6 +1910,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       const health = yield* engine.health();
       expect(health.version).toBe(0);
       expect(health.activeSubscriptions).toBe(0);
+      expect(health.topics["orders"].activeViews).toBe(0);
     }),
   );
 

@@ -7,7 +7,12 @@ import {
   releaseRawQueryExecution,
 } from "./active-query";
 import { prepareRawQuery } from "./raw-query-compiler";
-import { publishTopicStoreRow, TopicStore } from "./topic-store";
+import {
+  publishTopicStoreRow,
+  TopicStore,
+  topicStoreRawQueryMetadata,
+  topicStoreReadModel,
+} from "./topic-store";
 
 const invalidRow = (_topic: string, message: string): Error => new Error(message);
 
@@ -46,7 +51,7 @@ describe("column-live-view-engine active query execution", () => {
         invalidRow,
       );
 
-      const compiled = yield* prepareRawQuery("scores", store.rawQueryMetadata, {
+      const compiled = yield* prepareRawQuery("scores", topicStoreRawQueryMetadata(store), {
         select: ["id", "score", "count", "value"],
         where: {
           status: "open",
@@ -59,9 +64,9 @@ describe("column-live-view-engine active query execution", () => {
         ],
       });
 
-      const firstExecution = yield* acquireRawQueryExecution(store, compiled);
-      const secondExecution = yield* acquireRawQueryExecution(store, compiled);
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(1);
+      const firstExecution = yield* acquireRawQueryExecution(topicStoreReadModel(store), compiled);
+      const secondExecution = yield* acquireRawQueryExecution(topicStoreReadModel(store), compiled);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
 
       const firstCursor = firstExecution.createCursor();
       const secondCursor = secondExecution.createCursor();
@@ -94,20 +99,26 @@ describe("column-live-view-engine active query execution", () => {
       expect(afterPublishFirst._tag).toBe("Some");
       expect(afterPublishSecond._tag).toBe("Some");
 
-      yield* releaseRawQueryExecution(store, compiled);
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(1);
-      const afterRefcountDecrement = yield* acquireRawQueryExecution(store, compiled);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), compiled);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
+      const afterRefcountDecrement = yield* acquireRawQueryExecution(
+        topicStoreReadModel(store),
+        compiled,
+      );
       expect(afterRefcountDecrement.initial("query-c").totalRows).toBe(2);
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(1);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
 
-      yield* releaseRawQueryExecution(store, compiled);
-      yield* releaseRawQueryExecution(store, compiled);
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(0);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), compiled);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), compiled);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(0);
 
-      const afterRefcountExhausted = yield* acquireRawQueryExecution(store, compiled);
+      const afterRefcountExhausted = yield* acquireRawQueryExecution(
+        topicStoreReadModel(store),
+        compiled,
+      );
       expect(afterRefcountExhausted.initial("query-d").totalRows).toBe(2);
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(1);
-      yield* releaseRawQueryExecution(store, compiled);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), compiled);
     }),
   );
 
@@ -126,34 +137,45 @@ describe("column-live-view-engine active query execution", () => {
       yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
       yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
 
-      const idOnly = yield* prepareRawQuery("projection-sharing", store.rawQueryMetadata, {
-        select: ["id"],
-        where: {
-          status: "open",
+      const idOnly = yield* prepareRawQuery(
+        "projection-sharing",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
         },
-        orderBy: [{ field: "score", direction: "desc" }],
-      });
-      const idAndScore = yield* prepareRawQuery("projection-sharing", store.rawQueryMetadata, {
-        select: ["id", "score"],
-        where: {
-          status: "open",
+      );
+      const idAndScore = yield* prepareRawQuery(
+        "projection-sharing",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
         },
-        orderBy: [{ field: "score", direction: "desc" }],
-      });
+      );
 
-      const idOnlyExecution = yield* acquireRawQueryExecution(store, idOnly);
-      const idAndScoreExecution = yield* acquireRawQueryExecution(store, idAndScore);
+      const idOnlyExecution = yield* acquireRawQueryExecution(topicStoreReadModel(store), idOnly);
+      const idAndScoreExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(store),
+        idAndScore,
+      );
 
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(1);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
       expect(idOnlyExecution.initial("ids").rows).toStrictEqual([{ id: "b" }, { id: "a" }]);
       expect(idAndScoreExecution.initial("scores").rows).toStrictEqual([
         { id: "b", score: 2 },
         { id: "a", score: 1 },
       ]);
 
-      yield* releaseRawQueryExecution(store, idOnly);
-      yield* releaseRawQueryExecution(store, idAndScore);
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(0);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), idOnly);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), idAndScore);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(0);
     }),
   );
 
@@ -165,14 +187,14 @@ describe("column-live-view-engine active query execution", () => {
         "id",
         () => {},
       );
-      const compiled = yield* prepareRawQuery("numbers", store.rawQueryMetadata, {
+      const compiled = yield* prepareRawQuery("numbers", topicStoreRawQueryMetadata(store), {
         select: ["id"],
         where: {
           score: 1,
         },
       });
 
-      yield* releaseRawQueryExecution(store, compiled);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), compiled);
     }),
   );
 
@@ -205,65 +227,115 @@ describe("column-live-view-engine active query execution", () => {
         invalidRow,
       );
 
-      const infFilter = yield* prepareRawQuery("numbers", numericStore.rawQueryMetadata, {
-        select: ["id", "score"],
-        where: {
-          score: Number.POSITIVE_INFINITY,
+      const infFilter = yield* prepareRawQuery(
+        "numbers",
+        topicStoreRawQueryMetadata(numericStore),
+        {
+          select: ["id", "score"],
+          where: {
+            score: Number.POSITIVE_INFINITY,
+          },
         },
-      });
-      const nanFilter = yield* prepareRawQuery("numbers", numericStore.rawQueryMetadata, {
-        select: ["id", "score"],
-        where: {
-          score: Number.NaN,
+      );
+      const nanFilter = yield* prepareRawQuery(
+        "numbers",
+        topicStoreRawQueryMetadata(numericStore),
+        {
+          select: ["id", "score"],
+          where: {
+            score: Number.NaN,
+          },
         },
-      });
-      const zeroFilter = yield* prepareRawQuery("numbers", numericStore.rawQueryMetadata, {
-        select: ["id", "score"],
-        where: {
-          score: 10,
+      );
+      const zeroFilter = yield* prepareRawQuery(
+        "numbers",
+        topicStoreRawQueryMetadata(numericStore),
+        {
+          select: ["id", "score"],
+          where: {
+            score: 10,
+          },
         },
-      });
-      const positiveZeroFilter = yield* prepareRawQuery("numbers", numericStore.rawQueryMetadata, {
-        select: ["id", "score"],
-        where: {
-          score: 0,
+      );
+      const positiveZeroFilter = yield* prepareRawQuery(
+        "numbers",
+        topicStoreRawQueryMetadata(numericStore),
+        {
+          select: ["id", "score"],
+          where: {
+            score: 0,
+          },
         },
-      });
-      const negativeZeroFilter = yield* prepareRawQuery("numbers", numericStore.rawQueryMetadata, {
-        select: ["id", "score"],
-        where: {
-          score: -0,
+      );
+      const negativeZeroFilter = yield* prepareRawQuery(
+        "numbers",
+        topicStoreRawQueryMetadata(numericStore),
+        {
+          select: ["id", "score"],
+          where: {
+            score: -0,
+          },
         },
-      });
-      const offsetFilter = yield* prepareRawQuery("numbers", numericStore.rawQueryMetadata, {
-        select: ["id", "score"],
-        offset: 1,
-      });
-      const bigIntFilter = yield* prepareRawQuery("bigints", bigintStore.rawQueryMetadata, {
-        select: ["id", "amount"],
-        where: {
-          amount: 3n,
+      );
+      const offsetFilter = yield* prepareRawQuery(
+        "numbers",
+        topicStoreRawQueryMetadata(numericStore),
+        {
+          select: ["id", "score"],
+          offset: 1,
         },
-      });
-      const decimalFilter = yield* prepareRawQuery("decimals", decimalStore.rawQueryMetadata, {
-        select: ["id", "price"],
-        where: {
-          price: fromStringUnsafe("1.23"),
+      );
+      const bigIntFilter = yield* prepareRawQuery(
+        "bigints",
+        topicStoreRawQueryMetadata(bigintStore),
+        {
+          select: ["id", "amount"],
+          where: {
+            amount: 3n,
+          },
         },
-      });
+      );
+      const decimalFilter = yield* prepareRawQuery(
+        "decimals",
+        topicStoreRawQueryMetadata(decimalStore),
+        {
+          select: ["id", "price"],
+          where: {
+            price: fromStringUnsafe("1.23"),
+          },
+        },
+      );
 
-      const infExecution = yield* acquireRawQueryExecution(numericStore, infFilter);
-      const nanExecution = yield* acquireRawQueryExecution(numericStore, nanFilter);
-      const zeroExecution = yield* acquireRawQueryExecution(numericStore, zeroFilter);
-      yield* acquireRawQueryExecution(numericStore, positiveZeroFilter);
-      yield* acquireRawQueryExecution(numericStore, negativeZeroFilter);
-      const offsetExecution = yield* acquireRawQueryExecution(numericStore, offsetFilter);
-      const bigintExecution = yield* acquireRawQueryExecution(bigintStore, bigIntFilter);
-      const decimalExecution = yield* acquireRawQueryExecution(decimalStore, decimalFilter);
+      const infExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(numericStore),
+        infFilter,
+      );
+      const nanExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(numericStore),
+        nanFilter,
+      );
+      const zeroExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(numericStore),
+        zeroFilter,
+      );
+      yield* acquireRawQueryExecution(topicStoreReadModel(numericStore), positiveZeroFilter);
+      yield* acquireRawQueryExecution(topicStoreReadModel(numericStore), negativeZeroFilter);
+      const offsetExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(numericStore),
+        offsetFilter,
+      );
+      const bigintExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(bigintStore),
+        bigIntFilter,
+      );
+      const decimalExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(decimalStore),
+        decimalFilter,
+      );
 
-      expect(yield* activeStoreRawQueryExecutionCount(numericStore)).toBe(6);
-      expect(yield* activeStoreRawQueryExecutionCount(bigintStore)).toBe(1);
-      expect(yield* activeStoreRawQueryExecutionCount(decimalStore)).toBe(1);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(numericStore))).toBe(6);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(bigintStore))).toBe(1);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(decimalStore))).toBe(1);
 
       const infCursor = infExecution.createCursor();
       const nanCursor = nanExecution.createCursor();
@@ -286,14 +358,14 @@ describe("column-live-view-engine active query execution", () => {
       expect((yield* bigintExecution.next("q", bigintCursor))._tag).toBe("None");
       expect((yield* decimalExecution.next("q", decimalCursor))._tag).toBe("None");
 
-      yield* releaseRawQueryExecution(numericStore, infFilter);
-      yield* releaseRawQueryExecution(numericStore, nanFilter);
-      yield* releaseRawQueryExecution(numericStore, zeroFilter);
-      yield* releaseRawQueryExecution(numericStore, positiveZeroFilter);
-      yield* releaseRawQueryExecution(numericStore, negativeZeroFilter);
-      yield* releaseRawQueryExecution(numericStore, offsetFilter);
-      yield* releaseRawQueryExecution(bigintStore, bigIntFilter);
-      yield* releaseRawQueryExecution(decimalStore, decimalFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(numericStore), infFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(numericStore), nanFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(numericStore), zeroFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(numericStore), positiveZeroFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(numericStore), negativeZeroFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(numericStore), offsetFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(bigintStore), bigIntFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(decimalStore), decimalFilter);
     }),
   );
 
@@ -327,44 +399,71 @@ describe("column-live-view-engine active query execution", () => {
         invalidRow,
       );
 
-      const undefinedFilter = yield* prepareRawQuery("events", eventStore.rawQueryMetadata, {
-        select: ["id", "label"],
-        where: {
-          label: undefined,
+      const undefinedFilter = yield* prepareRawQuery(
+        "events",
+        topicStoreRawQueryMetadata(eventStore),
+        {
+          select: ["id", "label"],
+          where: {
+            label: undefined,
+          },
         },
-      });
-      const nullFilter = yield* prepareRawQuery("events", eventStore.rawQueryMetadata, {
+      );
+      const nullFilter = yield* prepareRawQuery("events", topicStoreRawQueryMetadata(eventStore), {
         select: ["id", "label"],
         where: {
           label: null,
         },
       });
-      const arrayFilter = yield* prepareRawQuery("events", eventStore.rawQueryMetadata, {
+      const arrayFilter = yield* prepareRawQuery("events", topicStoreRawQueryMetadata(eventStore), {
         select: ["id", "tags"],
         where: {
           tags: ["open", "closed"],
         },
       });
-      const objectFilter = yield* prepareRawQuery("events", eventStore.rawQueryMetadata, {
-        select: ["id", "metadata"],
-        where: {
-          metadata: { kind: "test", scope: "global" },
+      const objectFilter = yield* prepareRawQuery(
+        "events",
+        topicStoreRawQueryMetadata(eventStore),
+        {
+          select: ["id", "metadata"],
+          where: {
+            metadata: { kind: "test", scope: "global" },
+          },
         },
-      });
-      const booleanFilter = yield* prepareRawQuery("events", eventStore.rawQueryMetadata, {
-        select: ["id", "active"],
-        where: {
-          active: true,
+      );
+      const booleanFilter = yield* prepareRawQuery(
+        "events",
+        topicStoreRawQueryMetadata(eventStore),
+        {
+          select: ["id", "active"],
+          where: {
+            active: true,
+          },
         },
-      });
+      );
 
-      const undefinedExecution = yield* acquireRawQueryExecution(eventStore, undefinedFilter);
-      const nullExecution = yield* acquireRawQueryExecution(eventStore, nullFilter);
-      const arrayExecution = yield* acquireRawQueryExecution(eventStore, arrayFilter);
-      const objectExecution = yield* acquireRawQueryExecution(eventStore, objectFilter);
-      const booleanExecution = yield* acquireRawQueryExecution(eventStore, booleanFilter);
+      const undefinedExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(eventStore),
+        undefinedFilter,
+      );
+      const nullExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(eventStore),
+        nullFilter,
+      );
+      const arrayExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(eventStore),
+        arrayFilter,
+      );
+      const objectExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(eventStore),
+        objectFilter,
+      );
+      const booleanExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(eventStore),
+        booleanFilter,
+      );
 
-      expect(yield* activeStoreRawQueryExecutionCount(eventStore)).toBe(5);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(eventStore))).toBe(5);
 
       expect(undefinedExecution.initial("query").totalRows).toBe(0);
       expect(nullExecution.initial("query").totalRows).toBe(0);
@@ -384,11 +483,11 @@ describe("column-live-view-engine active query execution", () => {
       expect((yield* objectExecution.next("query", objectCursor))._tag).toBe("None");
       expect((yield* booleanExecution.next("query", booleanCursor))._tag).toBe("None");
 
-      yield* releaseRawQueryExecution(eventStore, undefinedFilter);
-      yield* releaseRawQueryExecution(eventStore, nullFilter);
-      yield* releaseRawQueryExecution(eventStore, arrayFilter);
-      yield* releaseRawQueryExecution(eventStore, objectFilter);
-      yield* releaseRawQueryExecution(eventStore, booleanFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(eventStore), undefinedFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(eventStore), nullFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(eventStore), arrayFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(eventStore), objectFilter);
+      yield* releaseRawQueryExecution(topicStoreReadModel(eventStore), booleanFilter);
     }),
   );
 
@@ -405,22 +504,26 @@ describe("column-live-view-engine active query execution", () => {
         "id",
         () => {},
       );
-      const splitFieldsQuery = yield* prepareRawQuery("delimiter-fields", store.rawQueryMetadata, {
-        select: ["id"],
-        orderBy: [
-          {
-            field: "a",
-            direction: "asc",
-          },
-          {
-            field: "b",
-            direction: "desc",
-          },
-        ],
-      });
+      const splitFieldsQuery = yield* prepareRawQuery(
+        "delimiter-fields",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          orderBy: [
+            {
+              field: "a",
+              direction: "asc",
+            },
+            {
+              field: "b",
+              direction: "desc",
+            },
+          ],
+        },
+      );
       const delimiterFieldQuery = yield* prepareRawQuery(
         "delimiter-fields",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id"],
           orderBy: [
@@ -432,13 +535,13 @@ describe("column-live-view-engine active query execution", () => {
         },
       );
 
-      yield* acquireRawQueryExecution(store, splitFieldsQuery);
-      yield* acquireRawQueryExecution(store, delimiterFieldQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), splitFieldsQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), delimiterFieldQuery);
 
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(2);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(2);
 
-      yield* releaseRawQueryExecution(store, splitFieldsQuery);
-      yield* releaseRawQueryExecution(store, delimiterFieldQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), splitFieldsQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), delimiterFieldQuery);
     }),
   );
 
@@ -460,22 +563,22 @@ describe("column-live-view-engine active query execution", () => {
       queryPayload["value"] = 1n;
       queryPayload["label"] = "special";
 
-      const compiled = yield* prepareRawQuery("special", store.rawQueryMetadata, {
+      const compiled = yield* prepareRawQuery("special", topicStoreRawQueryMetadata(store), {
         select: ["id", "payload"],
         where: {
           payload: queryPayload,
         },
       });
 
-      const execution = yield* acquireRawQueryExecution(store, compiled);
+      const execution = yield* acquireRawQueryExecution(topicStoreReadModel(store), compiled);
       const cursor = execution.createCursor();
 
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(1);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
       expect(execution.initial("query").rows).toStrictEqual([]);
       expect((yield* execution.next("query", cursor))._tag).toBe("None");
 
-      yield* releaseRawQueryExecution(store, compiled);
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(0);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), compiled);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(0);
     }),
   );
 
@@ -503,7 +606,7 @@ describe("column-live-view-engine active query execution", () => {
 
       const firstFunctionQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -513,7 +616,7 @@ describe("column-live-view-engine active query execution", () => {
       );
       const matchingFirstFunctionQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -523,7 +626,7 @@ describe("column-live-view-engine active query execution", () => {
       );
       const secondFunctionQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -533,7 +636,7 @@ describe("column-live-view-engine active query execution", () => {
       );
       const anonymousFunctionQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -543,7 +646,7 @@ describe("column-live-view-engine active query execution", () => {
       );
       const firstSymbolQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -553,7 +656,7 @@ describe("column-live-view-engine active query execution", () => {
       );
       const secondSymbolQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -563,7 +666,7 @@ describe("column-live-view-engine active query execution", () => {
       );
       const firstMapQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -573,7 +676,7 @@ describe("column-live-view-engine active query execution", () => {
       );
       const secondMapQuery = yield* prepareRawQuery(
         "special-non-serializable",
-        store.rawQueryMetadata,
+        topicStoreRawQueryMetadata(store),
         {
           select: ["id", "marker"],
           where: {
@@ -582,29 +685,32 @@ describe("column-live-view-engine active query execution", () => {
         },
       );
 
-      const firstFunctionExecution = yield* acquireRawQueryExecution(store, firstFunctionQuery);
-      yield* acquireRawQueryExecution(store, matchingFirstFunctionQuery);
-      yield* acquireRawQueryExecution(store, secondFunctionQuery);
-      yield* acquireRawQueryExecution(store, anonymousFunctionQuery);
-      yield* acquireRawQueryExecution(store, firstSymbolQuery);
-      yield* acquireRawQueryExecution(store, secondSymbolQuery);
-      yield* acquireRawQueryExecution(store, firstMapQuery);
-      yield* acquireRawQueryExecution(store, secondMapQuery);
+      const firstFunctionExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(store),
+        firstFunctionQuery,
+      );
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), matchingFirstFunctionQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), secondFunctionQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), anonymousFunctionQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), firstSymbolQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), secondSymbolQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), firstMapQuery);
+      yield* acquireRawQueryExecution(topicStoreReadModel(store), secondMapQuery);
 
       const cursor = firstFunctionExecution.createCursor();
 
-      expect(yield* activeStoreRawQueryExecutionCount(store)).toBe(7);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(7);
       expect(firstFunctionExecution.initial("query").totalRows).toBe(0);
       expect((yield* firstFunctionExecution.next("query", cursor))._tag).toBe("None");
 
-      yield* releaseRawQueryExecution(store, firstFunctionQuery);
-      yield* releaseRawQueryExecution(store, matchingFirstFunctionQuery);
-      yield* releaseRawQueryExecution(store, secondFunctionQuery);
-      yield* releaseRawQueryExecution(store, anonymousFunctionQuery);
-      yield* releaseRawQueryExecution(store, firstSymbolQuery);
-      yield* releaseRawQueryExecution(store, secondSymbolQuery);
-      yield* releaseRawQueryExecution(store, firstMapQuery);
-      yield* releaseRawQueryExecution(store, secondMapQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), firstFunctionQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), matchingFirstFunctionQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), secondFunctionQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), anonymousFunctionQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), firstSymbolQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), secondSymbolQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), firstMapQuery);
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), secondMapQuery);
     }),
   );
 });

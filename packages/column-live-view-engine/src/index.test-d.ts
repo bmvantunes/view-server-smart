@@ -19,6 +19,7 @@ import type {
   ColumnLiveViewTopicHealth,
   EngineClosedError,
 } from "./index";
+import type { TopicStore } from "./topic-store";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -388,5 +389,12 @@ describe("ColumnLiveViewEngine type contract", () => {
     void _groupedSubscription;
     void _groupedVariableSnapshot;
     void _groupedVariableSubscription;
+  });
+
+  it("keeps TopicStore nominal inside engine internals", () => {
+    const fakeTopicStore = { topic: "orders" };
+    // @ts-expect-error TopicStore cannot be structurally faked with only the public topic field.
+    const topicStore: TopicStore = fakeTopicStore;
+    expectTypeOf(topicStore).toEqualTypeOf<TopicStore>();
   });
 });
