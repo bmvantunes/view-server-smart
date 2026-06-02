@@ -7,14 +7,15 @@ import {
 } from "./raw-query-compiler";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 import type { QueryEvaluation } from "./query-result";
-import type { TopicRowEntry, TopicRowScan } from "./row-scan";
+import type { TopicRawWindowScan, TopicRawWindowScanResult, TopicRowScan } from "./row-scan";
 
 type RowObject = object;
 
-export type ActiveQueryStoreState = TopicRowScan<object> & {
-  readonly identity: object;
-  readonly topic: string;
-};
+export type ActiveQueryStoreState = TopicRowScan<object> &
+  TopicRawWindowScan<object> & {
+    readonly identity: object;
+    readonly topic: string;
+  };
 
 export type LiveQueryExecutionCursor<ResultRow extends RowObject> = {
   evaluation: QueryEvaluation<ResultRow>;
@@ -51,10 +52,7 @@ type MaterializedQueryExecutionSlot = {
   refs: number;
 };
 
-type ActiveQueryBaseEvaluation<Row extends RowObject> = {
-  readonly keys: ReadonlyArray<string>;
-  readonly window: ReadonlyArray<TopicRowEntry<Row>>;
-  readonly totalRows: number;
+type ActiveQueryBaseEvaluation<Row extends RowObject> = TopicRawWindowScanResult<Row> & {
   readonly version: number;
 };
 
@@ -118,28 +116,19 @@ const getActiveQueryEntry = <ResultRow extends RowObject>(
 };
 
 const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
-  store: TopicRowScan<Row>,
+  store: TopicRawWindowScan<Row> & { readonly version: () => number },
   compiled: CompiledRawQuery<Row, ResultRow>,
 ): ActiveQueryBaseEvaluation<Row> => {
-  const storeVersion = store.version();
-  const filtered: Array<TopicRowEntry<Row>> = [];
-  store.scanRows((key, row) => {
-    if (compiled.predicate.matches(row)) {
-      filtered.push({ key, row });
-    }
+  const version = store.version();
+  const window = store.scanRawWindow({
+    matches: compiled.predicate.matches,
+    compare: compiled.ordering.compare,
+    offset: compiled.window.offset,
+    limit: compiled.window.limit,
   });
-  const ordered = filtered.toSorted(compiled.ordering.compare);
-  const offset = compiled.window.offset;
-  const window = ordered.slice(
-    offset,
-    compiled.window.limit === undefined ? undefined : offset + compiled.window.limit,
-  );
-
   return {
-    keys: window.map((entry) => entry.key),
-    window,
-    totalRows: filtered.length,
-    version: storeVersion,
+    ...window,
+    version,
   };
 };
 
@@ -162,7 +151,7 @@ const projectBaseEvaluation = <Row extends RowObject, ResultRow extends RowObjec
 };
 
 export const evaluateRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
-  store: TopicRowScan<Row>,
+  store: TopicRawWindowScan<Row> & { readonly version: () => number },
   compiled: CompiledRawQuery<Row, ResultRow>,
 ): QueryEvaluation<ResultRow> =>
   projectBaseEvaluation(compiled, evaluateBaseQuery(store, compiled));

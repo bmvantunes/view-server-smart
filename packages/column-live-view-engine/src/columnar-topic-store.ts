@@ -1,6 +1,11 @@
 import { Effect, Schema } from "effect";
 import type { ActiveQueryStoreState } from "./active-query";
-import type { TopicRowVisitor } from "./row-scan";
+import type {
+  TopicRawWindowScanPlan,
+  TopicRawWindowScanResult,
+  TopicRowEntry,
+  TopicRowVisitor,
+} from "./row-scan";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
 import { cloneRow, fieldValue, isPlainRecord } from "./row-values";
 
@@ -30,6 +35,7 @@ export class ColumnarTopicStore {
       identity: this,
       topic,
       scanRows: (visitor) => this.scanRows(visitor),
+      scanRawWindow: (plan) => this.scanRawWindow(plan),
       version: () => this.versionValue,
     };
   }
@@ -70,6 +76,25 @@ export class ColumnarTopicStore {
     for (const [key, row] of this.rows) {
       visitor(key, row);
     }
+  }
+
+  scanRawWindow(plan: TopicRawWindowScanPlan<object>): TopicRawWindowScanResult<object> {
+    const filtered: Array<TopicRowEntry<object>> = [];
+    for (const [key, row] of this.rows) {
+      if (plan.matches(row)) {
+        filtered.push({ key, row });
+      }
+    }
+    const ordered = filtered.toSorted(plan.compare);
+    const window = ordered.slice(
+      plan.offset,
+      plan.limit === undefined ? undefined : plan.offset + plan.limit,
+    );
+    return {
+      keys: window.map((entry) => entry.key),
+      window,
+      totalRows: filtered.length,
+    };
   }
 
   prepareRow = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.row.prepare")(function* <

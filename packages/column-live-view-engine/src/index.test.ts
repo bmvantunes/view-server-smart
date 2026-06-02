@@ -981,10 +981,18 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       );
       const evaluation = evaluateRawQuery(
         {
-          scanRows: (visitor) => {
-            for (const { key, row } of rows) {
-              visitor(key, row);
-            }
+          scanRawWindow: (plan) => {
+            const filtered = rows.filter((entry) => plan.matches(entry.row));
+            const ordered = filtered.toSorted(plan.compare);
+            const window = ordered.slice(
+              plan.offset,
+              plan.limit === undefined ? undefined : plan.offset + plan.limit,
+            );
+            return {
+              keys: window.map((entry) => entry.key),
+              window,
+              totalRows: filtered.length,
+            };
           },
           version: () => 7,
         },
