@@ -9,8 +9,7 @@ import {
   isRecord,
   valuesEqual,
 } from "./row-values";
-import type { QueryEvaluation, StoredRowOf } from "./query-result";
-import type { TopicRowScan } from "./row-scan";
+import type { StoredRowOf } from "./query-result";
 
 type RowObject = object;
 const compiledRawQueryBrand: unique symbol = Symbol("CompiledRawQuery");
@@ -859,33 +858,3 @@ export const prepareRawQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.prepare"
   yield* validateRuntimeQuery(topic, metadata, decoded);
   return compileRawQuery<Row, ResultRow>(decoded);
 });
-
-export const evaluateCompiledRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
-  store: TopicRowScan<Row>,
-  compiled: CompiledRawQuery<Row, ResultRow>,
-): QueryEvaluation<ResultRow> => {
-  const filtered: Array<StoredRowOf<Row>> = [];
-  store.scanRows((key, row) => {
-    if (compiled.matches(row)) {
-      filtered.push({ key, row });
-    }
-  });
-  const ordered = filtered.toSorted(compiled.compare);
-  const offset = compiled.offset;
-  const windowed = ordered.slice(
-    offset,
-    compiled.limit === undefined ? undefined : offset + compiled.limit,
-  );
-  const window = windowed.map((entry) => ({
-    key: entry.key,
-    row: compiled.project(entry.row),
-  }));
-
-  return {
-    rows: window.map((entry) => entry.row),
-    keys: window.map((entry) => entry.key),
-    window,
-    totalRows: filtered.length,
-    version: store.version(),
-  };
-};

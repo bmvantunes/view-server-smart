@@ -24,6 +24,7 @@ import {
   acquireMaterializedQueryExecution,
   acquireRawQueryExecution,
   activeStoreRawQueryExecutionCount,
+  evaluateRawQuery,
   releaseMaterializedQueryExecution,
 } from "./active-query";
 import type { LiveTopicSubscriber } from "./topic-subscriber";
@@ -32,7 +33,6 @@ import {
   closeInterruptedAcquiredSubscription,
 } from "./subscription-handoff";
 import {
-  evaluateCompiledRawQuery,
   prepareRawQuery,
   rawQueryCompilerMetadata,
   stableQueryValueString,
@@ -979,7 +979,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
           ],
         },
       );
-      const evaluation = evaluateCompiledRawQuery(
+      const evaluation = evaluateRawQuery(
         {
           scanRows: (visitor) => {
             for (const { key, row } of rows) {

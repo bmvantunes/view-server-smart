@@ -38,7 +38,7 @@ export type LiveQueryExecution<ResultRow extends RowObject> = {
 export type RawQueryExecution<ResultRow extends RowObject> = LiveQueryExecution<ResultRow>;
 
 type ActiveQueryBaseExecution = {
-  readonly latest: () => ActiveQueryBaseEvaluation;
+  readonly latest: () => ActiveQueryBaseEvaluation<object>;
 };
 
 type RawQueryExecutionSlot = {
@@ -51,9 +51,9 @@ type MaterializedQueryExecutionSlot = {
   refs: number;
 };
 
-type ActiveQueryBaseEvaluation = {
+type ActiveQueryBaseEvaluation<Row extends RowObject> = {
   readonly keys: ReadonlyArray<string>;
-  readonly window: ReadonlyArray<StoredRowOf<object>>;
+  readonly window: ReadonlyArray<StoredRowOf<Row>>;
   readonly totalRows: number;
   readonly version: number;
 };
@@ -117,12 +117,12 @@ const getActiveQueryEntry = <ResultRow extends RowObject>(
   return { map, key };
 };
 
-const evaluateBaseQuery = (
-  store: ActiveQueryStoreState,
-  compiled: CompiledRawQuery<object, object>,
-): ActiveQueryBaseEvaluation => {
+const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
+  store: TopicRowScan<Row>,
+  compiled: CompiledRawQuery<Row, ResultRow>,
+): ActiveQueryBaseEvaluation<Row> => {
   const storeVersion = store.version();
-  const filtered: Array<StoredRowOf<object>> = [];
+  const filtered: Array<StoredRowOf<Row>> = [];
   store.scanRows((key, row) => {
     if (compiled.matches(row)) {
       filtered.push({ key, row });
@@ -143,9 +143,9 @@ const evaluateBaseQuery = (
   };
 };
 
-const projectBaseEvaluation = <ResultRow extends RowObject>(
-  compiled: CompiledRawQuery<object, ResultRow>,
-  evaluation: ActiveQueryBaseEvaluation,
+const projectBaseEvaluation = <Row extends RowObject, ResultRow extends RowObject>(
+  compiled: CompiledRawQuery<Row, ResultRow>,
+  evaluation: ActiveQueryBaseEvaluation<Row>,
 ): QueryEvaluation<ResultRow> => {
   const window = evaluation.window.map((entry) => ({
     key: entry.key,
@@ -160,6 +160,12 @@ const projectBaseEvaluation = <ResultRow extends RowObject>(
     version: evaluation.version,
   };
 };
+
+export const evaluateRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
+  store: TopicRowScan<Row>,
+  compiled: CompiledRawQuery<Row, ResultRow>,
+): QueryEvaluation<ResultRow> =>
+  projectBaseEvaluation(compiled, evaluateBaseQuery(store, compiled));
 
 const leaseRawQueryExecution = <ResultRow extends RowObject>(
   store: ActiveQueryStoreState,

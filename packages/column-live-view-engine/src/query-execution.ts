@@ -3,6 +3,7 @@ import { makeLiveSubscription } from "./live-subscription";
 import {
   acquireMaterializedQueryExecution,
   acquireRawQueryExecution,
+  evaluateRawQuery,
   releaseMaterializedQueryExecution,
   releaseRawQueryExecution,
 } from "./active-query";
@@ -11,11 +12,7 @@ import {
   prepareGroupedQuery,
   type CompiledGroupedQuery,
 } from "./grouped-query-compiler";
-import {
-  evaluateCompiledRawQuery,
-  prepareRawQuery,
-  type CompiledRawQuery,
-} from "./raw-query-compiler";
+import { prepareRawQuery, type CompiledRawQuery } from "./raw-query-compiler";
 import { liveQueryResult, type QueryEvaluation } from "./query-result";
 import {
   topicStoreRawQueryMetadata,
@@ -72,7 +69,7 @@ export const evaluateExecutableQuery = <ResultRow extends RowObject>(
   executable: ExecutableQuery<ResultRow>,
 ): QueryEvaluation<ResultRow> =>
   executable.kind === "raw"
-    ? evaluateCompiledRawQuery(topicStoreReadModel(store), executable.compiled)
+    ? evaluateRawQuery(topicStoreReadModel(store), executable.compiled)
     : evaluateCompiledGroupedQuery(topicStoreReadModel(store), executable.compiled);
 
 export const snapshotExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecution.snapshot")(
