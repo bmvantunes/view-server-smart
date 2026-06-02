@@ -17,7 +17,12 @@ import {
   type CompiledRawQuery,
 } from "./raw-query-compiler";
 import { liveQueryResult, type QueryEvaluation } from "./query-result";
-import { topicStoreRawQueryMetadata, topicStoreReadModel, type TopicStore } from "./topic-store";
+import {
+  topicStoreRawQueryMetadata,
+  topicStoreReadModel,
+  type TopicStore,
+  type TopicStoreSubscriptionPermit,
+} from "./topic-store";
 
 type RowObject = object;
 
@@ -79,20 +84,21 @@ export const snapshotExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExec
 
 export const subscribeExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExecution.subscribe")(
   function* <ResultRow extends RowObject>(
-    topic: string,
-    store: TopicStore,
     query: unknown,
     input: {
+      readonly permit: TopicStoreSubscriptionPermit;
       readonly queryId: string;
       readonly queueCapacity: number;
     },
   ) {
+    const { store } = input.permit;
+    const { topic } = store;
     const executable = yield* prepareExecutableQuery<ResultRow>(topic, store, query);
     const storeReadModel = topicStoreReadModel(store);
     if (executable.kind === "raw") {
       const execution = yield* acquireRawQueryExecution(storeReadModel, executable.compiled);
       return yield* makeLiveSubscription({
-        store,
+        permit: input.permit,
         queryId: input.queryId,
         execution,
         queueCapacity: input.queueCapacity,
@@ -106,7 +112,7 @@ export const subscribeExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExe
       () => evaluateCompiledGroupedQuery(storeReadModel, executable.compiled),
     );
     return yield* makeLiveSubscription({
-      store,
+      permit: input.permit,
       queryId: input.queryId,
       execution,
       queueCapacity: input.queueCapacity,
