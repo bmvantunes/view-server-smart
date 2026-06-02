@@ -124,15 +124,15 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   const storeVersion = store.version();
   const filtered: Array<TopicRowEntry<Row>> = [];
   store.scanRows((key, row) => {
-    if (compiled.matches(row)) {
+    if (compiled.predicate.matches(row)) {
       filtered.push({ key, row });
     }
   });
-  const ordered = filtered.toSorted(compiled.compare);
-  const offset = compiled.offset;
+  const ordered = filtered.toSorted(compiled.ordering.compare);
+  const offset = compiled.window.offset;
   const window = ordered.slice(
     offset,
-    compiled.limit === undefined ? undefined : offset + compiled.limit,
+    compiled.window.limit === undefined ? undefined : offset + compiled.window.limit,
   );
 
   return {
@@ -149,7 +149,7 @@ const projectBaseEvaluation = <Row extends RowObject, ResultRow extends RowObjec
 ): QueryEvaluation<ResultRow> => {
   const window = evaluation.window.map((entry) => ({
     key: entry.key,
-    row: compiled.project(entry.row),
+    row: compiled.projection.project(entry.row),
   }));
 
   return {

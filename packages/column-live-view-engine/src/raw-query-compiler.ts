@@ -51,9 +51,25 @@ export type RawQueryCompilerMetadata = {
 export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject> = {
   readonly [compiledRawQueryBrand]: true;
   readonly query: RuntimeRawQuery;
+  readonly predicate: CompiledRawPredicate<Row>;
+  readonly ordering: CompiledRawOrdering<Row>;
+  readonly projection: CompiledRawProjection<Row, ResultRow>;
+  readonly window: CompiledRawWindow;
+};
+
+export type CompiledRawPredicate<Row extends RowObject> = {
   readonly matches: (row: Row) => boolean;
+};
+
+export type CompiledRawOrdering<Row extends RowObject> = {
   readonly compare: (left: TopicRowEntry<Row>, right: TopicRowEntry<Row>) => number;
+};
+
+export type CompiledRawProjection<Row extends RowObject, ResultRow extends RowObject> = {
   readonly project: (row: Row) => ResultRow;
+};
+
+export type CompiledRawWindow = {
   readonly offset: number;
   readonly limit: number | undefined;
 };
@@ -773,19 +789,23 @@ const matchesFilter = (value: unknown, filter: unknown): boolean => {
 
 const compileMatches = <Row extends RowObject>(
   where: RuntimeRawQuery["where"],
-): ((row: Row) => boolean) => {
+): CompiledRawPredicate<Row> => {
   if (where === undefined) {
-    return () => true;
+    return {
+      matches: () => true,
+    };
   }
 
   const filters = Object.entries(where);
-  return (row) => {
-    for (const [field, filter] of filters) {
-      if (!matchesFilter(fieldValue(row, field), filter)) {
-        return false;
+  return {
+    matches: (row) => {
+      for (const [field, filter] of filters) {
+        if (!matchesFilter(fieldValue(row, field), filter)) {
+          return false;
+        }
       }
-    }
-    return true;
+      return true;
+    },
   };
 };
 
@@ -830,23 +850,47 @@ function projectCompiledRow(
 
 const compileProjection = <Row extends RowObject, ResultRow extends RowObject>(
   select: ReadonlyArray<string>,
-): ((row: Row) => ResultRow) => {
+): CompiledRawProjection<Row, ResultRow> => {
   const selectedFields = [...select];
-  return (row) => projectCompiledRow(row, selectedFields);
+  return {
+    project: (row) => projectCompiledRow(row, selectedFields),
+  };
+};
+
+const compileOrdering = <Row extends RowObject>(
+  orderBy: ReadonlyArray<OrderBy<Record<string, unknown>>>,
+): CompiledRawOrdering<Row> => ({
+  compare: (left, right) => compareRows(left, right, orderBy),
+});
+
+const compileWindow = (query: RuntimeRawQuery): CompiledRawWindow => ({
+  offset: query.offset ?? 0,
+  limit: query.limit,
+});
+
+const compileRawQueryParts = <Row extends RowObject, ResultRow extends RowObject>(
+  query: RuntimeRawQuery,
+): Pick<CompiledRawQuery<Row, ResultRow>, "predicate" | "ordering" | "projection" | "window"> => {
+  const orderBy = query.orderBy ?? [];
+  return {
+    predicate: compileMatches(query.where),
+    ordering: compileOrdering(orderBy),
+    projection: compileProjection(query.select),
+    window: compileWindow(query),
+  };
 };
 
 const compileRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
   query: RuntimeRawQuery,
 ): CompiledRawQuery<Row, ResultRow> => {
-  const orderBy = query.orderBy ?? [];
+  const parts = compileRawQueryParts<Row, ResultRow>(query);
   return {
     [compiledRawQueryBrand]: true,
     query,
-    matches: compileMatches(query.where),
-    compare: (left, right) => compareRows(left, right, orderBy),
-    project: compileProjection(query.select),
-    offset: query.offset ?? 0,
-    limit: query.limit,
+    predicate: parts.predicate,
+    ordering: parts.ordering,
+    projection: parts.projection,
+    window: parts.window,
   };
 };
 

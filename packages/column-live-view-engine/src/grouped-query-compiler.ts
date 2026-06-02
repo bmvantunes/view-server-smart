@@ -577,7 +577,7 @@ export const prepareGroupedQuery = Effect.fn("ColumnLiveViewEngine.groupedQuery.
       select: decoded.groupBy,
       ...(decoded.where === undefined ? {} : { where: decoded.where }),
     });
-    const matches = rawFilter.matches;
+    const { matches } = rawFilter.predicate;
     return {
       query: decoded,
       cacheKey: groupedCacheKey(decoded),
