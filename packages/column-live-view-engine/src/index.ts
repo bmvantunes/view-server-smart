@@ -25,10 +25,11 @@ import {
   InvalidTopicError,
   type ColumnLiveViewEngineError,
 } from "./engine-errors";
-import { acquireLiveSubscriptionHandoff, type LiveSubscription } from "./live-subscription";
+import type { LiveSubscription } from "./live-subscription";
 import { collectColumnLiveViewEngineHealth } from "./engine-health";
 import { snapshotExecutableQuery, subscribeExecutableQuery } from "./query-execution";
 import {
+  acquireTopicStoreSubscription,
   closeTopicStoreSubscriptions,
   deleteTopicStoreRow,
   patchTopicStoreRow,
@@ -36,7 +37,6 @@ import {
   publishTopicStoreRows,
   resetTopicStore,
   TopicStore,
-  withTopicStoreMutation,
 } from "./topic-store";
 
 export { InvalidQueryError } from "./raw-query-compiler";
@@ -242,29 +242,25 @@ class InMemoryColumnLiveViewEngine<
       function* (this: InMemoryColumnLiveViewEngine<Topics>) {
         yield* this.ensureOpen();
         const store = yield* this.getStore(topic);
-        const acquireSubscription = (
-          markAcquired: (subscription: LiveSubscription<ResultRow>) => Effect.Effect<void>,
-        ) =>
-          withTopicStoreMutation(
-            store,
+        const subscription = yield* acquireTopicStoreSubscription(
+          store,
+          (
+            permit,
+            markAcquired: (subscription: LiveSubscription<ResultRow>) => Effect.Effect<void>,
+          ): Effect.Effect<LiveSubscription<ResultRow>, ColumnLiveViewEngineError> =>
             Effect.gen({ self: this }, function* () {
               yield* this.ensureOpen();
               const queryId = `query-${this.nextQueryId}`;
               this.nextQueryId += 1;
-              const acquiredSubscription = yield* subscribeExecutableQuery<ResultRow>(
-                topic,
-                store,
-                query,
-                {
-                  queryId,
-                  queueCapacity: this.subscriptionQueueCapacity,
-                },
-              );
+              const acquiredSubscription = yield* subscribeExecutableQuery<ResultRow>(query, {
+                permit,
+                queryId,
+                queueCapacity: this.subscriptionQueueCapacity,
+              });
               yield* markAcquired(acquiredSubscription);
               return acquiredSubscription;
             }),
-          );
-        const subscription = yield* acquireLiveSubscriptionHandoff(acquireSubscription);
+        );
 
         return {
           events: subscription.events,

@@ -26,11 +26,11 @@ import {
   activeStoreRawQueryExecutionCount,
   releaseMaterializedQueryExecution,
 } from "./active-query";
+import type { LiveTopicSubscriber } from "./topic-subscriber";
 import {
-  acquireLiveSubscriptionHandoff,
+  acquireSubscriptionHandoff,
   closeInterruptedAcquiredSubscription,
-  type LiveTopicSubscriber,
-} from "./live-subscription";
+} from "./subscription-handoff";
 import {
   prepareRawQuery,
   rawQueryCompilerMetadata,
@@ -39,8 +39,11 @@ import {
 import { evaluateCompiledGroupedQuery, prepareGroupedQuery } from "./grouped-query-compiler";
 import { cloneRecord, cloneRow, fieldValue, rowsEqual } from "./row-values";
 import {
+  acquireTopicStoreSubscription,
+  closeBackpressuredTopicStoreSubscription,
   closeTopicStoreSubscriptions,
   collectTopicStoreHealth,
+  publishTopicStoreRow,
   registerTopicStoreSubscription,
   resetTopicStore,
   TopicStore,
@@ -156,6 +159,21 @@ const position = (
 
 const makeEngine = (): Effect.Effect<Engine> =>
   createColumnLiveViewEngine({ topics: viewServer.topics });
+
+const registerTestTopicStoreSubscriber = (
+  store: TopicStore,
+  subscriber: LiveTopicSubscriber,
+): Effect.Effect<void> =>
+  acquireTopicStoreSubscription(store, (permit, markAcquired) =>
+    Effect.gen(function* () {
+      const subscription = {
+        close: () => Effect.void,
+      };
+      yield* registerTopicStoreSubscription(permit, subscriber);
+      yield* markAcquired(subscription);
+      return subscription;
+    }),
+  ).pipe(Effect.asVoid);
 
 const instrument = (
   id: string,
@@ -1966,7 +1984,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       };
 
       const handoffFiber = yield* Effect.forkChild(
-        acquireLiveSubscriptionHandoff(
+        acquireSubscriptionHandoff(
           (markAcquired) =>
             Effect.gen(function* () {
               yield* markAcquired(subscription);
@@ -2000,7 +2018,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       };
 
       const handoffFiber = yield* Effect.forkChild(
-        acquireLiveSubscriptionHandoff((markAcquired) =>
+        acquireSubscriptionHandoff((markAcquired) =>
           Effect.uninterruptible(
             Effect.gen(function* () {
               yield* markAcquired(subscription);
@@ -2015,6 +2033,98 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       yield* Deferred.await(acquired);
       yield* Fiber.interrupt(handoffFiber);
       expect(closeCount).toBe(1);
+    }),
+  );
+
+  it.effect("closes acquired subscriptions when topic-store acquisition is interrupted", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      const acquired = yield* Deferred.make<void>();
+      let closeCount = 0;
+      const subscription = {
+        events: Stream.empty,
+        close: () =>
+          Effect.sync(() => {
+            closeCount += 1;
+          }),
+      };
+
+      const handoffFiber = yield* Effect.forkChild(
+        acquireTopicStoreSubscription(store, (_permit, markAcquired) =>
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* markAcquired(subscription);
+              yield* Deferred.succeed(acquired, undefined);
+              yield* Effect.sleep("10 millis");
+              return subscription;
+            }),
+          ),
+        ),
+      );
+
+      yield* Deferred.await(acquired);
+      yield* Fiber.interrupt(handoffFiber);
+      expect(closeCount).toBe(1);
+    }),
+  );
+
+  it.effect("records backpressure close only once for already closed subscribers", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      let finalizeCount = 0;
+      const subscriber: LiveTopicSubscriber = {
+        topic: "orders",
+        queryId: "query-backpressure-idempotent",
+        notify: () => Effect.void,
+        queuedEvents: Effect.succeed(0),
+        end: Effect.void,
+        closeWithStatus: () => Effect.void,
+        maxQueueDepth: 0,
+        backpressureEvents: 0,
+        closed: false,
+      };
+      const finalize = Effect.sync(() => {
+        finalizeCount += 1;
+      });
+
+      yield* registerTestTopicStoreSubscriber(store, subscriber);
+      yield* closeBackpressuredTopicStoreSubscription(store, subscriber, finalize);
+      yield* closeBackpressuredTopicStoreSubscription(store, subscriber, finalize);
+
+      const health = yield* collectTopicStoreHealth(store, false);
+      expect(finalizeCount).toBe(1);
+      expect(subscriber.backpressureEvents).toBe(1);
+      expect(health.activeSubscriptions).toBe(0);
+      expect(health.backpressureEvents).toBe(1);
+    }),
+  );
+
+  it.effect("does not notify subscribers that were closed after mutation capture", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      let notifyCount = 0;
+      const subscriber: LiveTopicSubscriber = {
+        topic: "orders",
+        queryId: "query-closed-before-notify",
+        notify: () =>
+          Effect.sync(() => {
+            notifyCount += 1;
+          }),
+        queuedEvents: Effect.succeed(0),
+        end: Effect.void,
+        closeWithStatus: () => Effect.void,
+        maxQueueDepth: 0,
+        backpressureEvents: 0,
+        closed: false,
+      };
+
+      yield* registerTestTopicStoreSubscriber(store, subscriber);
+      subscriber.closed = true;
+      yield* publishTopicStoreRow(store, order("1", "open", 10, 1), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      expect(notifyCount).toBe(0);
     }),
   );
 
@@ -2042,7 +2152,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         backpressureEvents: 0,
         closed: false,
       };
-      yield* registerTopicStoreSubscription(store, subscriber);
+      yield* registerTestTopicStoreSubscriber(store, subscriber);
       expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
 
       const closeFiber = yield* Effect.forkChild(closeTopicStoreSubscriptions(store));
@@ -2079,7 +2189,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         backpressureEvents: 0,
         closed: false,
       };
-      yield* registerTopicStoreSubscription(store, subscriber);
+      yield* registerTestTopicStoreSubscriber(store, subscriber);
       expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
 
       const resetFiber = yield* Effect.forkChild(resetTopicStore(store));
