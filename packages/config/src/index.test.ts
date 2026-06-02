@@ -198,6 +198,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigDecimal",
     });
     expect(viewServerSchemaFieldMetadata(Schema.BigInt)).toStrictEqual({
@@ -205,6 +206,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: true,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigint",
     });
     expect(viewServerSchemaFieldMetadata(Schema.BigDecimal)).toStrictEqual({
@@ -212,6 +214,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigDecimal",
     });
     expect(
@@ -221,6 +224,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigint",
     });
     expect(
@@ -230,6 +234,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigDecimal",
     });
     expect(viewServerSchemaFieldMetadata(Schema.Literal(1))).toStrictEqual({
@@ -237,6 +242,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigDecimal",
     });
     expect(viewServerSchemaFieldMetadata(Schema.Literals([1, 2]))).toStrictEqual({
@@ -244,6 +250,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigDecimal",
     });
     expect(viewServerSchemaFieldMetadata(Schema.Literal(1n))).toStrictEqual({
@@ -251,6 +258,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
       sumResultKind: "bigint",
     });
     expect(
@@ -260,6 +268,7 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(
       viewServerSchemaFieldMetadata(Schema.Union([Schema.BigInt, Schema.Undefined])),
@@ -268,48 +277,56 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(viewServerSchemaFieldMetadata(Schema.Undefined)).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(viewServerSchemaFieldMetadata(Schema.Union([Schema.Undefined]))).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(viewServerSchemaFieldMetadata(Schema.Union([]))).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(viewServerSchemaFieldMetadata(undefined)).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(viewServerSchemaFieldMetadata("not-a-schema")).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(viewServerSchemaFieldMetadata({ ast: "not-an-effect-ast" })).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(viewServerSchemaFieldMetadata(Schema.Literals(["open", "closed"]))).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: true,
       isStructured: false,
+      isStructuredObject: false,
     });
     expect(
       viewServerSchemaFieldMetadata(
@@ -323,12 +340,21 @@ describe("defineViewServerConfig", () => {
       isPureBigInt: false,
       isString: false,
       isStructured: true,
+      isStructuredObject: true,
     });
     expect(viewServerSchemaFieldMetadata(Schema.Struct({ id: Schema.String }))).toStrictEqual({
       isNumeric: false,
       isPureBigInt: false,
       isString: false,
       isStructured: true,
+      isStructuredObject: true,
+    });
+    expect(viewServerSchemaFieldMetadata(Schema.Array(Schema.String))).toStrictEqual({
+      isNumeric: false,
+      isPureBigInt: false,
+      isString: false,
+      isStructured: true,
+      isStructuredObject: false,
     });
   });
 
@@ -1648,6 +1674,19 @@ const assertCompileTimeContracts = () => {
     // @ts-expect-error optional filters reject present undefined values.
     useLiveQuery("positions", optionalBigintUndefinedFilterQuery);
 
+    const optionalBigintUnionFilterQuery = (optionalQuantity: bigint | undefined) =>
+      ({
+        select: ["id"],
+        where: {
+          optionalQuantity,
+        },
+      }) satisfies {
+        readonly select: readonly ["id"];
+        readonly where: { readonly optionalQuantity: bigint | undefined };
+      };
+    // @ts-expect-error optional filters reject unions that can contain undefined.
+    useLiveQuery("positions", optionalBigintUnionFilterQuery(1n));
+
     const optionalBigintUndefinedEqualityFilterQuery = {
       select: ["id"],
       where: {
@@ -1659,6 +1698,19 @@ const assertCompileTimeContracts = () => {
     };
     // @ts-expect-error optional equality filters reject present undefined values.
     useLiveQuery("positions", optionalBigintUndefinedEqualityFilterQuery);
+
+    const optionalBigintUnionEqualityFilterQuery = (eq: bigint | undefined) =>
+      ({
+        select: ["id"],
+        where: {
+          optionalQuantity: { eq },
+        },
+      }) satisfies {
+        readonly select: readonly ["id"];
+        readonly where: { readonly optionalQuantity: { readonly eq: bigint | undefined } };
+      };
+    // @ts-expect-error optional equality filters reject unions that can contain undefined.
+    useLiveQuery("positions", optionalBigintUnionEqualityFilterQuery(1n));
 
     const optionalBigintRangeFilterQuery = {
       select: ["id"],

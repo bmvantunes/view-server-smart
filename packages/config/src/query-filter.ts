@@ -76,10 +76,11 @@ type ExactOperatorFilter<Value, Filter> = Filter extends object
     : Filter & RejectExtraKeys<Filter, ExactFieldFilterShape<Value>>
   : unknown;
 
-type ExactFilter<Value, Filter> =
-  Filter extends DefinedFilterValue<Value>
+type ExactFilter<Value, Filter> = undefined extends Filter
+  ? never
+  : [Filter] extends [DefinedFilterValue<Value>]
     ? unknown
-    : Filter extends FieldFilter<Value>
+    : [Filter] extends [FieldFilter<Value>]
       ? ExactOperatorFilter<Value, Filter>
       : never;
 

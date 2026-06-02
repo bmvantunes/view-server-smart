@@ -41,6 +41,7 @@ export type RawQueryCompilerMetadata = {
   readonly fieldNames: ReadonlySet<string>;
   readonly fieldMetadata: ReadonlyMap<string, ReturnType<typeof viewServerSchemaFieldMetadata>>;
   readonly structuredFieldNames: ReadonlySet<string>;
+  readonly structuredObjectFieldNames: ReadonlySet<string>;
   readonly stringFieldNames: ReadonlySet<string>;
   readonly numericFieldNames: ReadonlySet<string>;
   readonly bigintFieldNames: ReadonlySet<string>;
@@ -213,12 +214,27 @@ const schemaStructuredFieldNames = (schema: Schema.Decoder<object>): ReadonlySet
   return fields;
 };
 
+const schemaStructuredObjectFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+  if (!isSchemaWithFields(schema)) {
+    return new Set();
+  }
+
+  const fields = new Set<string>();
+  for (const [field, fieldSchema] of Object.entries(schema.fields)) {
+    if (viewServerSchemaFieldMetadata(fieldSchema).isStructuredObject) {
+      fields.add(field);
+    }
+  }
+  return fields;
+};
+
 export const rawQueryCompilerMetadata = (
   schema: Schema.Decoder<object>,
 ): RawQueryCompilerMetadata => ({
   fieldNames: schemaFieldNames(schema),
   fieldMetadata: schemaFieldMetadata(schema),
   structuredFieldNames: schemaStructuredFieldNames(schema),
+  structuredObjectFieldNames: schemaStructuredObjectFieldNames(schema),
   stringFieldNames: schemaStringFieldNames(schema),
   numericFieldNames: schemaNumericFieldNames(schema),
   bigintFieldNames: schemaBigintFieldNames(schema),
@@ -420,11 +436,11 @@ const validateRuntimeQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.validate")
     if (!isPlainRecord(filter) || isBigDecimal(filter)) {
       continue;
     }
-    if (metadata.structuredFieldNames.has(field)) {
-      continue;
-    }
     const keys = Object.keys(filter);
     const operatorKeyCount = keys.filter((key) => filterOperatorKeys.has(key)).length;
+    if (metadata.structuredObjectFieldNames.has(field)) {
+      continue;
+    }
     if (operatorKeyCount > 0 && operatorKeyCount !== keys.length) {
       return yield* InvalidQueryError.make({
         topic,
@@ -448,7 +464,7 @@ const validateRuntimeQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.validate")
         });
       }
     }
-    if (operatorKeyCount === 0 && !metadata.structuredFieldNames.has(field)) {
+    if (operatorKeyCount === 0) {
       return yield* InvalidQueryError.make({
         topic,
         message: `Raw query where field ${field} contains unsupported filter operator.`,
