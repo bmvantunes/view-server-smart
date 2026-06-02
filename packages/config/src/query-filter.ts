@@ -76,11 +76,12 @@ type ExactOperatorFilter<Value, Filter> = Filter extends object
     : Filter & RejectExtraKeys<Filter, ExactFieldFilterShape<Value>>
   : unknown;
 
-type ExactFilter<Value, Filter> = Filter extends Value
-  ? unknown
-  : Filter extends FieldFilter<Value>
-    ? ExactOperatorFilter<Value, Filter>
-    : never;
+type ExactFilter<Value, Filter> =
+  Filter extends DefinedFilterValue<Value>
+    ? unknown
+    : Filter extends FieldFilter<Value>
+      ? ExactOperatorFilter<Value, Filter>
+      : never;
 
 export type ExactWhere<Row, Query> = Query extends {
   readonly where: infer QueryWhere;

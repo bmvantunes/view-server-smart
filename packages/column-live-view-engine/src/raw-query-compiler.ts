@@ -420,6 +420,9 @@ const validateRuntimeQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.validate")
     if (!isPlainRecord(filter) || isBigDecimal(filter)) {
       continue;
     }
+    if (metadata.structuredFieldNames.has(field)) {
+      continue;
+    }
     const keys = Object.keys(filter);
     const operatorKeyCount = keys.filter((key) => filterOperatorKeys.has(key)).length;
     if (operatorKeyCount > 0 && operatorKeyCount !== keys.length) {
@@ -467,8 +470,19 @@ type StableQueryValueToken =
   | readonly ["unsupported", string]
   | readonly ["cycle"]
   | readonly ["array", ReadonlyArray<StableQueryValueToken>]
+  | readonly ["map", ReadonlyArray<readonly [StableQueryValueToken, StableQueryValueToken]>]
   | readonly ["object", ReadonlyArray<StableQueryObjectEntry>]
+  | readonly ["set", ReadonlyArray<StableQueryValueToken>]
   | readonly ["nonPlainObject", string];
+
+const compareStableQueryValueToken = (
+  left: StableQueryValueToken,
+  right: StableQueryValueToken,
+): number => {
+  const leftString = JSON.stringify(left);
+  const rightString = JSON.stringify(right);
+  return Number(leftString > rightString) - Number(leftString < rightString);
+};
 
 const stableQueryValueToken = (value: unknown, active: WeakSet<object>): StableQueryValueToken => {
   if (isBigDecimal(value)) {
@@ -497,6 +511,33 @@ const stableQueryValueToken = (value: unknown, active: WeakSet<object>): StableQ
     ];
     active.delete(value);
     return token;
+  }
+  if (value instanceof Map) {
+    if (active.has(value)) {
+      return ["cycle"];
+    }
+    active.add(value);
+    const entries = Array.from(
+      value.entries(),
+      ([key, entryValue]) =>
+        [stableQueryValueToken(key, active), stableQueryValueToken(entryValue, active)] as const,
+    ).toSorted((left, right) => {
+      const keyComparison = compareStableQueryValueToken(left[0], right[0]);
+      return keyComparison === 0 ? compareStableQueryValueToken(left[1], right[1]) : keyComparison;
+    });
+    active.delete(value);
+    return ["map", entries];
+  }
+  if (value instanceof Set) {
+    if (active.has(value)) {
+      return ["cycle"];
+    }
+    active.add(value);
+    const values = Array.from(value.values(), (entry) =>
+      stableQueryValueToken(entry, active),
+    ).toSorted(compareStableQueryValueToken);
+    active.delete(value);
+    return ["set", values];
   }
   if (isPlainRecord(value)) {
     if (active.has(value)) {

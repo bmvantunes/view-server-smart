@@ -1636,6 +1636,30 @@ const assertCompileTimeContracts = () => {
       ReadonlyArray<{ readonly id: string }>
     >();
 
+    const optionalBigintUndefinedFilterQuery = {
+      select: ["id"],
+      where: {
+        optionalQuantity: undefined,
+      },
+    } satisfies {
+      readonly select: readonly ["id"];
+      readonly where: { readonly optionalQuantity: undefined };
+    };
+    // @ts-expect-error optional filters reject present undefined values.
+    useLiveQuery("positions", optionalBigintUndefinedFilterQuery);
+
+    const optionalBigintUndefinedEqualityFilterQuery = {
+      select: ["id"],
+      where: {
+        optionalQuantity: { eq: undefined },
+      },
+    } satisfies {
+      readonly select: readonly ["id"];
+      readonly where: { readonly optionalQuantity: { readonly eq: undefined } };
+    };
+    // @ts-expect-error optional equality filters reject present undefined values.
+    useLiveQuery("positions", optionalBigintUndefinedEqualityFilterQuery);
+
     const optionalBigintRangeFilterQuery = {
       select: ["id"],
       where: {

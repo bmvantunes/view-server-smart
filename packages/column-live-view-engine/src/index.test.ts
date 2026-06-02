@@ -79,6 +79,9 @@ const Instrument = Schema.Struct({
   operatorLike: Schema.Struct({
     eq: Schema.String,
   }),
+  operatorRangeLike: Schema.Struct({
+    gte: Schema.Number,
+  }),
   tags: Schema.Array(Schema.String),
 });
 
@@ -113,10 +116,11 @@ const orderSelect: readonly ["id", "customerId", "status", "price", "region", "u
   "region",
   "updatedAt",
 ];
-const instrumentSelect: readonly ["id", "metadata", "operatorLike", "tags"] = [
+const instrumentSelect: readonly ["id", "metadata", "operatorLike", "operatorRangeLike", "tags"] = [
   "id",
   "metadata",
   "operatorLike",
+  "operatorRangeLike",
   "tags",
 ];
 
@@ -169,6 +173,9 @@ const instrument = (
   },
   operatorLike: {
     eq: venue,
+  },
+  operatorRangeLike: {
+    gte: tier,
   },
   tags: [...tags],
 });
@@ -508,6 +515,16 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       });
       expect(rowIds(operatorLikeDirectObjectQuery.rows)).toStrictEqual(["1"]);
 
+      const operatorRangeLikeDirectObjectQuery = yield* engine.snapshot("instruments", {
+        select: ["id"],
+        where: {
+          operatorRangeLike: {
+            gte: 2,
+          },
+        },
+      });
+      expect(rowIds(operatorRangeLikeDirectObjectQuery.rows)).toStrictEqual(["2"]);
+
       const operatorLikeWrappedObjectQuery = yield* engine.snapshot("instruments", {
         select: ["id"],
         where: {
@@ -633,12 +650,16 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         operatorLike: {
           eq: "xlon",
         },
+        operatorRangeLike: {
+          gte: 2,
+        },
         tags: ["equity", "uk"],
       };
       yield* engine.patch("instruments", "1", patch);
 
       patch.metadata.risk.tier = 777;
       patch.operatorLike.eq = "mutated-after-patch";
+      patch.operatorRangeLike.gte = 777;
       patch.tags.push("mutated-after-patch");
 
       const afterPatchMutation = yield* engine.snapshot("instruments", {
@@ -964,6 +985,51 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
           group: "z",
           totalAmount: "3",
           averageAmount: "1.5",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("keeps non-plain object grouped keys distinct by stable value", () =>
+    Effect.gen(function* () {
+      const Payload = Schema.Struct({
+        id: Schema.String,
+        payload: Schema.ObjectKeyword,
+      });
+      const payloadViewServer = defineViewServerConfig({
+        topics: {
+          payloads: {
+            schema: Payload,
+            key: "id",
+          },
+        },
+      });
+      const payloadEngine = yield* createColumnLiveViewEngine({
+        topics: payloadViewServer.topics,
+      });
+      yield* payloadEngine.publishMany("payloads", [
+        { id: "map-a-1", payload: new Map([["venue", "xnys"]]) },
+        { id: "map-b", payload: new Map([["venue", "xlon"]]) },
+        { id: "map-a-2", payload: new Map([["venue", "xnys"]]) },
+      ]);
+
+      const snapshot = yield* payloadEngine.snapshot("payloads", {
+        groupBy: ["payload"],
+        aggregates: {
+          rowCount: { aggFunc: "count" },
+        },
+        orderBy: [{ aggregate: "rowCount", direction: "desc" }],
+      });
+
+      expect(snapshot.totalRows).toBe(2);
+      expect(snapshot.rows).toStrictEqual([
+        {
+          payload: new Map([["venue", "xnys"]]),
+          rowCount: 2n,
+        },
+        {
+          payload: new Map([["venue", "xlon"]]),
+          rowCount: 1n,
         },
       ]);
     }),
@@ -2757,15 +2823,79 @@ describe("ColumnLiveViewEngine validation and health", () => {
       "unsupported",
       "function:anonymousFilter",
     ]);
-    expect(JSON.parse(stableQueryValueString(new Map()))).toStrictEqual([
+    expect(JSON.parse(stableQueryValueString(new Map()))).toStrictEqual(["map", []]);
+    expect(
+      JSON.parse(
+        stableQueryValueString(
+          new Map<unknown, unknown>([
+            [{ id: "same" }, "b"],
+            [{ id: "same" }, "a"],
+          ]),
+        ),
+      ),
+    ).toStrictEqual([
+      "map",
+      [
+        [
+          ["object", [["id", ["string", "same"]]]],
+          ["string", "a"],
+        ],
+        [
+          ["object", [["id", ["string", "same"]]]],
+          ["string", "b"],
+        ],
+      ],
+    ]);
+    expect(
+      JSON.parse(
+        stableQueryValueString(
+          new Map<unknown, unknown>([
+            [{ id: "b" }, "same"],
+            [{ id: "a" }, "same"],
+          ]),
+        ),
+      ),
+    ).toStrictEqual([
+      "map",
+      [
+        [
+          ["object", [["id", ["string", "a"]]]],
+          ["string", "same"],
+        ],
+        [
+          ["object", [["id", ["string", "b"]]]],
+          ["string", "same"],
+        ],
+      ],
+    ]);
+    expect(JSON.parse(stableQueryValueString(new Set(["b", "a"])))).toStrictEqual([
+      "set",
+      [
+        ["string", "a"],
+        ["string", "b"],
+      ],
+    ]);
+    class CustomQueryValue {}
+    expect(JSON.parse(stableQueryValueString(new CustomQueryValue()))).toStrictEqual([
       "nonPlainObject",
-      "[object Map]",
+      "[object Object]",
     ]);
     expect(JSON.parse(stableQueryValueString(undefined))).toStrictEqual(["undefined"]);
 
     const cyclicArray: Array<unknown> = [];
     cyclicArray.push(cyclicArray);
     expect(JSON.parse(stableQueryValueString(cyclicArray))).toStrictEqual(["array", [["cycle"]]]);
+
+    const cyclicMap = new Map<unknown, unknown>();
+    cyclicMap.set("self", cyclicMap);
+    expect(JSON.parse(stableQueryValueString(cyclicMap))).toStrictEqual([
+      "map",
+      [[["string", "self"], ["cycle"]]],
+    ]);
+
+    const cyclicSet = new Set<unknown>();
+    cyclicSet.add(cyclicSet);
+    expect(JSON.parse(stableQueryValueString(cyclicSet))).toStrictEqual(["set", [["cycle"]]]);
 
     type CyclicObject = {
       self?: CyclicObject;
