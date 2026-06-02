@@ -9,7 +9,7 @@ import {
   isRecord,
   valuesEqual,
 } from "./row-values";
-import type { StoredRowOf } from "./query-result";
+import type { TopicRowEntry } from "./row-scan";
 
 type RowObject = object;
 const compiledRawQueryBrand: unique symbol = Symbol("CompiledRawQuery");
@@ -52,7 +52,7 @@ export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject>
   readonly [compiledRawQueryBrand]: true;
   readonly query: RuntimeRawQuery;
   readonly matches: (row: Row) => boolean;
-  readonly compare: (left: StoredRowOf<Row>, right: StoredRowOf<Row>) => number;
+  readonly compare: (left: TopicRowEntry<Row>, right: TopicRowEntry<Row>) => number;
   readonly project: (row: Row) => ResultRow;
   readonly offset: number;
   readonly limit: number | undefined;
@@ -790,8 +790,8 @@ const compileMatches = <Row extends RowObject>(
 };
 
 const compareRows = <Row extends RowObject>(
-  left: StoredRowOf<Row>,
-  right: StoredRowOf<Row>,
+  left: TopicRowEntry<Row>,
+  right: TopicRowEntry<Row>,
   orderBy: ReadonlyArray<OrderBy<Record<string, unknown>>>,
 ): number => {
   for (const order of orderBy) {

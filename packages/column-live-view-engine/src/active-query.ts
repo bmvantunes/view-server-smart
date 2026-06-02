@@ -6,8 +6,8 @@ import {
   type RuntimeRawQuery,
 } from "./raw-query-compiler";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
-import type { QueryEvaluation, StoredRowOf } from "./query-result";
-import type { TopicRowScan } from "./row-scan";
+import type { QueryEvaluation } from "./query-result";
+import type { TopicRowEntry, TopicRowScan } from "./row-scan";
 
 type RowObject = object;
 
@@ -53,7 +53,7 @@ type MaterializedQueryExecutionSlot = {
 
 type ActiveQueryBaseEvaluation<Row extends RowObject> = {
   readonly keys: ReadonlyArray<string>;
-  readonly window: ReadonlyArray<StoredRowOf<Row>>;
+  readonly window: ReadonlyArray<TopicRowEntry<Row>>;
   readonly totalRows: number;
   readonly version: number;
 };
@@ -122,7 +122,7 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   compiled: CompiledRawQuery<Row, ResultRow>,
 ): ActiveQueryBaseEvaluation<Row> => {
   const storeVersion = store.version();
-  const filtered: Array<StoredRowOf<Row>> = [];
+  const filtered: Array<TopicRowEntry<Row>> = [];
   store.scanRows((key, row) => {
     if (compiled.matches(row)) {
       filtered.push({ key, row });
