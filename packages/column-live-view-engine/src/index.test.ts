@@ -2415,6 +2415,21 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         message: "Raw query where field price does not support startsWith.",
       });
 
+      const arrayStartsWithQuery: object = {
+        select: ["id"],
+        where: {
+          tags: { startsWith: "equity" },
+        },
+      };
+      const arrayStartsWith = yield* Effect.flip(
+        // @ts-expect-error runtime query validation rejects unsupported array startsWith operators.
+        engine.snapshot("instruments", arrayStartsWithQuery),
+      );
+      expect(arrayStartsWith).toMatchObject({
+        _tag: "InvalidQueryError",
+        message: "Raw query where field tags does not support startsWith.",
+      });
+
       const invalidNeqQuery: object = {
         select: ["id"],
         where: {

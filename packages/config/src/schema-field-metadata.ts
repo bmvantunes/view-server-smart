@@ -5,6 +5,7 @@ export type ViewServerSchemaFieldMetadata = {
   readonly isPureBigInt: boolean;
   readonly isString: boolean;
   readonly isStructured: boolean;
+  readonly isStructuredObject: boolean;
   readonly sumResultKind?: "bigint" | "bigDecimal";
 };
 
@@ -70,6 +71,13 @@ const isStructuredAst = (ast: SchemaAST.AST): boolean => {
   return SchemaAST.isUnion(ast) && ast.types.length > 0 && ast.types.every(isStructuredAst);
 };
 
+const isStructuredObjectAst = (ast: SchemaAST.AST): boolean => {
+  if (SchemaAST.isObjects(ast) || SchemaAST.isObjectKeyword(ast)) {
+    return true;
+  }
+  return SchemaAST.isUnion(ast) && ast.types.length > 0 && ast.types.every(isStructuredObjectAst);
+};
+
 export const viewServerSchemaFieldMetadata = (schema: unknown): ViewServerSchemaFieldMetadata => {
   const ast = schemaAst(schema);
   if (ast === undefined) {
@@ -78,6 +86,7 @@ export const viewServerSchemaFieldMetadata = (schema: unknown): ViewServerSchema
       isPureBigInt: false,
       isString: false,
       isStructured: false,
+      isStructuredObject: false,
     };
   }
   const numericKind = numericKindAst(ast);
@@ -88,6 +97,7 @@ export const viewServerSchemaFieldMetadata = (schema: unknown): ViewServerSchema
     isPureBigInt,
     isString: isStringAst(ast),
     isStructured: isStructuredAst(ast),
+    isStructuredObject: isStructuredObjectAst(ast),
     ...(isNumeric ? { sumResultKind: numericKind } : {}),
   };
 };
