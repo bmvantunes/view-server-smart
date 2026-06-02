@@ -2300,7 +2300,10 @@ describe("ColumnLiveViewEngine subscriptions", () => {
           if (getterReads === 1) {
             return { eq: "open" };
           }
-          throw new Error("clone failed");
+          throw {
+            _tag: "HostileGetterFailure",
+            message: "clone failed",
+          };
         },
       });
       const throwingWhereQuery: object = {
