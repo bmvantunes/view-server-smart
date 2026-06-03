@@ -610,6 +610,136 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       ]);
       expect(ascendingInclusive.totalRows).toBe(7);
 
+      const numericEquality = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { eq: 5 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(numericEquality.rows).toStrictEqual([{ id: "e", price: 5 }]);
+      expect(numericEquality.totalRows).toBe(1);
+
+      const numericInAscending = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { in: [8, 2, 99, 2] },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(numericInAscending.rows).toStrictEqual([
+        { id: "b", price: 2 },
+        { id: "h", price: 8 },
+        { id: "z", price: 99 },
+      ]);
+      expect(numericInAscending.totalRows).toBe(3);
+
+      const numericInDescending = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { in: [8, 2, 99, 2] },
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        offset: 1,
+        limit: 1,
+      });
+
+      expect(numericInDescending.rows).toStrictEqual([{ id: "h", price: 8 }]);
+      expect(numericInDescending.totalRows).toBe(3);
+
+      const emptyIn = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { in: [] },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(emptyIn.rows).toStrictEqual([]);
+      expect(emptyIn.totalRows).toBe(0);
+
+      const stringEquality = yield* engine.snapshot("orders", {
+        select: ["id", "status"],
+        where: {
+          status: { eq: "closed" },
+        },
+        orderBy: [{ field: "status", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(stringEquality.rows).toStrictEqual([{ id: "z", status: "closed" }]);
+      expect(stringEquality.totalRows).toBe(1);
+
+      const stringIn = yield* engine.snapshot("orders", {
+        select: ["id", "customerId"],
+        where: {
+          customerId: { in: ["customer-h", "customer-b", "customer-z", "customer-b"] },
+        },
+        orderBy: [{ field: "customerId", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(stringIn.rows).toStrictEqual([
+        { id: "b", customerId: "customer-b" },
+        { id: "h", customerId: "customer-h" },
+        { id: "z", customerId: "customer-z" },
+      ]);
+      expect(stringIn.totalRows).toBe(3);
+
+      const numericInWithRange = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { in: [2, 5, 8, 99, 2], gte: 5, lt: 99 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        offset: 1,
+        limit: 1,
+      });
+
+      expect(numericInWithRange.rows).toStrictEqual([{ id: "h", price: 8 }]);
+      expect(numericInWithRange.totalRows).toBe(2);
+
+      const equalityInIntersection = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { eq: 5, in: [2, 5, 8] },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(equalityInIntersection.rows).toStrictEqual([{ id: "e", price: 5 }]);
+      expect(equalityInIntersection.totalRows).toBe(1);
+
+      const contradictoryEqualityInIntersection = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { eq: 5, in: [2, 8] },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(contradictoryEqualityInIntersection.rows).toStrictEqual([]);
+      expect(contradictoryEqualityInIntersection.totalRows).toBe(0);
+
+      const equalityOutsideRange = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { eq: 5, gt: 5 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(equalityOutsideRange.rows).toStrictEqual([]);
+      expect(equalityOutsideRange.totalRows).toBe(0);
+
       const ascendingExclusive = yield* engine.snapshot("orders", {
         select: ["id", "price"],
         where: {
@@ -771,7 +901,24 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       ]);
       expect(nonOrderFieldRange.totalRows).toBe(6);
 
-      yield* engine.publish("orders", order("i", "open", 9, 10));
+      yield* engine.publish("orders", order("hh", "open", 8, 10));
+
+      const duplicateEqualityValue = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { eq: 8 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(duplicateEqualityValue.rows).toStrictEqual([
+        { id: "h", price: 8 },
+        { id: "hh", price: 8 },
+      ]);
+      expect(duplicateEqualityValue.totalRows).toBe(2);
+
+      yield* engine.publish("orders", order("i", "open", 9, 11));
 
       const afterAppend = yield* engine.snapshot("orders", {
         select: ["id", "price"],
@@ -784,10 +931,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(afterAppend.rows).toStrictEqual([
         { id: "h", price: 8 },
+        { id: "hh", price: 8 },
         { id: "i", price: 9 },
-        { id: "z", price: 99 },
       ]);
-      expect(afterAppend.totalRows).toBe(3);
+      expect(afterAppend.totalRows).toBe(4);
     }),
   );
 
@@ -2430,6 +2577,17 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       });
       expect(rowIds(symbolOrdered.rows)).toStrictEqual(["position-3", "position-4"]);
 
+      const decimalEqualityOrdered = yield* engine.snapshot("positions", {
+        select: ["id"],
+        where: {
+          price: { eq: fromStringUnsafe("1.00") },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      expect(rowIds(decimalEqualityOrdered.rows)).toStrictEqual(["position-3", "position-4"]);
+      expect(decimalEqualityOrdered.totalRows).toBe(2);
+
       const quantityOrdered = yield* engine.snapshot("positions", {
         select: ["id"],
         orderBy: [{ field: "quantity", direction: "asc" }],
@@ -2440,6 +2598,17 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         "position-4",
         "position-2",
       ]);
+
+      const bigintEqualityOrdered = yield* engine.snapshot("positions", {
+        select: ["id"],
+        where: {
+          quantity: { eq: 10n },
+        },
+        orderBy: [{ field: "quantity", direction: "asc" }],
+        limit: 10,
+      });
+      expect(rowIds(bigintEqualityOrdered.rows)).toStrictEqual(["position-1", "position-4"]);
+      expect(bigintEqualityOrdered.totalRows).toBe(2);
 
       const booleanNotEqual = yield* engine.snapshot("positions", {
         select: ["id"],
@@ -3630,6 +3799,86 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(unsafeRangeHintPlan.keys).toStrictEqual(["2", "3"]);
       expect(unsafeRangeHintPlan.totalRows).toBe(2);
+
+      const equalityHintPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [{ field: "price", operator: "eq", value: 20 }],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(equalityHintPlan.keys).toStrictEqual(["2"]);
+      expect(equalityHintPlan.totalRows).toBe(1);
+
+      const unsafeEqualityHintPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [{ field: "price", operator: "eq", value: "20" }],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(unsafeEqualityHintPlan.keys).toStrictEqual([]);
+      expect(unsafeEqualityHintPlan.totalRows).toBe(0);
+
+      const duplicateInHintPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [{ field: "price", operator: "in", values: [20, 20, 30] }],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(duplicateInHintPlan.keys).toStrictEqual(["2", "3"]);
+      expect(duplicateInHintPlan.totalRows).toBe(2);
+
+      const emptyInHintPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [{ field: "price", operator: "in", values: [] }],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(emptyInHintPlan.keys).toStrictEqual([]);
+      expect(emptyInHintPlan.totalRows).toBe(0);
+
+      const unsafeMixedInHintPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [{ field: "price", operator: "in", values: [20, "30"] }],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(unsafeMixedInHintPlan.keys).toStrictEqual(["2"]);
+      expect(unsafeMixedInHintPlan.totalRows).toBe(1);
 
       const missingOrderColumnLimitedMisses = readModel.scanRawWindow({
         where: undefined,

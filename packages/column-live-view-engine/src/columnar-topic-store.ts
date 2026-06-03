@@ -26,11 +26,15 @@ type OrderedSlotIndex = {
   readonly slots: Array<number>;
 };
 
-type OrderedRawWindow = {
+type OrderedRawWindowSpan = {
   readonly endIndex: number;
+  readonly startIndex: number;
+};
+
+type OrderedRawWindow = {
   readonly limit: number;
   readonly slots: ReadonlyArray<number>;
-  readonly startIndex: number;
+  readonly spans: ReadonlyArray<OrderedRawWindowSpan>;
 };
 
 type OrderedRangeBound = {
@@ -46,6 +50,16 @@ type OrderedRangeBounds = {
 type TopicRawRangePredicateFilterPlan = TopicRawPredicateFilterPlan & {
   readonly operator: "gt" | "gte" | "lt" | "lte";
   readonly value: unknown;
+};
+
+type TopicRawEqualityPredicateFilterPlan = TopicRawPredicateFilterPlan & {
+  readonly operator: "eq";
+  readonly value: unknown;
+};
+
+type TopicRawInPredicateFilterPlan = TopicRawPredicateFilterPlan & {
+  readonly operator: "in";
+  readonly values: ReadonlyArray<unknown>;
 };
 
 const noOrderedRangeBounds: OrderedRangeBounds = {
@@ -205,20 +219,18 @@ export class ColumnarTopicStore {
     let totalRows = 0;
     const windowSlots: Array<number> = [];
     const windowEnd = plan.offset + orderedWindow.limit;
-    for (
-      let slotIndex = orderedWindow.startIndex;
-      slotIndex < orderedWindow.endIndex;
-      slotIndex += 1
-    ) {
-      const slot = orderedWindow.slots[slotIndex]!;
-      const entry = this.slots[slot]!;
-      if (!this.slotMayMatchFilters(slot, plan.predicate.filters) || !plan.matches(entry.row)) {
-        continue;
-      }
-      const matchIndex = totalRows;
-      totalRows += 1;
-      if (matchIndex >= plan.offset && matchIndex < windowEnd) {
-        windowSlots.push(slot);
+    for (const span of orderedWindow.spans) {
+      for (let slotIndex = span.startIndex; slotIndex < span.endIndex; slotIndex += 1) {
+        const slot = orderedWindow.slots[slotIndex]!;
+        const entry = this.slots[slot]!;
+        if (!this.slotMayMatchFilters(slot, plan.predicate.filters) || !plan.matches(entry.row)) {
+          continue;
+        }
+        const matchIndex = totalRows;
+        totalRows += 1;
+        if (matchIndex >= plan.offset && matchIndex < windowEnd) {
+          windowSlots.push(slot);
+        }
       }
     }
     const window = windowSlots.map((slot) => this.slots[slot]!);
@@ -289,22 +301,24 @@ export class ColumnarTopicStore {
     );
     if (rangeBounds !== undefined && rangeBoundsAreEmpty(rangeBounds)) {
       return {
-        endIndex: 0,
         limit: plan.limit,
         slots: [],
-        startIndex: 0,
+        spans: [],
       };
     }
     const seekBounds = rangeBounds ?? noOrderedRangeBounds;
+    const equalityValues = orderedEqualityValuesForField(
+      plan.predicate.filters,
+      orderField,
+      this.rawQueryMetadata,
+    );
     const indexKey = orderedSlotIndexKey(storageOrderBy);
     const existing = this.orderedSlotIndexes.get(indexKey);
     if (existing !== undefined) {
-      const bounds = this.orderedSlotIndexBounds(existing, seekBounds);
       return {
-        endIndex: bounds.endIndex,
         limit: plan.limit,
         slots: existing.slots,
-        startIndex: bounds.startIndex,
+        spans: this.orderedSlotIndexSpans(existing, seekBounds, equalityValues),
       };
     }
 
@@ -314,12 +328,14 @@ export class ColumnarTopicStore {
       orderBy: storageOrderBy,
       slots,
     });
-    const bounds = this.orderedSlotIndexBounds({ orderBy: storageOrderBy, slots }, seekBounds);
     return {
-      endIndex: bounds.endIndex,
       limit: plan.limit,
       slots,
-      startIndex: bounds.startIndex,
+      spans: this.orderedSlotIndexSpans(
+        { orderBy: storageOrderBy, slots },
+        seekBounds,
+        equalityValues,
+      ),
     };
   }
 
@@ -365,10 +381,36 @@ export class ColumnarTopicStore {
     return true;
   }
 
+  private orderedSlotIndexSpans(
+    index: OrderedSlotIndex,
+    rangeBounds: OrderedRangeBounds,
+    equalityValues: ReadonlyArray<unknown> | undefined,
+  ): ReadonlyArray<OrderedRawWindowSpan> {
+    if (equalityValues === undefined) {
+      return [this.orderedSlotIndexBounds(index, rangeBounds)];
+    }
+    const seekValues = distinctOrderedEqualityValues(equalityValues).filter((value) =>
+      equalityValueSatisfiesRangeBounds(value, rangeBounds),
+    );
+    const spans = seekValues.map((value) =>
+      this.orderedSlotIndexBounds(index, {
+        lower: {
+          exclusive: false,
+          value,
+        },
+        upper: {
+          exclusive: false,
+          value,
+        },
+      }),
+    );
+    return orderedWindowSpansInIndexOrder(spans);
+  }
+
   private orderedSlotIndexBounds(
     index: OrderedSlotIndex,
     rangeBounds: OrderedRangeBounds,
-  ): { readonly startIndex: number; readonly endIndex: number } {
+  ): OrderedRawWindowSpan {
     const order = index.orderBy[0]!;
     const column = this.columns.get(order.field)!;
     if (order.direction === "asc") {
@@ -662,6 +704,68 @@ const predicateFiltersAreOrderedIndexAdmissible = (
   return true;
 };
 
+const orderedEqualityValuesForField = (
+  filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
+  field: string,
+  metadata: RawQueryCompilerMetadata,
+): ReadonlyArray<unknown> | undefined => {
+  let values: ReadonlyArray<unknown> = [];
+  let hasEqualityFilter = false;
+  let hasSafeEqualityFilter = false;
+  let hasUnsafeEqualityFilter = false;
+  let hasEmptyInFilter = false;
+  for (const filter of filters) {
+    if (filter.field !== field || !isEqualityFilterPlan(filter)) {
+      continue;
+    }
+    hasEqualityFilter = true;
+    const nextValues: Array<unknown> = [];
+    if (filter.operator === "eq") {
+      if (isEqualitySeekPlanValue(field, filter.value, metadata)) {
+        nextValues.push(filter.value);
+      } else {
+        hasUnsafeEqualityFilter = true;
+      }
+    } else if (filter.values.length === 0) {
+      hasEmptyInFilter = true;
+    } else {
+      for (const value of filter.values) {
+        if (isEqualitySeekPlanValue(field, value, metadata)) {
+          nextValues.push(value);
+        } else {
+          hasUnsafeEqualityFilter = true;
+        }
+      }
+    }
+    if (nextValues.length > 0) {
+      if (!hasSafeEqualityFilter) {
+        values = nextValues;
+        hasSafeEqualityFilter = true;
+      } else {
+        values = intersectOrderedEqualityValues(values, nextValues);
+      }
+    }
+  }
+  if (hasEmptyInFilter) {
+    return [];
+  }
+  if (hasUnsafeEqualityFilter || !hasEqualityFilter) {
+    return undefined;
+  }
+  return values;
+};
+
+const isEqualitySeekPlanValue = (
+  field: string,
+  value: unknown,
+  metadata: RawQueryCompilerMetadata,
+): boolean => {
+  if (metadata.stringFieldNames.has(field)) {
+    return typeof value === "string";
+  }
+  return isRangePlanValue(field, value, metadata);
+};
+
 const orderedRangeBoundsForField = (
   filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
   field: string,
@@ -778,8 +882,81 @@ const orderedSlotBoundIndex = (
   return low;
 };
 
+const orderedWindowSpansInIndexOrder = (
+  spans: ReadonlyArray<OrderedRawWindowSpan>,
+): ReadonlyArray<OrderedRawWindowSpan> => {
+  return spans
+    .filter((span) => span.startIndex < span.endIndex)
+    .toSorted((left, right) => left.startIndex - right.startIndex);
+};
+
+const distinctOrderedEqualityValues = (values: ReadonlyArray<unknown>): ReadonlyArray<unknown> => {
+  const sorted = values.toSorted(compareOrderedRangeValue);
+  const distinct: Array<unknown> = [];
+  for (const value of sorted) {
+    const previous = distinct.at(-1);
+    if (previous === undefined || compareOrderedRangeValue(previous, value) !== 0) {
+      distinct.push(value);
+    }
+  }
+  return distinct;
+};
+
+const intersectOrderedEqualityValues = (
+  leftValues: ReadonlyArray<unknown>,
+  rightValues: ReadonlyArray<unknown>,
+): ReadonlyArray<unknown> => {
+  const left = distinctOrderedEqualityValues(leftValues);
+  const right = distinctOrderedEqualityValues(rightValues);
+  const intersection: Array<unknown> = [];
+  let rightIndex = 0;
+  for (const leftValue of left) {
+    while (
+      rightIndex < right.length &&
+      compareOrderedRangeValue(right[rightIndex]!, leftValue) < 0
+    ) {
+      rightIndex += 1;
+    }
+    if (
+      rightIndex < right.length &&
+      compareOrderedRangeValue(right[rightIndex]!, leftValue) === 0
+    ) {
+      intersection.push(leftValue);
+    }
+  }
+  return intersection;
+};
+
+const equalityValueSatisfiesRangeBounds = (
+  value: unknown,
+  rangeBounds: OrderedRangeBounds,
+): boolean => {
+  if (rangeBounds.lower !== undefined) {
+    const comparison = compareOrderedRangeValue(value, rangeBounds.lower.value);
+    if (comparison < 0 || (comparison === 0 && rangeBounds.lower.exclusive)) {
+      return false;
+    }
+  }
+  if (rangeBounds.upper !== undefined) {
+    const comparison = compareOrderedRangeValue(value, rangeBounds.upper.value);
+    if (comparison > 0 || (comparison === 0 && rangeBounds.upper.exclusive)) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const compareOrderedRangeValue = (left: unknown, right: unknown): number =>
   compareQueryValue(left, right);
+
+const isEqualityFilterPlan = (
+  filter: TopicRawPredicateFilterPlan,
+): filter is TopicRawEqualityPredicateFilterPlan | TopicRawInPredicateFilterPlan => {
+  if (filter.operator === "eq" || filter.operator === "in") {
+    return true;
+  }
+  return false;
+};
 
 const isRangeFilterPlan = (
   filter: TopicRawPredicateFilterPlan,
