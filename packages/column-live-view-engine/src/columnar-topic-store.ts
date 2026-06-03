@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import type { ActiveQueryStoreState } from "./active-query";
 import type {
+  TopicRawOrderByPlan,
   TopicRawPredicateFilterPlan,
   TopicRawWindowScanPlan,
   TopicRawWindowScanResult,
@@ -19,6 +20,16 @@ type RowObject = object;
 type InvalidRowErrorFactory<Error> = (topic: string, message: string) => Error;
 type ColumnValues = Array<unknown>;
 
+type OrderedSlotIndex = {
+  readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
+  readonly slots: Array<number>;
+};
+
+type OrderedRawWindow = {
+  readonly limit: number;
+  readonly slots: ReadonlyArray<number>;
+};
+
 export type PreparedTopicRow = {
   readonly key: string;
   readonly row: object;
@@ -31,6 +42,7 @@ export class ColumnarTopicStore {
   private readonly slots: Array<TopicRowEntry<object>> = [];
   private readonly keyToSlot = new Map<string, number>();
   private readonly columns = new Map<string, ColumnValues>();
+  private readonly orderedSlotIndexes = new Map<string, OrderedSlotIndex>();
   private versionValue = 0;
 
   constructor(
@@ -67,6 +79,7 @@ export class ColumnarTopicStore {
   clear(): void {
     this.slots.length = 0;
     this.keyToSlot.clear();
+    this.orderedSlotIndexes.clear();
     for (const column of this.columns.values()) {
       column.length = 0;
     }
@@ -77,15 +90,25 @@ export class ColumnarTopicStore {
     const existingSlot = this.keyToSlot.get(prepared.key);
     if (existingSlot !== undefined) {
       this.writeSlot(existingSlot, prepared);
+      this.orderedSlotIndexes.clear();
       return;
     }
 
     const slot = this.slots.length;
     this.keyToSlot.set(prepared.key, slot);
     this.writeSlot(slot, prepared);
+    this.insertSlotIntoOrderedIndexes(slot);
   }
 
   setPreparedMany(preparedRows: ReadonlyArray<PreparedTopicRow>): void {
+    if (preparedRows.length > 1 && this.orderedSlotIndexes.size > 0) {
+      this.orderedSlotIndexes.clear();
+      for (const prepared of preparedRows) {
+        this.setPreparedWithoutIndexMaintenance(prepared);
+      }
+      return;
+    }
+
     for (const prepared of preparedRows) {
       this.setPrepared(prepared);
     }
@@ -97,6 +120,7 @@ export class ColumnarTopicStore {
       return 0;
     }
 
+    this.orderedSlotIndexes.clear();
     const lastSlot = this.slots.length - 1;
     const lastEntry = this.slots[lastSlot]!;
     this.keyToSlot.delete(key);
@@ -122,6 +146,11 @@ export class ColumnarTopicStore {
   }
 
   scanRawWindow(plan: TopicRawWindowScanPlan<object>): TopicRawWindowScanResult<object> {
+    const orderedWindow = this.rawWindowOrderedWindow(plan);
+    if (orderedWindow !== undefined) {
+      return this.scanRawWindowOrderedSlots(plan, orderedWindow);
+    }
+
     const compareSlots = this.rawWindowSlotComparator(plan);
     if (compareSlots !== undefined) {
       return this.scanRawWindowSlots(plan, compareSlots);
@@ -143,6 +172,32 @@ export class ColumnarTopicStore {
       keys: window.map((entry) => entry.key),
       window,
       totalRows: filtered.length,
+    };
+  }
+
+  private scanRawWindowOrderedSlots(
+    plan: TopicRawWindowScanPlan<object>,
+    orderedWindow: OrderedRawWindow,
+  ): TopicRawWindowScanResult<object> {
+    let totalRows = 0;
+    const windowSlots: Array<number> = [];
+    const windowEnd = plan.offset + orderedWindow.limit;
+    for (const slot of orderedWindow.slots) {
+      const entry = this.slots[slot]!;
+      if (!this.slotMayMatchFilters(slot, plan.predicate.filters) || !plan.matches(entry.row)) {
+        continue;
+      }
+      const matchIndex = totalRows;
+      totalRows += 1;
+      if (matchIndex >= plan.offset && matchIndex < windowEnd) {
+        windowSlots.push(slot);
+      }
+    }
+    const window = windowSlots.map((slot) => this.slots[slot]!);
+    return {
+      keys: window.map((entry) => entry.key),
+      window,
+      totalRows,
     };
   }
 
@@ -175,6 +230,50 @@ export class ColumnarTopicStore {
     };
   }
 
+  private rawWindowOrderedWindow(
+    plan: TopicRawWindowScanPlan<object>,
+  ): OrderedRawWindow | undefined {
+    const storageOrderBy = plan.storageOrderBy;
+    if (
+      plan.limit === undefined ||
+      !Number.isSafeInteger(plan.limit) ||
+      plan.limit <= 0 ||
+      storageOrderBy === undefined ||
+      storageOrderBy.length !== 1
+    ) {
+      return undefined;
+    }
+    if (
+      plan.predicate.callbackRequired ||
+      !predicateFiltersAreOrderedIndexAdmissible(plan.predicate.filters)
+    ) {
+      return undefined;
+    }
+    if (!this.storageOrderByFieldsExist(storageOrderBy)) {
+      return undefined;
+    }
+
+    const indexKey = orderedSlotIndexKey(storageOrderBy);
+    const existing = this.orderedSlotIndexes.get(indexKey);
+    if (existing !== undefined) {
+      return {
+        limit: plan.limit,
+        slots: existing.slots,
+      };
+    }
+
+    const slots = Array.from({ length: this.slots.length }, (_value, slot) => slot);
+    slots.sort((left, right) => this.compareSlotsByStorageOrder(left, right, storageOrderBy));
+    this.orderedSlotIndexes.set(indexKey, {
+      orderBy: storageOrderBy,
+      slots,
+    });
+    return {
+      limit: plan.limit,
+      slots,
+    };
+  }
+
   private rawWindowSlotComparator(
     plan: TopicRawWindowScanPlan<object>,
   ): ((left: number, right: number) => number) | undefined {
@@ -182,24 +281,39 @@ export class ColumnarTopicStore {
     if (storageOrderBy === undefined) {
       return undefined;
     }
-    for (const order of storageOrderBy) {
-      if (!this.columns.has(order.field)) {
-        return undefined;
-      }
+    if (!this.storageOrderByFieldsExist(storageOrderBy)) {
+      return undefined;
     }
 
     return (left, right) => {
-      for (const order of storageOrderBy) {
-        const column = this.columns.get(order.field)!;
-        const comparison = compareQueryValue(column[left], column[right]);
-        if (comparison !== undefined && comparison !== 0) {
-          return order.direction === "asc" ? comparison : -comparison;
-        }
-      }
-      const leftKey = this.slots[left]!.key;
-      const rightKey = this.slots[right]!.key;
-      return Number(leftKey > rightKey) - Number(leftKey < rightKey);
+      return this.compareSlotsByStorageOrder(left, right, storageOrderBy);
     };
+  }
+
+  private compareSlotsByStorageOrder(
+    left: number,
+    right: number,
+    storageOrderBy: ReadonlyArray<TopicRawOrderByPlan>,
+  ): number {
+    for (const order of storageOrderBy) {
+      const column = this.columns.get(order.field)!;
+      const comparison = compareQueryValue(column[left], column[right]);
+      if (comparison !== undefined && comparison !== 0) {
+        return order.direction === "asc" ? comparison : -comparison;
+      }
+    }
+    const leftKey = this.slots[left]!.key;
+    const rightKey = this.slots[right]!.key;
+    return Number(leftKey > rightKey) - Number(leftKey < rightKey);
+  }
+
+  private storageOrderByFieldsExist(storageOrderBy: ReadonlyArray<TopicRawOrderByPlan>): boolean {
+    for (const order of storageOrderBy) {
+      if (!this.columns.has(order.field)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   prepareRow = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.row.prepare")(function* <
@@ -301,6 +415,27 @@ export class ColumnarTopicStore {
     }
   }
 
+  private insertSlotIntoOrderedIndexes(slot: number): void {
+    for (const index of this.orderedSlotIndexes.values()) {
+      const insertAt = orderedSlotIndexInsertionPoint(index.slots, slot, (left, right) =>
+        this.compareSlotsByStorageOrder(left, right, index.orderBy),
+      );
+      index.slots.splice(insertAt, 0, slot);
+    }
+  }
+
+  private setPreparedWithoutIndexMaintenance(prepared: PreparedTopicRow): void {
+    const existingSlot = this.keyToSlot.get(prepared.key);
+    if (existingSlot !== undefined) {
+      this.writeSlot(existingSlot, prepared);
+      return;
+    }
+
+    const slot = this.slots.length;
+    this.keyToSlot.set(prepared.key, slot);
+    this.writeSlot(slot, prepared);
+  }
+
   private rowForKey(key: string): object | undefined {
     const slot = this.keyToSlot.get(key);
     if (slot === undefined) {
@@ -375,4 +510,38 @@ const compareRangeColumnValue = (left: unknown, right: unknown): number | undefi
     return left < right ? -1 : 1;
   }
   return undefined;
+};
+
+const orderedSlotIndexKey = (orderBy: ReadonlyArray<TopicRawOrderByPlan>): string => {
+  const order = orderBy[0]!;
+  return `${order.field.length}:${order.field}:${order.direction}`;
+};
+
+const orderedSlotIndexInsertionPoint = (
+  slots: ReadonlyArray<number>,
+  slot: number,
+  compareSlots: (left: number, right: number) => number,
+): number => {
+  let low = 0;
+  let high = slots.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareSlots(slots[middle]!, slot) <= 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+};
+
+const predicateFiltersAreOrderedIndexAdmissible = (
+  filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
+): boolean => {
+  for (const filter of filters) {
+    if (filter.operator !== "eq" && filter.operator !== "in") {
+      return false;
+    }
+  }
+  return true;
 };

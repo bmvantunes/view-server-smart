@@ -494,6 +494,87 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(countOnly.rows).toStrictEqual([]);
       expect(countOnly.totalRows).toBe(7);
+
+      yield* engine.publish("orders", order("bb", "open", 8, 9));
+
+      const afterTieAppend = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          status: "open",
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 4,
+      });
+
+      expect(afterTieAppend.rows).toStrictEqual([
+        { id: "d", price: 10 },
+        { id: "b", price: 8 },
+        { id: "bb", price: 8 },
+        { id: "f", price: 7 },
+      ]);
+      expect(afterTieAppend.totalRows).toBe(8);
+
+      yield* engine.publish("orders", order("f", "open", 11, 10));
+
+      const afterReplace = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          status: "open",
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 4,
+      });
+
+      expect(afterReplace.rows).toStrictEqual([
+        { id: "f", price: 11 },
+        { id: "d", price: 10 },
+        { id: "b", price: 8 },
+        { id: "bb", price: 8 },
+      ]);
+      expect(afterReplace.totalRows).toBe(8);
+
+      yield* engine.publishMany("orders", [
+        order("f", "open", 12, 11),
+        order("i", "open", 9, 12),
+        order("j", "open", 0, 13),
+      ]);
+
+      const afterAppend = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          status: "open",
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 5,
+      });
+
+      expect(afterAppend.rows).toStrictEqual([
+        { id: "f", price: 12 },
+        { id: "d", price: 10 },
+        { id: "i", price: 9 },
+        { id: "b", price: 8 },
+        { id: "bb", price: 8 },
+      ]);
+      expect(afterAppend.totalRows).toBe(10);
+
+      yield* engine.delete("orders", "d");
+
+      const afterDelete = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          status: "open",
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 4,
+      });
+
+      expect(afterDelete.rows).toStrictEqual([
+        { id: "f", price: 12 },
+        { id: "i", price: 9 },
+        { id: "b", price: 8 },
+        { id: "bb", price: 8 },
+      ]);
+      expect(afterDelete.totalRows).toBe(9);
     }),
   );
 
@@ -3197,6 +3278,92 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         limit: undefined,
       });
       expect(invalidStorageOrderColumn.keys).toStrictEqual(["3", "2"]);
+
+      const invalidStorageOrderColumnLimited = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "missing", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: 1,
+      });
+      expect(invalidStorageOrderColumnLimited.keys).toStrictEqual(["3"]);
+      expect(invalidStorageOrderColumnLimited.totalRows).toBe(2);
+
+      const multiFieldStorageOrderZeroLimit = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [
+          { field: "price", direction: "asc" },
+          { field: "updatedAt", direction: "desc" },
+        ],
+        storageOrderBy: [
+          { field: "price", direction: "asc" },
+          { field: "updatedAt", direction: "desc" },
+        ],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 0,
+      });
+      expect(multiFieldStorageOrderZeroLimit.keys).toStrictEqual([]);
+      expect(multiFieldStorageOrderZeroLimit.totalRows).toBe(2);
+
+      const negativeLimitPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: -1,
+      });
+      expect(negativeLimitPlan.keys).toStrictEqual(["2"]);
+      expect(negativeLimitPlan.totalRows).toBe(2);
+
+      const nanLimitPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: Number.NaN,
+      });
+      expect(nanLimitPlan.keys).toStrictEqual([]);
+      expect(nanLimitPlan.totalRows).toBe(2);
+
+      const infiniteLimitPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: Number.POSITIVE_INFINITY,
+      });
+      expect(infiniteLimitPlan.keys).toStrictEqual(["2", "3"]);
+      expect(infiniteLimitPlan.totalRows).toBe(2);
 
       const missingOrderColumnLimitedMisses = readModel.scanRawWindow({
         where: undefined,
