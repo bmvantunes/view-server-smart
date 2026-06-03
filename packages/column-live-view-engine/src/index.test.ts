@@ -982,6 +982,15 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       const evaluation = evaluateRawQuery(
         {
           scanRawWindow: (plan) => {
+            expect(plan.where).toStrictEqual({
+              status: "open",
+            });
+            expect(plan.orderBy).toStrictEqual([
+              {
+                field: "price",
+                direction: "desc",
+              },
+            ]);
             const filtered = rows.filter((entry) => plan.matches(entry.row));
             const ordered = filtered.toSorted(plan.compare);
             const window = ordered.slice(

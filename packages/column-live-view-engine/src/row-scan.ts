@@ -7,7 +7,14 @@ export type TopicRowEntry<Row extends RowObject> = {
 
 export type TopicRowVisitor<Row extends RowObject> = (key: string, row: Row) => void;
 
+export type TopicRawOrderByPlan = {
+  readonly field: string;
+  readonly direction: "asc" | "desc";
+};
+
 export type TopicRawWindowScanPlan<Row extends RowObject> = {
+  readonly where: Readonly<Record<string, unknown>> | undefined;
+  readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
   readonly matches: (row: Row) => boolean;
   readonly compare: (left: TopicRowEntry<Row>, right: TopicRowEntry<Row>) => number;
   readonly offset: number;
