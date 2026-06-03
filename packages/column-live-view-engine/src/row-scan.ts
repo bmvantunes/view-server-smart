@@ -42,6 +42,11 @@ export type TopicRawWindowScanPlan<Row extends RowObject> = {
   readonly where: Readonly<Record<string, unknown>> | undefined;
   readonly predicate: TopicRawPredicatePlan;
   readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
+  /**
+   * Compiler-proven ordering hint for storage pushdown. `compare` remains the
+   * source of truth for custom scan plans unless this hint is present.
+   */
+  readonly storageOrderBy?: ReadonlyArray<TopicRawOrderByPlan>;
   readonly matches: (row: Row) => boolean;
   readonly compare: (left: TopicRowEntry<Row>, right: TopicRowEntry<Row>) => number;
   readonly offset: number;

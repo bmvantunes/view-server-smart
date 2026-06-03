@@ -7,7 +7,11 @@ import type {
   TopicRowEntry,
   TopicRowVisitor,
 } from "./row-scan";
-import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
+import {
+  compareQueryValue,
+  rawQueryCompilerMetadata,
+  type RawQueryCompilerMetadata,
+} from "./raw-query-compiler";
 import { cloneRow, fieldValue, isPlainRecord, valuesEqual } from "./row-values";
 
 type RowObject = object;
@@ -118,6 +122,11 @@ export class ColumnarTopicStore {
   }
 
   scanRawWindow(plan: TopicRawWindowScanPlan<object>): TopicRawWindowScanResult<object> {
+    const compareSlots = this.rawWindowSlotComparator(plan);
+    if (compareSlots !== undefined) {
+      return this.scanRawWindowSlots(plan, compareSlots);
+    }
+
     const filtered: Array<TopicRowEntry<object>> = [];
     for (let slot = 0; slot < this.slots.length; slot += 1) {
       const entry = this.slots[slot]!;
@@ -134,6 +143,62 @@ export class ColumnarTopicStore {
       keys: window.map((entry) => entry.key),
       window,
       totalRows: filtered.length,
+    };
+  }
+
+  private scanRawWindowSlots(
+    plan: TopicRawWindowScanPlan<object>,
+    compareSlots: (left: number, right: number) => number,
+  ): TopicRawWindowScanResult<object> {
+    let totalRows = 0;
+    const filteredSlots: Array<number> = [];
+    for (let slot = 0; slot < this.slots.length; slot += 1) {
+      const entry = this.slots[slot]!;
+      if (!this.slotMayMatchFilters(slot, plan.predicate.filters) || !plan.matches(entry.row)) {
+        continue;
+      }
+      totalRows += 1;
+      if (plan.limit !== 0) {
+        filteredSlots.push(slot);
+      }
+    }
+    filteredSlots.sort(compareSlots);
+    const windowSlots = filteredSlots.slice(
+      plan.offset,
+      plan.limit === undefined ? undefined : plan.offset + plan.limit,
+    );
+    const window = windowSlots.map((slot) => this.slots[slot]!);
+    return {
+      keys: window.map((entry) => entry.key),
+      window,
+      totalRows,
+    };
+  }
+
+  private rawWindowSlotComparator(
+    plan: TopicRawWindowScanPlan<object>,
+  ): ((left: number, right: number) => number) | undefined {
+    const storageOrderBy = plan.storageOrderBy;
+    if (storageOrderBy === undefined) {
+      return undefined;
+    }
+    for (const order of storageOrderBy) {
+      if (!this.columns.has(order.field)) {
+        return undefined;
+      }
+    }
+
+    return (left, right) => {
+      for (const order of storageOrderBy) {
+        const column = this.columns.get(order.field)!;
+        const comparison = compareQueryValue(column[left], column[right]);
+        if (comparison !== undefined && comparison !== 0) {
+          return order.direction === "asc" ? comparison : -comparison;
+        }
+      }
+      const leftKey = this.slots[left]!.key;
+      const rightKey = this.slots[right]!.key;
+      return Number(leftKey > rightKey) - Number(leftKey < rightKey);
     };
   }
 

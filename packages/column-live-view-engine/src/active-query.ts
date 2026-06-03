@@ -124,6 +124,7 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
     where: compiled.query.where,
     predicate: compiled.predicate.plan,
     orderBy: compiled.ordering.plan,
+    storageOrderBy: compiled.ordering.plan,
     matches: compiled.predicate.matches,
     compare: compiled.ordering.compare,
     offset: compiled.window.offset,

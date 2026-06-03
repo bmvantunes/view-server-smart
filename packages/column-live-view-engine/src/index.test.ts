@@ -451,6 +451,52 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
     }),
   );
 
+  it.effect("returns exact totalRows while windowing a sorted raw snapshot", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+
+      yield* engine.publishMany("orders", [
+        order("a", "open", 1, 1),
+        order("b", "open", 8, 2),
+        order("c", "open", 3, 3),
+        order("d", "open", 10, 4),
+        order("e", "open", 5, 5),
+        order("f", "open", 7, 6),
+        order("g", "open", 2, 7),
+        order("h", "closed", 99, 8),
+      ]);
+
+      const windowed = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          status: "open",
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        offset: 2,
+        limit: 3,
+      });
+
+      expect(windowed.rows).toStrictEqual([
+        { id: "f", price: 7 },
+        { id: "e", price: 5 },
+        { id: "c", price: 3 },
+      ]);
+      expect(windowed.totalRows).toBe(7);
+
+      const countOnly = yield* engine.snapshot("orders", {
+        select: ["id"],
+        where: {
+          status: "open",
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 0,
+      });
+
+      expect(countOnly.rows).toStrictEqual([]);
+      expect(countOnly.totalRows).toBe(7);
+    }),
+  );
+
   it.effect("does not expose stored row objects through snapshots", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
@@ -961,7 +1007,8 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
     Effect.gen(function* () {
       const rows = [
         { key: "closed", row: order("closed", "closed", 1, 1) },
-        { key: "open-high", row: order("open-high", "open", 20, 3) },
+        { key: "open-z", row: order("open-z", "open", 20, 3) },
+        { key: "open-a", row: order("open-a", "open", 20, 4) },
         { key: "open-low", row: order("open-low", "open", 10, 2) },
       ];
       const compiled = yield* prepareRawQuery<object, object>(
@@ -1019,10 +1066,14 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         compiled,
       );
 
-      expect(evaluation.keys).toStrictEqual(["open-high", "open-low"]);
+      expect(evaluation.keys).toStrictEqual(["open-a", "open-z", "open-low"]);
       expect(evaluation.rows).toStrictEqual([
         {
-          id: "open-high",
+          id: "open-a",
+          price: 20,
+        },
+        {
+          id: "open-z",
           price: 20,
         },
         {
@@ -1030,8 +1081,76 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
           price: 10,
         },
       ]);
-      expect(evaluation.totalRows).toBe(2);
+      expect(evaluation.totalRows).toBe(3);
       expect(evaluation.version).toBe(7);
+    }),
+  );
+
+  it.effect("passes scalar ordering semantics to custom storage scanners", () =>
+    Effect.gen(function* () {
+      const active = { key: "active", row: position("active", "AAPL", 1n, "1", true) };
+      const activeTie = { key: "active-tie", row: position("active-tie", "AAPL", 1n, "1", true) };
+      const inactive = { key: "inactive", row: position("inactive", "AAPL", 1n, "1", false) };
+      const orderRows = [
+        { key: "closed", row: order("closed", "closed", 1, 1) },
+        { key: "open-high", row: order("open-high", "open", 20, 2) },
+        { key: "open-low", row: order("open-low", "open", 10, 3) },
+      ];
+      const booleanCompiled = yield* prepareRawQuery<object, object>(
+        "positions",
+        rawQueryCompilerMetadata(Position),
+        {
+          select: ["id"],
+          orderBy: [{ field: "active", direction: "asc" }],
+        },
+      );
+      const orderCompiled = yield* prepareRawQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "price", direction: "asc" }],
+        },
+      );
+
+      const booleanEvaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.compare(active, inactive)).toBe(1);
+            expect(plan.compare(inactive, active)).toBe(-1);
+            expect(plan.compare(active, activeTie)).toBe(-1);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 1,
+        },
+        booleanCompiled,
+      );
+      const orderEvaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            const filtered = orderRows.filter((entry) => plan.matches(entry.row));
+            const ordered = filtered.toSorted(plan.compare);
+            return {
+              keys: ordered.map((entry) => entry.key),
+              window: ordered,
+              totalRows: filtered.length,
+            };
+          },
+          version: () => 2,
+        },
+        orderCompiled,
+      );
+
+      expect(booleanEvaluation.totalRows).toBe(0);
+      expect(orderEvaluation.keys).toStrictEqual(["open-low", "open-high"]);
+      expect(orderEvaluation.version).toBe(2);
     }),
   );
 
@@ -3017,6 +3136,10 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
       const compareByKey = (left: { readonly key: string }, right: { readonly key: string }) =>
         left.key.localeCompare(right.key);
+      const compareByKeyDescending = (
+        left: { readonly key: string },
+        right: { readonly key: string },
+      ) => right.key.localeCompare(left.key);
       const matchesOnlySecondRow = (row: object) => fieldValue(row, "id") === "2";
       const missingColumn = readModel.scanRawWindow({
         where: undefined,
@@ -3031,6 +3154,64 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         limit: undefined,
       });
       expect(missingColumn.keys).toStrictEqual(["2"]);
+
+      const missingOrderColumn = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "missing", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(missingOrderColumn.keys).toStrictEqual(["3", "2"]);
+
+      const existingOrderColumnCustomCompare = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(existingOrderColumnCustomCompare.keys).toStrictEqual(["3", "2"]);
+
+      const invalidStorageOrderColumn = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "missing", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(invalidStorageOrderColumn.keys).toStrictEqual(["3", "2"]);
+
+      const missingOrderColumnLimitedMisses = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "missing", direction: "asc" }],
+        matches: matchesOnlySecondRow,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: 1,
+      });
+      expect(missingOrderColumnLimitedMisses.keys).toStrictEqual(["2"]);
+      expect(missingOrderColumnLimitedMisses.totalRows).toBe(1);
 
       const invalidStartsWithPlan = readModel.scanRawWindow({
         where: undefined,
@@ -3073,6 +3254,21 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         limit: undefined,
       });
       expect(nonFiniteRangePlan.keys).toStrictEqual(["2"]);
+
+      const zeroLimitPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 0,
+      });
+      expect(zeroLimitPlan.keys).toStrictEqual([]);
+      expect(zeroLimitPlan.totalRows).toBe(2);
     }),
   );
 
