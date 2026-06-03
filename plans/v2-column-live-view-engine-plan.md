@@ -1243,6 +1243,36 @@ Minimum benchmark profiles:
 - reconnect/route-change churn
 - slow-client/backpressure
 
+Current engine raw benchmark harness:
+
+```bash
+vp run --no-cache column-live-view-engine#bench:raw-snapshot
+```
+
+Use `--no-cache` because benchmark row counts and timing are environment-driven. This harness is
+currently a timing-focused raw engine benchmark; the full production benchmark artifact fields below
+still need to be added to the broader benchmark suite. It defaults to a 100k-row smoke profile and
+writes `packages/column-live-view-engine/.artifacts/raw-snapshot.json`. Run each row count in a
+separate process so previous profiles do not contaminate GC/RSS/latency. For example:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-snapshot
+VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 vp run --no-cache column-live-view-engine#bench:raw-snapshot
+VIEW_SERVER_ENGINE_BENCH_ROWS=10000000 vp run --no-cache column-live-view-engine#bench:raw-snapshot
+```
+
+Supported knobs:
+
+- `VIEW_SERVER_ENGINE_BENCH_ROWS`: row count for this benchmark process.
+- `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding.
+- `VIEW_SERVER_ENGINE_BENCH_ITERATIONS`: benchmark iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: benchmark time budget per case.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: warmup iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: warmup time budget per case.
+
+For decision-quality large-row runs, keep `--no-cache` and use multiple iterations. One-sample runs
+are useful only to verify feasibility and approximate scale.
+
 Each benchmark artifact must include:
 
 - row count

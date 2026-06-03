@@ -34,3 +34,5 @@ dist-ssr
 # Test artifacts
 **/.vitest-attachments/
 **/src/__screenshots__/
+packages/*/.artifacts/*
+!packages/*/.artifacts/.gitkeep
