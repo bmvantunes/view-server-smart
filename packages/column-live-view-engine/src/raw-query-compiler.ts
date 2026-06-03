@@ -694,7 +694,7 @@ const compareByStableString = (left: unknown, right: unknown): number => {
   return Number(leftString > rightString) - Number(leftString < rightString);
 };
 
-export const compareQueryValue = (left: unknown, right: unknown): number | undefined => {
+export const compareQueryValue = (left: unknown, right: unknown): number => {
   const leftRank = valueRank(left);
   const rightRank = valueRank(right);
   if (leftRank !== rightRank) {
@@ -863,7 +863,7 @@ const isScalarPlanValue = (value: unknown): boolean =>
   isBigDecimal(value) ||
   (typeof value === "number" && Number.isFinite(value));
 
-const isRangePlanValue = (
+export const isRangePlanValue = (
   field: string,
   value: unknown,
   metadata: RawQueryCompilerMetadata,
@@ -1089,7 +1089,7 @@ const compareRows = <Row extends RowObject>(
       fieldValue(left.row, order.field),
       fieldValue(right.row, order.field),
     );
-    if (comparison !== undefined && comparison !== 0) {
+    if (comparison !== 0) {
       return order.direction === "asc" ? comparison : -comparison;
     }
   }

@@ -224,7 +224,7 @@ const updateAggregateState = (
     return;
   }
   const comparison = compareQueryValue(value, state.value);
-  if (comparison === undefined || comparison === 0) {
+  if (comparison === 0) {
     return;
   }
   if ((state.aggFunc === "min" && comparison < 0) || (state.aggFunc === "max" && comparison > 0)) {
@@ -291,7 +291,7 @@ const compareGroupedRows = (
   for (const order of orderBy) {
     const field = "field" in order ? order.field : order.aggregate;
     const comparison = compareQueryValue(fieldValue(left.row, field), fieldValue(right.row, field));
-    if (comparison !== undefined && comparison !== 0) {
+    if (comparison !== 0) {
       return order.direction === "asc" ? comparison : -comparison;
     }
   }

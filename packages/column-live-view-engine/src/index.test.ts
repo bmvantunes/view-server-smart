@@ -578,6 +578,219 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
     }),
   );
 
+  it.effect("uses ordered range seeks for raw snapshots", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+
+      yield* engine.publishMany("orders", [
+        order("a", "open", 1, 1),
+        order("b", "open", 2, 2),
+        order("c", "open", 3, 3),
+        order("d", "open", 4, 4),
+        order("e", "open", 5, 5),
+        order("f", "open", 6, 6),
+        order("g", "open", 7, 7),
+        order("h", "open", 8, 8),
+        order("z", "closed", 99, 9),
+      ]);
+
+      const ascendingInclusive = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gte: 3 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        offset: 1,
+        limit: 2,
+      });
+
+      expect(ascendingInclusive.rows).toStrictEqual([
+        { id: "d", price: 4 },
+        { id: "e", price: 5 },
+      ]);
+      expect(ascendingInclusive.totalRows).toBe(7);
+
+      const ascendingExclusive = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gt: 3, lt: 7 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(ascendingExclusive.rows).toStrictEqual([
+        { id: "d", price: 4 },
+        { id: "e", price: 5 },
+        { id: "f", price: 6 },
+      ]);
+      expect(ascendingExclusive.totalRows).toBe(3);
+
+      const strongerDifferentBounds = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gt: 3, gte: 4, lt: 8, lte: 6 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(strongerDifferentBounds.rows).toStrictEqual([
+        { id: "d", price: 4 },
+        { id: "e", price: 5 },
+        { id: "f", price: 6 },
+      ]);
+      expect(strongerDifferentBounds.totalRows).toBe(3);
+
+      const strongerEqualBounds = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gte: 3, gt: 3, lte: 6, lt: 6 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(strongerEqualBounds.rows).toStrictEqual([
+        { id: "d", price: 4 },
+        { id: "e", price: 5 },
+      ]);
+      expect(strongerEqualBounds.totalRows).toBe(2);
+
+      const descendingInclusive = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { lte: 6 },
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        offset: 1,
+        limit: 2,
+      });
+
+      expect(descendingInclusive.rows).toStrictEqual([
+        { id: "e", price: 5 },
+        { id: "d", price: 4 },
+      ]);
+      expect(descendingInclusive.totalRows).toBe(6);
+
+      const descendingExclusive = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { lt: 6 },
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 2,
+      });
+
+      expect(descendingExclusive.rows).toStrictEqual([
+        { id: "e", price: 5 },
+        { id: "d", price: 4 },
+      ]);
+      expect(descendingExclusive.totalRows).toBe(5);
+
+      const descendingLowerBound = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gt: 3 },
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 2,
+      });
+
+      expect(descendingLowerBound.rows).toStrictEqual([
+        { id: "z", price: 99 },
+        { id: "h", price: 8 },
+      ]);
+      expect(descendingLowerBound.totalRows).toBe(6);
+
+      const descendingLowerInclusive = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gte: 6 },
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        limit: 4,
+      });
+
+      expect(descendingLowerInclusive.rows).toStrictEqual([
+        { id: "z", price: 99 },
+        { id: "h", price: 8 },
+        { id: "g", price: 7 },
+        { id: "f", price: 6 },
+      ]);
+      expect(descendingLowerInclusive.totalRows).toBe(4);
+
+      const exactInclusiveRange = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gte: 4, lte: 4 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 2,
+      });
+
+      expect(exactInclusiveRange.rows).toStrictEqual([{ id: "d", price: 4 }]);
+      expect(exactInclusiveRange.totalRows).toBe(1);
+
+      const impossibleRange = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gt: 4, lte: 4 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 5,
+      });
+
+      expect(impossibleRange.rows).toStrictEqual([]);
+      expect(impossibleRange.totalRows).toBe(0);
+
+      const invertedRange = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gt: 7, lt: 4 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 5,
+      });
+
+      expect(invertedRange.rows).toStrictEqual([]);
+      expect(invertedRange.totalRows).toBe(0);
+
+      const nonOrderFieldRange = yield* engine.snapshot("orders", {
+        select: ["id", "price", "updatedAt"],
+        where: {
+          price: { gte: 4 },
+        },
+        orderBy: [{ field: "updatedAt", direction: "desc" }],
+        limit: 2,
+      });
+
+      expect(nonOrderFieldRange.rows).toStrictEqual([
+        { id: "z", price: 99, updatedAt: 9 },
+        { id: "h", price: 8, updatedAt: 8 },
+      ]);
+      expect(nonOrderFieldRange.totalRows).toBe(6);
+
+      yield* engine.publish("orders", order("i", "open", 9, 10));
+
+      const afterAppend = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        where: {
+          price: { gte: 8 },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 3,
+      });
+
+      expect(afterAppend.rows).toStrictEqual([
+        { id: "h", price: 8 },
+        { id: "i", price: 9 },
+        { id: "z", price: 99 },
+      ]);
+      expect(afterAppend.totalRows).toBe(3);
+    }),
+  );
+
   it.effect("does not expose stored row objects through snapshots", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
@@ -3364,6 +3577,59 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(infiniteLimitPlan.keys).toStrictEqual(["2", "3"]);
       expect(infiniteLimitPlan.totalRows).toBe(2);
+
+      const callbackRequiredStorageOrderPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [],
+          callbackRequired: true,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: matchesOnlySecondRow,
+        compare: compareByKeyDescending,
+        offset: 0,
+        limit: 10,
+      });
+      expect(callbackRequiredStorageOrderPlan.keys).toStrictEqual(["2"]);
+      expect(callbackRequiredStorageOrderPlan.totalRows).toBe(1);
+
+      const manuallyOrderedEqualExclusiveBounds = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [
+            { field: "price", operator: "gte", value: 20 },
+            { field: "price", operator: "gt", value: 20 },
+            { field: "price", operator: "lte", value: 30 },
+            { field: "price", operator: "lt", value: 30 },
+          ],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(manuallyOrderedEqualExclusiveBounds.keys).toStrictEqual([]);
+      expect(manuallyOrderedEqualExclusiveBounds.totalRows).toBe(0);
+
+      const unsafeRangeHintPlan = readModel.scanRawWindow({
+        where: undefined,
+        predicate: {
+          filters: [{ field: "price", operator: "gt", value: "10" }],
+          callbackRequired: false,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(unsafeRangeHintPlan.keys).toStrictEqual(["2", "3"]);
+      expect(unsafeRangeHintPlan.totalRows).toBe(2);
 
       const missingOrderColumnLimitedMisses = readModel.scanRawWindow({
         where: undefined,
