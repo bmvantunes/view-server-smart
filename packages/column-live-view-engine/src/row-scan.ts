@@ -12,8 +12,35 @@ export type TopicRawOrderByPlan = {
   readonly direction: "asc" | "desc";
 };
 
+export type TopicRawPredicateFilterPlan =
+  | {
+      readonly field: string;
+      readonly operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "startsWith";
+      readonly value: unknown;
+    }
+  | {
+      readonly field: string;
+      readonly operator: "in";
+      readonly values: ReadonlyArray<unknown>;
+    };
+
+export type TopicRawPredicatePlan = {
+  /**
+   * Safe scalar hints that storage can use to narrow a raw scan.
+   * `matches` remains the correctness guard unless an adapter implements a
+   * proven equivalent for every emitted hint.
+   */
+  readonly filters: ReadonlyArray<TopicRawPredicateFilterPlan>;
+  /**
+   * True when the compiler intentionally omitted part of the predicate from
+   * `filters`, for example structured fields or malformed runtime filters.
+   */
+  readonly callbackRequired: boolean;
+};
+
 export type TopicRawWindowScanPlan<Row extends RowObject> = {
   readonly where: Readonly<Record<string, unknown>> | undefined;
+  readonly predicate: TopicRawPredicatePlan;
   readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
   readonly matches: (row: Row) => boolean;
   readonly compare: (left: TopicRowEntry<Row>, right: TopicRowEntry<Row>) => number;

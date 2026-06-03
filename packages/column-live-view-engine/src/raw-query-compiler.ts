@@ -1,5 +1,5 @@
 import { viewServerSchemaFieldMetadata, type FieldKey, type OrderBy } from "@view-server/config";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, SchemaAST } from "effect";
 import { format as formatBigDecimal, isBigDecimal, normalize, Order } from "effect/BigDecimal";
 import {
   cloneRecord,
@@ -9,7 +9,7 @@ import {
   isRecord,
   valuesEqual,
 } from "./row-values";
-import type { TopicRowEntry } from "./row-scan";
+import type { TopicRawOrderByPlan, TopicRawPredicatePlan, TopicRowEntry } from "./row-scan";
 
 type RowObject = object;
 const compiledRawQueryBrand: unique symbol = Symbol("CompiledRawQuery");
@@ -45,7 +45,7 @@ export type RawQueryCompilerMetadata = {
   readonly stringFieldNames: ReadonlySet<string>;
   readonly numericFieldNames: ReadonlySet<string>;
   readonly bigintFieldNames: ReadonlySet<string>;
-  readonly bigDecimalFieldNames: ReadonlySet<string>;
+  readonly rangeValueKinds: ReadonlyMap<string, ReadonlySet<RangeValueKind>>;
 };
 
 export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject> = {
@@ -58,10 +58,12 @@ export type CompiledRawQuery<Row extends RowObject, ResultRow extends RowObject>
 };
 
 export type CompiledRawPredicate<Row extends RowObject> = {
+  readonly plan: TopicRawPredicatePlan;
   readonly matches: (row: Row) => boolean;
 };
 
 export type CompiledRawOrdering<Row extends RowObject> = {
+  readonly plan: ReadonlyArray<TopicRawOrderByPlan>;
   readonly compare: (left: TopicRowEntry<Row>, right: TopicRowEntry<Row>) => number;
 };
 
@@ -84,6 +86,8 @@ type FilterObject = {
   readonly lte?: unknown;
   readonly startsWith?: string;
 };
+
+type RangeValueKind = "number" | "bigint" | "bigDecimal";
 
 const rawQueryKeys = new Set(["where", "orderBy", "offset", "limit", "select"]);
 const filterOperatorKeys = new Set(["eq", "neq", "in", "gt", "gte", "lt", "lte", "startsWith"]);
@@ -137,6 +141,50 @@ const isQueryValueSafe = (value: unknown, active: WeakSet<object> = new WeakSet(
 const isSchemaWithFields = (schema: Schema.Decoder<object>): schema is SchemaWithFields =>
   "fields" in schema && isRecord(schema.fields);
 
+const schemaAst = (schema: unknown): SchemaAST.AST | undefined => {
+  if (!isRecord(schema)) {
+    return undefined;
+  }
+  const ast = schema["ast"];
+  return SchemaAST.isAST(ast) ? ast : undefined;
+};
+
+const isBigDecimalAst = (ast: SchemaAST.AST): boolean =>
+  SchemaAST.isDeclaration(ast) &&
+  isRecord(ast.annotations?.["typeConstructor"]) &&
+  ast.annotations["typeConstructor"]["_tag"] === "effect/BigDecimal";
+
+const rangeValueKindsAst = (ast: SchemaAST.AST): ReadonlySet<RangeValueKind> => {
+  if (SchemaAST.isNumber(ast)) {
+    return new Set(["number"]);
+  }
+  if (SchemaAST.isBigInt(ast)) {
+    return new Set(["bigint"]);
+  }
+  if (isBigDecimalAst(ast)) {
+    return new Set(["bigDecimal"]);
+  }
+  if (SchemaAST.isLiteral(ast)) {
+    if (typeof ast.literal === "number") {
+      return new Set(["number"]);
+    }
+    if (typeof ast.literal === "bigint") {
+      return new Set(["bigint"]);
+    }
+    return new Set();
+  }
+  if (!SchemaAST.isUnion(ast) || ast.types.length === 0) {
+    return new Set();
+  }
+  const kinds = new Set<RangeValueKind>();
+  for (const member of ast.types) {
+    for (const kind of rangeValueKindsAst(member)) {
+      kinds.add(kind);
+    }
+  }
+  return kinds;
+};
+
 const schemaFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> =>
   isSchemaWithFields(schema) ? new Set(Object.keys(schema.fields)) : new Set();
 
@@ -183,15 +231,22 @@ const schemaBigintFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<str
   return fields;
 };
 
-const schemaBigDecimalFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaRangeValueKinds = (
+  schema: Schema.Decoder<object>,
+): ReadonlyMap<string, ReadonlySet<RangeValueKind>> => {
   if (!isSchemaWithFields(schema)) {
-    return new Set();
+    return new Map();
   }
 
-  const fields = new Set<string>();
+  const fields = new Map<string, ReadonlySet<RangeValueKind>>();
   for (const [field, fieldSchema] of Object.entries(schema.fields)) {
-    if (viewServerSchemaFieldMetadata(fieldSchema).sumResultKind === "bigDecimal") {
-      fields.add(field);
+    const ast = schemaAst(fieldSchema);
+    if (ast === undefined) {
+      continue;
+    }
+    const kinds = rangeValueKindsAst(ast);
+    if (kinds.size > 0) {
+      fields.set(field, kinds);
     }
   }
   return fields;
@@ -249,7 +304,7 @@ export const rawQueryCompilerMetadata = (
   stringFieldNames: schemaStringFieldNames(schema),
   numericFieldNames: schemaNumericFieldNames(schema),
   bigintFieldNames: schemaBigintFieldNames(schema),
-  bigDecimalFieldNames: schemaBigDecimalFieldNames(schema),
+  rangeValueKinds: schemaRangeValueKinds(schema),
 });
 
 const decodeRawQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.decode")((
@@ -787,17 +842,232 @@ const matchesFilter = (value: unknown, filter: unknown): boolean => {
   return true;
 };
 
-const compileMatches = <Row extends RowObject>(
+const rangeValueKind = (value: unknown): RangeValueKind | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return "number";
+  }
+  if (typeof value === "bigint") {
+    return "bigint";
+  }
+  if (isBigDecimal(value)) {
+    return "bigDecimal";
+  }
+  return undefined;
+};
+
+const isScalarPlanValue = (value: unknown): boolean =>
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "boolean" ||
+  typeof value === "bigint" ||
+  isBigDecimal(value) ||
+  (typeof value === "number" && Number.isFinite(value));
+
+const isRangePlanValue = (
+  field: string,
+  value: unknown,
+  metadata: RawQueryCompilerMetadata,
+): boolean => {
+  const kind = rangeValueKind(value);
+  const fieldKinds = metadata.rangeValueKinds.get(field);
+  return kind !== undefined && fieldKinds?.size === 1 && fieldKinds.has(kind);
+};
+
+const isEqualityPlanValue = (value: unknown): boolean => isScalarPlanValue(value);
+
+const isNotEqualPlanValue = (
+  field: string,
+  value: unknown,
+  metadata: RawQueryCompilerMetadata,
+): boolean => {
+  if (!isEqualityPlanValue(value)) {
+    return false;
+  }
+  if (metadata.numericFieldNames.has(field)) {
+    return isRangePlanValue(field, value, metadata);
+  }
+  if (metadata.stringFieldNames.has(field)) {
+    return typeof value === "string";
+  }
+  return false;
+};
+
+const isInPlanValues = (value: unknown): value is ReadonlyArray<unknown> =>
+  Array.isArray(value) &&
+  isDenseArray(value) &&
+  value.every((candidate) => isEqualityPlanValue(candidate));
+
+type PredicateFieldPlan = {
+  readonly filters: TopicRawPredicatePlan["filters"];
+  readonly callbackRequired: boolean;
+};
+
+const predicateFilterPlans = (
+  field: string,
+  filter: unknown,
+  metadata: RawQueryCompilerMetadata,
+): PredicateFieldPlan => {
+  if (metadata.structuredFieldNames.has(field) || filter === undefined) {
+    return {
+      filters: [],
+      callbackRequired: true,
+    };
+  }
+  if (!isPlainRecord(filter) || isBigDecimal(filter)) {
+    if (!isScalarPlanValue(filter)) {
+      return {
+        filters: [],
+        callbackRequired: true,
+      };
+    }
+    return {
+      filters: [
+        {
+          field,
+          operator: "eq",
+          value: filter,
+        },
+      ],
+      callbackRequired: false,
+    };
+  }
+
+  const operatorKeys = Object.keys(filter).filter((key) => filterOperatorKeys.has(key));
+  let callbackRequired = operatorKeys.length === 0;
+  const plans: Array<TopicRawPredicatePlan["filters"][number]> = [];
+  if ("eq" in filter) {
+    if (isEqualityPlanValue(filter["eq"])) {
+      plans.push({
+        field,
+        operator: "eq",
+        value: filter["eq"],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  if ("neq" in filter) {
+    if (isNotEqualPlanValue(field, filter["neq"], metadata)) {
+      plans.push({
+        field,
+        operator: "neq",
+        value: filter["neq"],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  if ("in" in filter) {
+    if (isInPlanValues(filter["in"])) {
+      plans.push({
+        field,
+        operator: "in",
+        values: [...filter["in"]],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  if ("gt" in filter) {
+    if (isRangePlanValue(field, filter["gt"], metadata)) {
+      plans.push({
+        field,
+        operator: "gt",
+        value: filter["gt"],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  if ("gte" in filter) {
+    if (isRangePlanValue(field, filter["gte"], metadata)) {
+      plans.push({
+        field,
+        operator: "gte",
+        value: filter["gte"],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  if ("lt" in filter) {
+    if (isRangePlanValue(field, filter["lt"], metadata)) {
+      plans.push({
+        field,
+        operator: "lt",
+        value: filter["lt"],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  if ("lte" in filter) {
+    if (isRangePlanValue(field, filter["lte"], metadata)) {
+      plans.push({
+        field,
+        operator: "lte",
+        value: filter["lte"],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  if ("startsWith" in filter) {
+    if (typeof filter["startsWith"] === "string") {
+      plans.push({
+        field,
+        operator: "startsWith",
+        value: filter["startsWith"],
+      });
+    } else {
+      callbackRequired = true;
+    }
+  }
+  return {
+    filters: plans,
+    callbackRequired,
+  };
+};
+
+const compilePredicatePlan = (
+  metadata: RawQueryCompilerMetadata,
   where: RuntimeRawQuery["where"],
-): CompiledRawPredicate<Row> => {
+): TopicRawPredicatePlan => {
   if (where === undefined) {
     return {
+      filters: [],
+      callbackRequired: false,
+    };
+  }
+
+  const filters: Array<TopicRawPredicatePlan["filters"][number]> = [];
+  let callbackRequired = false;
+  for (const [field, filter] of Object.entries(where)) {
+    const fieldPlan = predicateFilterPlans(field, filter, metadata);
+    filters.push(...fieldPlan.filters);
+    callbackRequired ||= fieldPlan.callbackRequired;
+  }
+  return {
+    filters,
+    callbackRequired,
+  };
+};
+
+const compileMatches = <Row extends RowObject>(
+  metadata: RawQueryCompilerMetadata,
+  where: RuntimeRawQuery["where"],
+): CompiledRawPredicate<Row> => {
+  const plan = compilePredicatePlan(metadata, where);
+  if (where === undefined) {
+    return {
+      plan,
       matches: () => true,
     };
   }
 
   const filters = Object.entries(where);
   return {
+    plan,
     matches: (row) => {
       for (const [field, filter] of filters) {
         if (!matchesFilter(fieldValue(row, field), filter)) {
@@ -860,6 +1130,7 @@ const compileProjection = <Row extends RowObject, ResultRow extends RowObject>(
 const compileOrdering = <Row extends RowObject>(
   orderBy: ReadonlyArray<OrderBy<Record<string, unknown>>>,
 ): CompiledRawOrdering<Row> => ({
+  plan: [...orderBy],
   compare: (left, right) => compareRows(left, right, orderBy),
 });
 
@@ -869,11 +1140,12 @@ const compileWindow = (query: RuntimeRawQuery): CompiledRawWindow => ({
 });
 
 const compileRawQueryParts = <Row extends RowObject, ResultRow extends RowObject>(
+  metadata: RawQueryCompilerMetadata,
   query: RuntimeRawQuery,
 ): Pick<CompiledRawQuery<Row, ResultRow>, "predicate" | "ordering" | "projection" | "window"> => {
   const orderBy = query.orderBy ?? [];
   return {
-    predicate: compileMatches(query.where),
+    predicate: compileMatches(metadata, query.where),
     ordering: compileOrdering(orderBy),
     projection: compileProjection(query.select),
     window: compileWindow(query),
@@ -881,9 +1153,10 @@ const compileRawQueryParts = <Row extends RowObject, ResultRow extends RowObject
 };
 
 const compileRawQuery = <Row extends RowObject, ResultRow extends RowObject>(
+  metadata: RawQueryCompilerMetadata,
   query: RuntimeRawQuery,
 ): CompiledRawQuery<Row, ResultRow> => {
-  const parts = compileRawQueryParts<Row, ResultRow>(query);
+  const parts = compileRawQueryParts<Row, ResultRow>(metadata, query);
   return {
     [compiledRawQueryBrand]: true,
     query,
@@ -900,5 +1173,5 @@ export const prepareRawQuery = Effect.fn("ColumnLiveViewEngine.rawQuery.prepare"
 >(topic: string, metadata: RawQueryCompilerMetadata, query: unknown) {
   const decoded = yield* decodeRawQuery(topic, metadata, query);
   yield* validateRuntimeQuery(topic, metadata, decoded);
-  return compileRawQuery<Row, ResultRow>(decoded);
+  return compileRawQuery<Row, ResultRow>(metadata, decoded);
 });

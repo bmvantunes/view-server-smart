@@ -985,6 +985,16 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.where).toStrictEqual({
               status: "open",
             });
+            expect(plan.predicate).toStrictEqual({
+              filters: [
+                {
+                  field: "status",
+                  operator: "eq",
+                  value: "open",
+                },
+              ],
+              callbackRequired: false,
+            });
             expect(plan.orderBy).toStrictEqual([
               {
                 field: "price",
@@ -1021,6 +1031,554 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       ]);
       expect(evaluation.totalRows).toBe(2);
       expect(evaluation.version).toBe(7);
+    }),
+  );
+
+  it.effect("passes typed scalar predicate plans to the storage scan interface", () =>
+    Effect.gen(function* () {
+      const compiled = yield* prepareRawQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          select: ["id"],
+          where: {
+            status: {
+              neq: "cancelled",
+              in: ["open", "closed"],
+            },
+            price: {
+              neq: 50,
+              gt: 1,
+              gte: 2,
+              lt: 100,
+              lte: 99,
+            },
+            customerId: {
+              startsWith: "customer-",
+            },
+            region: "emea",
+          },
+          orderBy: [
+            {
+              field: "region",
+              direction: "asc",
+            },
+            {
+              field: "price",
+              direction: "desc",
+            },
+          ],
+        },
+      );
+      const evaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [
+                {
+                  field: "status",
+                  operator: "neq",
+                  value: "cancelled",
+                },
+                {
+                  field: "status",
+                  operator: "in",
+                  values: ["open", "closed"],
+                },
+                {
+                  field: "price",
+                  operator: "neq",
+                  value: 50,
+                },
+                {
+                  field: "price",
+                  operator: "gt",
+                  value: 1,
+                },
+                {
+                  field: "price",
+                  operator: "gte",
+                  value: 2,
+                },
+                {
+                  field: "price",
+                  operator: "lt",
+                  value: 100,
+                },
+                {
+                  field: "price",
+                  operator: "lte",
+                  value: 99,
+                },
+                {
+                  field: "customerId",
+                  operator: "startsWith",
+                  value: "customer-",
+                },
+                {
+                  field: "region",
+                  operator: "eq",
+                  value: "emea",
+                },
+              ],
+              callbackRequired: false,
+            });
+            expect(plan.orderBy).toStrictEqual([
+              {
+                field: "region",
+                direction: "asc",
+              },
+              {
+                field: "price",
+                direction: "desc",
+              },
+            ]);
+            expect(plan.matches(order("open-low", "open", 10, 2))).toBe(true);
+            expect(plan.matches(order("cancelled", "cancelled", 10, 2))).toBe(false);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 11,
+        },
+        compiled,
+      );
+
+      expect(evaluation.keys).toStrictEqual([]);
+      expect(evaluation.rows).toStrictEqual([]);
+      expect(evaluation.totalRows).toBe(0);
+      expect(evaluation.version).toBe(11);
+    }),
+  );
+
+  it.effect("passes typed bigint and bigdecimal range plans to the storage scan interface", () =>
+    Effect.gen(function* () {
+      const excludedPrice = fromStringUnsafe("0");
+      const maxPrice = fromStringUnsafe("100");
+      const compiled = yield* prepareRawQuery<object, object>(
+        "positions",
+        rawQueryCompilerMetadata(Position),
+        {
+          select: ["id"],
+          where: {
+            quantity: {
+              gte: 10n,
+            },
+            price: {
+              neq: excludedPrice,
+              lt: maxPrice,
+            },
+          },
+        },
+      );
+      const evaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [
+                {
+                  field: "quantity",
+                  operator: "gte",
+                  value: 10n,
+                },
+                {
+                  field: "price",
+                  operator: "neq",
+                  value: excludedPrice,
+                },
+                {
+                  field: "price",
+                  operator: "lt",
+                  value: maxPrice,
+                },
+              ],
+              callbackRequired: false,
+            });
+            expect(plan.matches(position("aapl", "AAPL", 20n, "10"))).toBe(true);
+            expect(plan.matches(position("goog", "GOOG", 1n, "10"))).toBe(false);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 12,
+        },
+        compiled,
+      );
+
+      expect(evaluation.keys).toStrictEqual([]);
+      expect(evaluation.rows).toStrictEqual([]);
+      expect(evaluation.totalRows).toBe(0);
+      expect(evaluation.version).toBe(12);
+    }),
+  );
+
+  it.effect("passes typed numeric literal range plans to the storage scan interface", () =>
+    Effect.gen(function* () {
+      const LiteralMetrics = Schema.Struct({
+        id: Schema.String,
+        score: Schema.Literal(1),
+        bucket: Schema.Literal(1n),
+      });
+      const compiled = yield* prepareRawQuery<object, object>(
+        "literalMetrics",
+        rawQueryCompilerMetadata(LiteralMetrics),
+        {
+          select: ["id"],
+          where: {
+            score: {
+              gte: 1,
+            },
+            bucket: {
+              lte: 1n,
+            },
+          },
+        },
+      );
+      const evaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [
+                {
+                  field: "score",
+                  operator: "gte",
+                  value: 1,
+                },
+                {
+                  field: "bucket",
+                  operator: "lte",
+                  value: 1n,
+                },
+              ],
+              callbackRequired: false,
+            });
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 18,
+        },
+        compiled,
+      );
+
+      expect(evaluation.keys).toStrictEqual([]);
+      expect(evaluation.rows).toStrictEqual([]);
+      expect(evaluation.totalRows).toBe(0);
+      expect(evaluation.version).toBe(18);
+    }),
+  );
+
+  it.effect("keeps malformed scalar operators callback-only in the storage scan plan", () =>
+    Effect.gen(function* () {
+      const compiled = yield* prepareRawQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          select: ["id"],
+          where: {
+            status: {
+              eq: undefined,
+              in: [undefined],
+            },
+            price: {
+              gt: undefined,
+              gte: "9",
+              lt: Number.NaN,
+              lte: fromStringUnsafe("50"),
+            },
+            customerId: {
+              startsWith: 1,
+            },
+            note: undefined,
+          },
+        },
+      );
+      const evaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [],
+              callbackRequired: true,
+            });
+            expect(plan.matches(order("open", "open", 10, 1))).toBe(false);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 14,
+        },
+        compiled,
+      );
+
+      expect(evaluation.keys).toStrictEqual([]);
+      expect(evaluation.rows).toStrictEqual([]);
+      expect(evaluation.totalRows).toBe(0);
+      expect(evaluation.version).toBe(14);
+
+      const structuredScalarCompiled = yield* prepareRawQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          select: ["id"],
+          where: {
+            status: ["open"],
+            customerId: {
+              eq: ["customer-open"],
+            },
+            region: {
+              in: [["emea"]],
+            },
+            price: Number.NaN,
+          },
+        },
+      );
+      const structuredScalarEvaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [],
+              callbackRequired: true,
+            });
+            expect(plan.matches(order("open", "open", 10, 1))).toBe(false);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 17,
+        },
+        structuredScalarCompiled,
+      );
+
+      expect(structuredScalarEvaluation.keys).toStrictEqual([]);
+      expect(structuredScalarEvaluation.rows).toStrictEqual([]);
+      expect(structuredScalarEvaluation.totalRows).toBe(0);
+      expect(structuredScalarEvaluation.version).toBe(17);
+
+      const bigintCompiled = yield* prepareRawQuery<object, object>(
+        "positions",
+        rawQueryCompilerMetadata(Position),
+        {
+          select: ["id"],
+          where: {
+            quantity: {
+              neq: 1,
+            },
+          },
+        },
+      );
+      const bigintEvaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [],
+              callbackRequired: true,
+            });
+            expect(plan.matches(position("bad", "BAD", 10n, "10"))).toBe(false);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 15,
+        },
+        bigintCompiled,
+      );
+
+      expect(bigintEvaluation.keys).toStrictEqual([]);
+      expect(bigintEvaluation.rows).toStrictEqual([]);
+      expect(bigintEvaluation.totalRows).toBe(0);
+      expect(bigintEvaluation.version).toBe(15);
+
+      const bigDecimalCompiled = yield* prepareRawQuery<object, object>(
+        "positions",
+        rawQueryCompilerMetadata(Position),
+        {
+          select: ["id"],
+          where: {
+            price: {
+              lt: 100,
+            },
+          },
+        },
+      );
+      const bigDecimalEvaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [],
+              callbackRequired: true,
+            });
+            expect(plan.matches(position("bad-price", "BAD", 10n, "10"))).toBe(false);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 16,
+        },
+        bigDecimalCompiled,
+      );
+
+      expect(bigDecimalEvaluation.keys).toStrictEqual([]);
+      expect(bigDecimalEvaluation.rows).toStrictEqual([]);
+      expect(bigDecimalEvaluation.totalRows).toBe(0);
+      expect(bigDecimalEvaluation.version).toBe(16);
+
+      const booleanCompiled = yield* prepareRawQuery<object, object>(
+        "positions",
+        rawQueryCompilerMetadata(Position),
+        {
+          select: ["id"],
+          where: {
+            active: {
+              neq: true,
+            },
+          },
+        },
+      );
+      const booleanEvaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [],
+              callbackRequired: true,
+            });
+            expect(plan.matches(position("active", "ACT", 10n, "10", true))).toBe(false);
+            expect(plan.matches(position("inactive", "INA", 10n, "10", false))).toBe(true);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 19,
+        },
+        booleanCompiled,
+      );
+
+      expect(booleanEvaluation.keys).toStrictEqual([]);
+      expect(booleanEvaluation.rows).toStrictEqual([]);
+      expect(booleanEvaluation.totalRows).toBe(0);
+      expect(booleanEvaluation.version).toBe(19);
+
+      const MixedNumeric = Schema.Struct({
+        id: Schema.String,
+        amount: Schema.Union([Schema.Number, Schema.BigInt, Schema.BigDecimal]),
+      });
+      const mixedNumericCompiled = yield* prepareRawQuery<object, object>(
+        "mixedNumeric",
+        rawQueryCompilerMetadata(MixedNumeric),
+        {
+          select: ["id"],
+          where: {
+            amount: {
+              gt: 1,
+            },
+          },
+        },
+      );
+      const mixedNumericEvaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.predicate).toStrictEqual({
+              filters: [],
+              callbackRequired: true,
+            });
+            expect(plan.matches({ id: "number", amount: 2 })).toBe(true);
+            expect(plan.matches({ id: "bigint", amount: 2n })).toBe(false);
+            expect(plan.matches({ id: "decimal", amount: fromStringUnsafe("2") })).toBe(false);
+            return {
+              keys: [],
+              window: [],
+              totalRows: 0,
+            };
+          },
+          version: () => 20,
+        },
+        mixedNumericCompiled,
+      );
+
+      expect(mixedNumericEvaluation.keys).toStrictEqual([]);
+      expect(mixedNumericEvaluation.rows).toStrictEqual([]);
+      expect(mixedNumericEvaluation.totalRows).toBe(0);
+      expect(mixedNumericEvaluation.version).toBe(20);
+    }),
+  );
+
+  it.effect("keeps structured object predicates callback-only in the storage scan plan", () =>
+    Effect.gen(function* () {
+      const compiled = yield* prepareRawQuery<object, object>(
+        "instruments",
+        rawQueryCompilerMetadata(Instrument),
+        {
+          select: ["id"],
+          where: {
+            operatorLike: {
+              eq: "xnys",
+            },
+            operatorRangeLike: {
+              gte: 2,
+            },
+            tags: ["equity"],
+          },
+        },
+      );
+      const evaluation = evaluateRawQuery(
+        {
+          scanRawWindow: (plan) => {
+            expect(plan.where).toStrictEqual({
+              operatorLike: {
+                eq: "xnys",
+              },
+              operatorRangeLike: {
+                gte: 2,
+              },
+              tags: ["equity"],
+            });
+            expect(plan.predicate).toStrictEqual({
+              filters: [],
+              callbackRequired: true,
+            });
+            expect(plan.matches(instrument("1", "xnys", 1, ["equity"]))).toBe(false);
+            expect(plan.matches(instrument("2", "xlon", 2, ["equity"]))).toBe(false);
+            const directMatch = instrument("3", "xnys", 2, ["equity"]);
+            expect(plan.matches(directMatch)).toBe(true);
+            return {
+              keys: ["3"],
+              window: [
+                {
+                  key: "3",
+                  row: directMatch,
+                },
+              ],
+              totalRows: 1,
+            };
+          },
+          version: () => 13,
+        },
+        compiled,
+      );
+
+      expect(evaluation.keys).toStrictEqual(["3"]);
+      expect(evaluation.rows).toStrictEqual([
+        {
+          id: "3",
+        },
+      ]);
+      expect(evaluation.totalRows).toBe(1);
+      expect(evaluation.version).toBe(13);
     }),
   );
 

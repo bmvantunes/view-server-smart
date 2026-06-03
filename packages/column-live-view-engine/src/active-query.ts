@@ -122,7 +122,8 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   const version = store.version();
   const window = store.scanRawWindow({
     where: compiled.query.where,
-    orderBy: compiled.query.orderBy ?? [],
+    predicate: compiled.predicate.plan,
+    orderBy: compiled.ordering.plan,
     matches: compiled.predicate.matches,
     compare: compiled.ordering.compare,
     offset: compiled.window.offset,
