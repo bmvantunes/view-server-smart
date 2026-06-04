@@ -45,6 +45,16 @@ export const snapshotEvent = <Row extends RowObject>(
   totalRows: evaluation.totalRows,
 });
 
+const reindexCurrentKeys = (
+  keys: ReadonlyArray<string>,
+  keyIndexes: Map<string, number>,
+  startIndex: number,
+): void => {
+  for (let index = startIndex; index < keys.length; index += 1) {
+    keyIndexes.set(keys[index]!, index);
+  }
+};
+
 export const deltaOperations = <Row extends RowObject>(
   previous: QueryEvaluation<Row>,
   next: QueryEvaluation<Row>,
@@ -53,12 +63,15 @@ export const deltaOperations = <Row extends RowObject>(
   const nextKeys = new Set(next.keys);
   const currentKeys = [...previous.keys];
   const currentRows = [...previous.rows];
+  const currentKeyIndexes = new Map(currentKeys.map((key, index) => [key, index]));
 
   for (const key of previous.keys) {
     if (!nextKeys.has(key)) {
-      const index = currentKeys.indexOf(key);
+      const index = currentKeyIndexes.get(key)!;
       currentKeys.splice(index, 1);
       currentRows.splice(index, 1);
+      currentKeyIndexes.delete(key);
+      reindexCurrentKeys(currentKeys, currentKeyIndexes, index);
       operations.push({
         type: "remove",
         key,
@@ -67,10 +80,11 @@ export const deltaOperations = <Row extends RowObject>(
   }
 
   for (const [index, { key, row }] of next.window.entries()) {
-    const currentIndex = currentKeys.indexOf(key);
-    if (currentIndex < 0) {
+    const currentIndex = currentKeyIndexes.get(key);
+    if (currentIndex === undefined) {
       currentKeys.splice(index, 0, key);
       currentRows.splice(index, 0, row);
+      reindexCurrentKeys(currentKeys, currentKeyIndexes, index);
       operations.push({
         type: "insert",
         key,
@@ -81,11 +95,11 @@ export const deltaOperations = <Row extends RowObject>(
     }
 
     if (currentIndex !== index) {
-      const currentRow = currentRows[currentIndex]!;
-      currentKeys.splice(currentIndex, 1);
-      currentRows.splice(currentIndex, 1);
-      currentKeys.splice(index, 0, key);
-      currentRows.splice(index, 0, currentRow);
+      const movedKeys = currentKeys.splice(currentIndex, 1);
+      const movedRows = currentRows.splice(currentIndex, 1);
+      currentKeys.splice(index, 0, ...movedKeys);
+      currentRows.splice(index, 0, ...movedRows);
+      reindexCurrentKeys(currentKeys, currentKeyIndexes, Math.min(currentIndex, index));
       operations.push({
         type: "move",
         key,
