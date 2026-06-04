@@ -1471,9 +1471,6 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       const evaluation = evaluateRawQuery(
         {
           scanRawWindow: (plan) => {
-            expect(plan.where).toStrictEqual({
-              status: "open",
-            });
             expect(plan.predicate).toStrictEqual({
               filters: [
                 {
@@ -2099,15 +2096,6 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       const evaluation = evaluateRawQuery(
         {
           scanRawWindow: (plan) => {
-            expect(plan.where).toStrictEqual({
-              operatorLike: {
-                eq: "xnys",
-              },
-              operatorRangeLike: {
-                gte: 2,
-              },
-              tags: ["equity"],
-            });
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
@@ -3605,7 +3593,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       ) => right.key.localeCompare(left.key);
       const matchesOnlySecondRow = (row: object) => fieldValue(row, "id") === "2";
       const missingColumn = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "missing", operator: "eq", value: "anything" }],
           callbackRequired: true,
@@ -3619,7 +3606,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(missingColumn.keys).toStrictEqual(["2"]);
 
       const missingOrderColumn = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3633,7 +3619,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(missingOrderColumn.keys).toStrictEqual(["3", "2"]);
 
       const existingOrderColumnCustomCompare = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3647,7 +3632,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(existingOrderColumnCustomCompare.keys).toStrictEqual(["3", "2"]);
 
       const invalidStorageOrderColumn = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3662,7 +3646,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(invalidStorageOrderColumn.keys).toStrictEqual(["3", "2"]);
 
       const invalidStorageOrderColumnLimited = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3678,7 +3661,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(invalidStorageOrderColumnLimited.totalRows).toBe(2);
 
       const multiFieldStorageOrderZeroLimit = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3700,7 +3682,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(multiFieldStorageOrderZeroLimit.totalRows).toBe(2);
 
       const negativeLimitPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3716,7 +3697,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(negativeLimitPlan.totalRows).toBe(2);
 
       const nanLimitPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3732,7 +3712,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(nanLimitPlan.totalRows).toBe(2);
 
       const infiniteLimitPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3748,7 +3727,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(infiniteLimitPlan.totalRows).toBe(2);
 
       const callbackRequiredStorageOrderPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: true,
@@ -3764,7 +3742,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(callbackRequiredStorageOrderPlan.totalRows).toBe(1);
 
       const manuallyOrderedEqualExclusiveBounds = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [
             { field: "price", operator: "gte", value: 20 },
@@ -3785,7 +3762,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(manuallyOrderedEqualExclusiveBounds.totalRows).toBe(0);
 
       const unsafeRangeHintPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "gt", value: "10" }],
           callbackRequired: false,
@@ -3801,7 +3777,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(unsafeRangeHintPlan.totalRows).toBe(2);
 
       const equalityHintPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "eq", value: 20 }],
           callbackRequired: false,
@@ -3817,7 +3792,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(equalityHintPlan.totalRows).toBe(1);
 
       const unsafeEqualityHintPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "eq", value: "20" }],
           callbackRequired: false,
@@ -3833,7 +3807,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(unsafeEqualityHintPlan.totalRows).toBe(0);
 
       const duplicateInHintPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "in", values: [20, 20, 30] }],
           callbackRequired: false,
@@ -3849,7 +3822,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(duplicateInHintPlan.totalRows).toBe(2);
 
       const emptyInHintPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "in", values: [] }],
           callbackRequired: false,
@@ -3865,7 +3837,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(emptyInHintPlan.totalRows).toBe(0);
 
       const unsafeMixedInHintPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "in", values: [20, "30"] }],
           callbackRequired: false,
@@ -3881,7 +3852,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(unsafeMixedInHintPlan.totalRows).toBe(1);
 
       const missingOrderColumnLimitedMisses = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,
@@ -3896,7 +3866,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(missingOrderColumnLimitedMisses.totalRows).toBe(1);
 
       const invalidStartsWithPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "customerId", operator: "startsWith", value: 1 }],
           callbackRequired: true,
@@ -3910,7 +3879,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(invalidStartsWithPlan.keys).toStrictEqual(["2"]);
 
       const invalidRangePlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "gt", value: "10" }],
           callbackRequired: true,
@@ -3924,7 +3892,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(invalidRangePlan.keys).toStrictEqual(["2"]);
 
       const nonFiniteRangePlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [{ field: "price", operator: "gt", value: Number.NaN }],
           callbackRequired: true,
@@ -3938,7 +3905,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(nonFiniteRangePlan.keys).toStrictEqual(["2"]);
 
       const zeroLimitPlan = readModel.scanRawWindow({
-        where: undefined,
         predicate: {
           filters: [],
           callbackRequired: false,

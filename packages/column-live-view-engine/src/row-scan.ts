@@ -39,7 +39,6 @@ export type TopicRawPredicatePlan = {
 };
 
 export type TopicRawWindowScanPlan<Row extends RowObject> = {
-  readonly where: Readonly<Record<string, unknown>> | undefined;
   readonly predicate: TopicRawPredicatePlan;
   readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
   /**

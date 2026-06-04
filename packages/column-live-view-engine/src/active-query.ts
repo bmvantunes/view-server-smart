@@ -136,7 +136,6 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
 ): ActiveQueryBaseEvaluation<Row> => {
   const version = store.version();
   const scanResult = store.scanRawWindow({
-    where: compiled.query.where,
     predicate: compiled.predicate.plan,
     orderBy: compiled.ordering.plan,
     storageOrderBy: compiled.ordering.plan,
