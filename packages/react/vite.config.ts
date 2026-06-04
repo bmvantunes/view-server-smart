@@ -4,7 +4,7 @@ import { libraryPack } from "../../vite.pack";
 
 export default defineConfig({
   optimizeDeps: {
-    include: ["effect/Function"],
+    include: ["effect/Function", "effect/unstable/reactivity"],
   },
   test: {
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],

@@ -5,7 +5,7 @@ import type {
 } from "@view-server/column-live-view-engine";
 import type { ViewServerHealth } from "@view-server/config";
 import { Effect } from "effect";
-import type * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import type { AtomRef } from "effect/unstable/reactivity";
 
 type EngineHealthReader<Topics extends DecodableTopicDefinitions> = {
   readonly health: () => Effect.Effect<ColumnLiveViewEngineHealth<Topics>, never>;
