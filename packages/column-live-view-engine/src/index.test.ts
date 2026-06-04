@@ -1480,6 +1480,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
                 },
               ],
               callbackRequired: false,
+              callbackSkippable: true,
             });
             expect(plan.orderBy).toStrictEqual([
               {
@@ -1680,6 +1681,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
                 },
               ],
               callbackRequired: false,
+              callbackSkippable: true,
             });
             expect(plan.orderBy).toStrictEqual([
               {
@@ -1753,6 +1755,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
                 },
               ],
               callbackRequired: false,
+              callbackSkippable: true,
             });
             expect(plan.matches(position("aapl", "AAPL", 20n, "10"))).toBe(true);
             expect(plan.matches(position("goog", "GOOG", 1n, "10"))).toBe(false);
@@ -1813,6 +1816,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
                 },
               ],
               callbackRequired: false,
+              callbackSkippable: true,
             });
             return {
               keys: [],
@@ -1863,6 +1867,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
+              callbackSkippable: false,
             });
             expect(plan.matches(order("open", "open", 10, 1))).toBe(false);
             return {
@@ -1904,6 +1909,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
+              callbackSkippable: false,
             });
             expect(plan.matches(order("open", "open", 10, 1))).toBe(false);
             return {
@@ -1940,6 +1946,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
+              callbackSkippable: false,
             });
             expect(plan.matches(position("bad", "BAD", 10n, "10"))).toBe(false);
             return {
@@ -1976,6 +1983,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
+              callbackSkippable: false,
             });
             expect(plan.matches(position("bad-price", "BAD", 10n, "10"))).toBe(false);
             return {
@@ -2012,6 +2020,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
+              callbackSkippable: false,
             });
             expect(plan.matches(position("active", "ACT", 10n, "10", true))).toBe(false);
             expect(plan.matches(position("inactive", "INA", 10n, "10", false))).toBe(true);
@@ -2053,6 +2062,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
+              callbackSkippable: false,
             });
             expect(plan.matches({ id: "number", amount: 2 })).toBe(true);
             expect(plan.matches({ id: "bigint", amount: 2n })).toBe(false);
@@ -2099,6 +2109,7 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
             expect(plan.predicate).toStrictEqual({
               filters: [],
               callbackRequired: true,
+              callbackSkippable: false,
             });
             expect(plan.matches(instrument("1", "xnys", 1, ["equity"]))).toBe(false);
             expect(plan.matches(instrument("2", "xlon", 2, ["equity"]))).toBe(false);
@@ -2919,6 +2930,28 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       expect(evaluation.totalRows).toBe(0);
     }),
   );
+
+  it.effect("keeps optional not-equal semantics aligned with public raw snapshots", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [
+        order("missing-note", "open", 10, 1),
+        { ...order("matched-note", "open", 20, 2), note: "hello" },
+        { ...order("other-note", "open", 30, 3), note: "bye" },
+      ]);
+
+      const snapshot = yield* engine.snapshot("orders", {
+        select: ["id"],
+        where: {
+          note: { neq: "bye" },
+        },
+        orderBy: [{ field: "id", direction: "asc" }],
+      });
+
+      expect(rowIds(snapshot.rows)).toStrictEqual(["matched-note"]);
+      expect(snapshot.totalRows).toBe(1);
+    }),
+  );
 });
 
 describe("ColumnLiveViewEngine subscriptions", () => {
@@ -3663,6 +3696,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         predicate: {
           filters: [],
           callbackRequired: false,
+          callbackSkippable: true,
         },
         orderBy: [{ field: "price", direction: "asc" }],
         storageOrderBy: [{ field: "missing", direction: "asc" }],
@@ -3764,6 +3798,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
             { field: "price", operator: "lt", value: 30 },
           ],
           callbackRequired: false,
+          callbackSkippable: true,
         },
         orderBy: [{ field: "price", direction: "asc" }],
         storageOrderBy: [{ field: "price", direction: "asc" }],
@@ -3779,6 +3814,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         predicate: {
           filters: [{ field: "price", operator: "gt", value: "10" }],
           callbackRequired: false,
+          callbackSkippable: true,
         },
         orderBy: [{ field: "price", direction: "asc" }],
         storageOrderBy: [{ field: "price", direction: "asc" }],
@@ -3809,6 +3845,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         predicate: {
           filters: [{ field: "price", operator: "eq", value: "20" }],
           callbackRequired: false,
+          callbackSkippable: true,
         },
         orderBy: [{ field: "price", direction: "asc" }],
         storageOrderBy: [{ field: "price", direction: "asc" }],
@@ -3854,6 +3891,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         predicate: {
           filters: [{ field: "price", operator: "in", values: [20, "30"] }],
           callbackRequired: false,
+          callbackSkippable: true,
         },
         orderBy: [{ field: "price", direction: "asc" }],
         storageOrderBy: [{ field: "price", direction: "asc" }],
@@ -3931,6 +3969,312 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(zeroLimitPlan.keys).toStrictEqual([]);
       expect(zeroLimitPlan.totalRows).toBe(2);
+    }),
+  );
+
+  it.effect("skips row callbacks for complete column predicate plans", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      yield* publishTopicStoreRow(store, order("missing-note", "open", 10, 1), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(
+        store,
+        { ...order("matched-note", "open", 20, 2), note: "hello" },
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(
+        store,
+        { ...order("other-note", "open", 30, 3), note: "bye" },
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+
+      const readModel = topicStoreReadModel(store);
+      const callbackSkipped = readModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "note", operator: "startsWith", value: "he" }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete column predicates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+
+      expect(callbackSkipped.keys).toStrictEqual(["matched-note"]);
+      expect(callbackSkipped.totalRows).toBe(1);
+
+      const optionalNotEqual = readModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "note", operator: "neq", value: "bye" }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete optional not-equal predicates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+
+      expect(optionalNotEqual.keys).toStrictEqual(["matched-note"]);
+      expect(optionalNotEqual.totalRows).toBe(1);
+    }),
+  );
+
+  it.effect("keeps optional column values out of exact range scans without row callbacks", () =>
+    Effect.gen(function* () {
+      const OptionalPrice = Schema.Struct({
+        id: Schema.String,
+        price: Schema.optionalKey(Schema.Finite),
+      });
+      const store = new TopicStore("optional-prices", OptionalPrice, "id", () => {});
+      yield* publishTopicStoreRow(store, { id: "missing" }, (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, { id: "cheap", price: 5 }, (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, { id: "expensive", price: 20 }, (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const readModel = topicStoreReadModel(store);
+      const callbackSkipped = readModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "gt", value: 10 }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete range predicates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+
+      expect(callbackSkipped.keys).toStrictEqual(["expensive"]);
+      expect(callbackSkipped.totalRows).toBe(1);
+    }),
+  );
+
+  it.effect("uses bigint range hints conservatively for manual plans", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("positions", Position, "id", () => {});
+      yield* publishTopicStoreRow(store, position("low", "AAPL", 5n, "10"), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, position("equal", "AAPL", 10n, "10"), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, position("high", "AAPL", 20n, "10"), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const readModel = topicStoreReadModel(store);
+      const rangeHinted = readModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "quantity", operator: "gt", value: 10n }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+
+      expect(rangeHinted.keys).toStrictEqual(["high"]);
+      expect(rangeHinted.totalRows).toBe(1);
+    }),
+  );
+
+  it.effect("handles exact not-equal column predicates without row callbacks", () =>
+    Effect.gen(function* () {
+      const orderStore = new TopicStore("orders", Order, "id", () => {});
+      yield* publishTopicStoreRow(orderStore, order("cheap", "open", 10, 1), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(orderStore, order("excluded", "open", 20, 2), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(orderStore, order("expensive", "open", 30, 3), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const orderReadModel = topicStoreReadModel(orderStore);
+      const exactNumberNotEqual = orderReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "neq", value: 20 }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("exact numeric not-equal predicates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+      expect(exactNumberNotEqual.keys).toStrictEqual(["cheap", "expensive"]);
+      expect(exactNumberNotEqual.totalRows).toBe(2);
+
+      const manualRangeHint = orderReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "gt", value: 10 }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+      expect(manualRangeHint.keys).toStrictEqual(["excluded", "expensive"]);
+      expect(manualRangeHint.totalRows).toBe(2);
+
+      const manualNotEqualHint = orderReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "neq", value: 20 }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+      expect(manualNotEqualHint.keys).toStrictEqual(["cheap", "expensive"]);
+      expect(manualNotEqualHint.totalRows).toBe(2);
+
+      const manualGreaterThanOrEqualHint = orderReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "gte", value: 20 }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+      expect(manualGreaterThanOrEqualHint.keys).toStrictEqual(["excluded", "expensive"]);
+      expect(manualGreaterThanOrEqualHint.totalRows).toBe(2);
+
+      const manualLessThanHint = orderReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "lt", value: 30 }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+      expect(manualLessThanHint.keys).toStrictEqual(["cheap", "excluded"]);
+      expect(manualLessThanHint.totalRows).toBe(2);
+
+      const manualLessThanOrEqualHint = orderReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "lte", value: 20 }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+      expect(manualLessThanOrEqualHint.keys).toStrictEqual(["cheap", "excluded"]);
+      expect(manualLessThanOrEqualHint.totalRows).toBe(2);
+
+      const positionStore = new TopicStore("positions", Position, "id", () => {});
+      yield* publishTopicStoreRow(
+        positionStore,
+        position("drop", "DROP", 20n, "10"),
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(
+        positionStore,
+        position("excluded-price", "AAPL", 20n, "99"),
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(
+        positionStore,
+        position("excluded-quantity", "AAPL", 10n, "10"),
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(
+        positionStore,
+        position("keep", "AAPL", 20n, "10"),
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+
+      const positionReadModel = topicStoreReadModel(positionStore);
+      const exactMixedNotEqual = positionReadModel.scanRawWindow({
+        predicate: {
+          filters: [
+            { field: "symbol", operator: "neq", value: "DROP" },
+            { field: "quantity", operator: "neq", value: 10n },
+            { field: "price", operator: "neq", value: fromStringUnsafe("99") },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("exact mixed not-equal predicates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+
+      expect(exactMixedNotEqual.keys).toStrictEqual(["keep"]);
+      expect(exactMixedNotEqual.totalRows).toBe(1);
+
+      const LooseNumber = Schema.Struct({
+        id: Schema.String,
+        value: Schema.Number,
+      });
+      const looseNumberStore = new TopicStore("loose-numbers", LooseNumber, "id", () => {});
+      yield* publishTopicStoreRow(
+        looseNumberStore,
+        { id: "nan", value: Number.NaN },
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(looseNumberStore, { id: "real", value: 20 }, (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const looseNumberReadModel = topicStoreReadModel(looseNumberStore);
+      const exactFiniteRange = looseNumberReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "value", operator: "gt", value: 10 }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("exact finite range predicates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+
+      expect(exactFiniteRange.keys).toStrictEqual(["real"]);
+      expect(exactFiniteRange.totalRows).toBe(1);
     }),
   );
 

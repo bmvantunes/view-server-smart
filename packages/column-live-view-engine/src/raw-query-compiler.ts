@@ -1037,6 +1037,7 @@ const compilePredicatePlan = (
     return {
       filters: [],
       callbackRequired: false,
+      callbackSkippable: true,
     };
   }
 
@@ -1050,6 +1051,7 @@ const compilePredicatePlan = (
   return {
     filters,
     callbackRequired,
+    callbackSkippable: !callbackRequired,
   };
 };
 

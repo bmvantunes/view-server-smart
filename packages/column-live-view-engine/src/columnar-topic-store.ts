@@ -15,6 +15,7 @@ import {
   type RawQueryCompilerMetadata,
 } from "./raw-query-compiler";
 import { cloneRow, fieldValue, isPlainRecord, valuesEqual } from "./row-values";
+import { isBigDecimal, Order as orderBigDecimal } from "effect/BigDecimal";
 
 type RowObject = object;
 
@@ -196,7 +197,7 @@ export class ColumnarTopicStore {
     const filtered: Array<TopicRowEntry<object>> = [];
     for (let slot = 0; slot < this.slots.length; slot += 1) {
       const entry = this.slots[slot]!;
-      if (this.slotMayMatchFilters(slot, plan.predicate.filters) && plan.matches(entry.row)) {
+      if (this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
         filtered.push(entry);
       }
     }
@@ -223,7 +224,7 @@ export class ColumnarTopicStore {
       for (let slotIndex = span.startIndex; slotIndex < span.endIndex; slotIndex += 1) {
         const slot = orderedWindow.slots[slotIndex]!;
         const entry = this.slots[slot]!;
-        if (!this.slotMayMatchFilters(slot, plan.predicate.filters) || !plan.matches(entry.row)) {
+        if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
           continue;
         }
         const matchIndex = totalRows;
@@ -249,7 +250,7 @@ export class ColumnarTopicStore {
     const filteredSlots: Array<number> = [];
     for (let slot = 0; slot < this.slots.length; slot += 1) {
       const entry = this.slots[slot]!;
-      if (!this.slotMayMatchFilters(slot, plan.predicate.filters) || !plan.matches(entry.row)) {
+      if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
         continue;
       }
       totalRows += 1;
@@ -284,7 +285,7 @@ export class ColumnarTopicStore {
       return undefined;
     }
     const orderField = storageOrderBy[0]!.field;
-    if (plan.predicate.callbackRequired) {
+    if (plan.predicate.callbackSkippable !== true) {
       return undefined;
     }
     if (!predicateFiltersAreOrderedIndexAdmissible(plan.predicate.filters, orderField)) {
@@ -597,19 +598,36 @@ export class ColumnarTopicStore {
     return this.slots[slot]!.row;
   }
 
+  private slotMatchesPredicatePlan(
+    slot: number,
+    plan: TopicRawWindowScanPlan<object>,
+    row: object,
+  ): boolean {
+    const exact = plan.predicate.callbackSkippable === true;
+    if (!this.slotMayMatchFilters(slot, plan.predicate.filters, exact)) {
+      return false;
+    }
+    return exact || plan.matches(row);
+  }
+
   private slotMayMatchFilters(
     slot: number,
     filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
+    exact: boolean,
   ): boolean {
     for (const filter of filters) {
-      if (!this.slotMayMatchFilter(slot, filter)) {
+      if (!this.slotMayMatchFilter(slot, filter, exact)) {
         return false;
       }
     }
     return true;
   }
 
-  private slotMayMatchFilter(slot: number, filter: TopicRawPredicateFilterPlan): boolean {
+  private slotMayMatchFilter(
+    slot: number,
+    filter: TopicRawPredicateFilterPlan,
+    exact: boolean,
+  ): boolean {
     const column = this.columns.get(filter.field);
     if (column === undefined) {
       return true;
@@ -620,6 +638,9 @@ export class ColumnarTopicStore {
       return valuesEqual(value, filter.value);
     }
     if (filter.operator === "neq") {
+      if (exact) {
+        return columnValueDoesNotEqual(value, filter.value);
+      }
       return !valuesEqual(value, filter.value);
     }
     if (filter.operator === "in") {
@@ -630,6 +651,26 @@ export class ColumnarTopicStore {
         return true;
       }
       return typeof value === "string" && value.startsWith(filter.value);
+    }
+
+    if (exact && !isComparableRangeValue(filter.value)) {
+      return true;
+    }
+    if (exact) {
+      const exactComparison = compareExactRangeColumnValue(value, filter.value);
+      if (exactComparison === undefined) {
+        return false;
+      }
+      if (filter.operator === "gt") {
+        return exactComparison > 0;
+      }
+      if (filter.operator === "gte") {
+        return exactComparison >= 0;
+      }
+      if (filter.operator === "lt") {
+        return exactComparison < 0;
+      }
+      return exactComparison <= 0;
     }
 
     const comparison = compareRangeColumnValue(value, filter.value);
@@ -648,6 +689,44 @@ export class ColumnarTopicStore {
     return comparison <= 0;
   }
 }
+
+const isComparableRangeValue = (value: unknown): boolean =>
+  (typeof value === "number" && Number.isFinite(value)) ||
+  typeof value === "bigint" ||
+  isBigDecimal(value);
+
+const compareExactRangeColumnValue = (left: unknown, right: unknown): number | undefined => {
+  if (typeof left === "number" && typeof right === "number") {
+    if (!Number.isFinite(left) || !Number.isFinite(right)) {
+      return undefined;
+    }
+    return left === right ? 0 : left < right ? -1 : 1;
+  }
+  if (typeof left === "bigint" && typeof right === "bigint") {
+    if (left === right) {
+      return 0;
+    }
+    return left < right ? -1 : 1;
+  }
+  if (isBigDecimal(left) && isBigDecimal(right)) {
+    return orderBigDecimal(left, right);
+  }
+  return undefined;
+};
+
+const columnValueDoesNotEqual = (value: unknown, notEqual: unknown): boolean => {
+  return equalityComparableValues(value, notEqual) && !valuesEqual(value, notEqual);
+};
+
+const equalityComparableValues = (left: unknown, right: unknown): boolean => {
+  if (isBigDecimal(left) || isBigDecimal(right)) {
+    return isBigDecimal(left) && isBigDecimal(right);
+  }
+  if (typeof left === "number" || typeof right === "number") {
+    return typeof left === "number" && typeof right === "number" && Number.isFinite(right);
+  }
+  return typeof left === typeof right;
+};
 
 const compareRangeColumnValue = (left: unknown, right: unknown): number | undefined => {
   if (typeof left === "number" && typeof right === "number") {

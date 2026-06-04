@@ -36,6 +36,11 @@ export type TopicRawPredicatePlan = {
    * `filters`, for example structured fields or malformed runtime filters.
    */
   readonly callbackRequired: boolean;
+  /**
+   * True when the compiler proved that `filters` fully represent `matches`.
+   * Hand-written plans omit this and stay guarded by the row callback.
+   */
+  readonly callbackSkippable?: boolean;
 };
 
 export type TopicRawWindowScanPlan<Row extends RowObject> = {
