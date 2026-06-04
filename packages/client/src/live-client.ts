@@ -16,7 +16,7 @@ import type {
   ViewServerTransportError,
 } from "@view-server/config";
 import type { Effect, Stream } from "effect";
-import type * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import type { AtomRef } from "effect/unstable/reactivity";
 
 export type ViewServerLiveEvent<Row> = SnapshotEvent<Row> | DeltaEvent<Row> | StatusEvent;
 

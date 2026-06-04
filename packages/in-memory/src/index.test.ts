@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import type { ColumnLiveViewEngineHealth } from "@view-server/column-live-view-engine";
 import { defineViewServerConfig } from "@view-server/config";
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
-import * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import { AtomRef } from "effect/unstable/reactivity";
 import { healthFromEngine, makeHealthRefreshScheduler, readHealth } from "./health";
 import { createInMemoryViewServer, makeInMemoryViewServer } from "./index";
 

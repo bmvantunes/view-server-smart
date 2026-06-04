@@ -34,7 +34,7 @@ import {
   viewServerHealthTopicRowsFromHealth,
 } from "@view-server/config";
 import { Cause, Clock, Effect, Queue, Stream } from "effect";
-import * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import { AtomRef } from "effect/unstable/reactivity";
 import { healthFromEngine, makeHealthRefreshScheduler, readHealth, refreshHealth } from "./health";
 
 export type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";

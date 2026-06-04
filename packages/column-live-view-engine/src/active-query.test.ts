@@ -1,6 +1,6 @@
 import { fromStringUnsafe } from "effect/BigDecimal";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import {
   acquireRawQueryExecution,
   activeStoreRawQueryExecutionCount,
@@ -176,6 +176,318 @@ describe("column-live-view-engine active query execution", () => {
       yield* releaseRawQueryExecution(topicStoreReadModel(store), idOnly);
       yield* releaseRawQueryExecution(topicStoreReadModel(store), idAndScore);
       expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(0);
+    }),
+  );
+
+  it.effect("shares base evaluation across different windows", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "window-sharing",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const firstWindow = yield* prepareRawQuery(
+        "window-sharing",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          offset: 0,
+          limit: 1,
+        },
+      );
+      const secondWindow = yield* prepareRawQuery(
+        "window-sharing",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          offset: 1,
+          limit: 1,
+        },
+      );
+
+      const firstExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(store),
+        firstWindow,
+      );
+      expect(firstExecution.initial("first").rows).toStrictEqual([{ id: "c", score: 3 }]);
+
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), secondWindow);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
+      expect(firstExecution.initial("first-after-unknown-release").rows).toStrictEqual([
+        { id: "c", score: 3 },
+      ]);
+
+      const secondExecution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(store),
+        secondWindow,
+      );
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
+      expect(secondExecution.initial("second").rows).toStrictEqual([{ id: "b" }]);
+
+      const firstCursor = firstExecution.createCursor();
+      const secondCursor = secondExecution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+
+      const firstDelta = yield* firstExecution.next("first", firstCursor);
+      const secondDelta = yield* secondExecution.next("second", secondCursor);
+      expect(Option.getOrThrow(firstDelta)).toStrictEqual({
+        type: "delta",
+        topic: "window-sharing",
+        queryId: "first",
+        fromVersion: 3,
+        toVersion: 4,
+        operations: [
+          {
+            type: "remove",
+            key: "c",
+          },
+          {
+            type: "insert",
+            key: "d",
+            row: {
+              id: "d",
+              score: 4,
+            },
+            index: 0,
+          },
+        ],
+        totalRows: 4,
+      });
+      expect(Option.getOrThrow(secondDelta)).toStrictEqual({
+        type: "delta",
+        topic: "window-sharing",
+        queryId: "second",
+        fromVersion: 3,
+        toVersion: 4,
+        operations: [
+          {
+            type: "remove",
+            key: "b",
+          },
+          {
+            type: "insert",
+            key: "c",
+            row: {
+              id: "c",
+            },
+            index: 0,
+          },
+        ],
+        totalRows: 4,
+      });
+
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), firstWindow);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
+      expect(secondExecution.initial("second-after-release").rows).toStrictEqual([{ id: "c" }]);
+
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), secondWindow);
+      expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(0);
+
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), secondWindow);
+    }),
+  );
+
+  it.effect("shrinks shared base windows immediately when larger windows release", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "window-shrink",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const wideWindow = yield* prepareRawQuery(
+        "window-shrink",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          offset: 0,
+          limit: 3,
+        },
+      );
+      const narrowWindow = yield* prepareRawQuery(
+        "window-shrink",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          offset: 1,
+          limit: 1,
+        },
+      );
+
+      const wideExecution = yield* acquireRawQueryExecution(observedReadModel, wideWindow);
+      expect(wideExecution.initial("wide").keys).toStrictEqual(["d", "c", "b"]);
+
+      const narrowExecution = yield* acquireRawQueryExecution(observedReadModel, narrowWindow);
+      expect(narrowExecution.initial("narrow").keys).toStrictEqual(["c"]);
+
+      yield* releaseRawQueryExecution(observedReadModel, wideWindow);
+      expect(scanLimits).toStrictEqual([3, 2]);
+      expect(narrowExecution.initial("narrow-after-shrink").keys).toStrictEqual(["c"]);
+
+      yield* releaseRawQueryExecution(observedReadModel, narrowWindow);
+    }),
+  );
+
+  it.effect("compacts unbounded shared base windows when unbounded windows release", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "window-unbounded",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const boundedWindow = yield* prepareRawQuery(
+        "window-unbounded",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          offset: 1,
+          limit: 1,
+        },
+      );
+      const unboundedWindow = yield* prepareRawQuery(
+        "window-unbounded",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+        },
+      );
+
+      const boundedExecution = yield* acquireRawQueryExecution(observedReadModel, boundedWindow);
+      expect(boundedExecution.initial("bounded").keys).toStrictEqual(["b"]);
+
+      const unboundedExecution = yield* acquireRawQueryExecution(
+        observedReadModel,
+        unboundedWindow,
+      );
+      expect(unboundedExecution.initial("unbounded").keys).toStrictEqual(["c", "b", "a"]);
+
+      yield* releaseRawQueryExecution(observedReadModel, unboundedWindow);
+      expect(scanLimits).toStrictEqual([2, undefined, 2]);
+      expect(boundedExecution.initial("bounded-after-compact").keys).toStrictEqual(["b"]);
+
+      yield* releaseRawQueryExecution(observedReadModel, boundedWindow);
+    }),
+  );
+
+  it.effect("does not expand shared base rows for zero-limit windows", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "window-zero-limit",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const zeroWindow = yield* prepareRawQuery(
+        "window-zero-limit",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          offset: 10,
+          limit: 0,
+        },
+      );
+
+      const zeroExecution = yield* acquireRawQueryExecution(observedReadModel, zeroWindow);
+      const initial = zeroExecution.initial("zero");
+      expect(scanLimits).toStrictEqual([0]);
+      expect(initial.rows).toStrictEqual([]);
+      expect(initial.keys).toStrictEqual([]);
+      expect(initial.totalRows).toBe(2);
+
+      yield* releaseRawQueryExecution(observedReadModel, zeroWindow);
     }),
   );
 

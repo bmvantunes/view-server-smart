@@ -21,7 +21,7 @@ import {
   Stream,
 } from "effect";
 import { fromStringUnsafe } from "effect/BigDecimal";
-import * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import { AtomRef } from "effect/unstable/reactivity";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import { makeViewServerWebSocketServer } from "./index";

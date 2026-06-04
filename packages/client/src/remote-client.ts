@@ -35,7 +35,7 @@ import {
   type ViewServerWireLiveQuery,
 } from "@view-server/protocol";
 import { Context, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from "effect";
-import * as AtomRef from "effect/unstable/reactivity/AtomRef";
+import { AtomRef } from "effect/unstable/reactivity";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import type {
