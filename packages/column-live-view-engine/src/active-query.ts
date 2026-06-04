@@ -13,7 +13,7 @@ type RowObject = object;
 
 export type ActiveQueryStoreState = TopicRowScan<object> &
   TopicRawWindowScan<object> & {
-    readonly identity: object;
+    readonly activeQueries: ActiveQueryRegistry;
     readonly topic: string;
   };
 
@@ -66,11 +66,15 @@ type ActiveMaterializedQueryExecution = {
   readonly latest: () => QueryEvaluation<object>;
 };
 
-type QueryExecutionCache = WeakMap<object, Map<string, RawQueryExecutionSlot>>;
-type MaterializedQueryExecutionCache = WeakMap<object, Map<string, MaterializedQueryExecutionSlot>>;
+export type ActiveQueryRegistry = {
+  readonly raw: Map<string, RawQueryExecutionSlot>;
+  readonly materialized: Map<string, MaterializedQueryExecutionSlot>;
+};
 
-const activeQueryExecutionCache: QueryExecutionCache = new WeakMap();
-const activeMaterializedQueryExecutionCache: MaterializedQueryExecutionCache = new WeakMap();
+export const createActiveQueryRegistry = (): ActiveQueryRegistry => ({
+  raw: new Map(),
+  materialized: new Map(),
+});
 
 type QueryCacheToken = readonly ["raw", string, string];
 type QueryWindowCacheToken = readonly ["window", string, string];
@@ -96,25 +100,13 @@ const queryWindowCacheKey = (window: CompiledRawQuery<object, object>["window"])
 };
 
 const getActiveQueryMap = (store: ActiveQueryStoreState): Map<string, RawQueryExecutionSlot> => {
-  const existing = activeQueryExecutionCache.get(store.identity);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = new Map<string, RawQueryExecutionSlot>();
-  activeQueryExecutionCache.set(store.identity, created);
-  return created;
+  return store.activeQueries.raw;
 };
 
 const getActiveMaterializedQueryMap = (
   store: ActiveQueryStoreState,
 ): Map<string, MaterializedQueryExecutionSlot> => {
-  const existing = activeMaterializedQueryExecutionCache.get(store.identity);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const created = new Map<string, MaterializedQueryExecutionSlot>();
-  activeMaterializedQueryExecutionCache.set(store.identity, created);
-  return created;
+  return store.activeQueries.materialized;
 };
 
 const getActiveQueryEntry = <ResultRow extends RowObject>(
@@ -391,9 +383,6 @@ export const releaseRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
         return undefined;
       }
       map.delete(key);
-      if (map.size === 0) {
-        activeQueryExecutionCache.delete(store.identity);
-      }
       return undefined;
     }),
 );
@@ -442,9 +431,9 @@ export const releaseMaterializedQueryExecution = Effect.fn(
   "ColumnLiveViewEngine.activeQuery.materialized.release",
 )((store: ActiveQueryStoreState, cacheKey: string) =>
   Effect.sync(() => {
-    const map = activeMaterializedQueryExecutionCache.get(store.identity);
-    const existing = map?.get(cacheKey);
-    if (existing === undefined || map === undefined) {
+    const map = getActiveMaterializedQueryMap(store);
+    const existing = map.get(cacheKey);
+    if (existing === undefined) {
       return undefined;
     }
     const entry = existing;
@@ -453,9 +442,6 @@ export const releaseMaterializedQueryExecution = Effect.fn(
       return undefined;
     }
     map.delete(cacheKey);
-    if (map.size === 0) {
-      activeMaterializedQueryExecutionCache.delete(store.identity);
-    }
     return undefined;
   }),
 );
@@ -464,17 +450,13 @@ export const clearStoreRawQueryExecutions = Effect.fn(
   "ColumnLiveViewEngine.activeQuery.clearStore",
 )((store: ActiveQueryStoreState) =>
   Effect.sync(() => {
-    activeQueryExecutionCache.delete(store.identity);
-    activeMaterializedQueryExecutionCache.delete(store.identity);
+    store.activeQueries.raw.clear();
+    store.activeQueries.materialized.clear();
   }),
 );
 
 export const activeStoreRawQueryExecutionCount = Effect.fn(
   "ColumnLiveViewEngine.activeQuery.countStore",
 )((store: ActiveQueryStoreState) =>
-  Effect.sync(
-    () =>
-      (activeQueryExecutionCache.get(store.identity)?.size ?? 0) +
-      (activeMaterializedQueryExecutionCache.get(store.identity)?.size ?? 0),
-  ),
+  Effect.sync(() => store.activeQueries.raw.size + store.activeQueries.materialized.size),
 );

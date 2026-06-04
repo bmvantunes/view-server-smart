@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import type { ActiveQueryStoreState } from "./active-query";
+import { createActiveQueryRegistry, type ActiveQueryStoreState } from "./active-query";
 import type {
   TopicRawOrderByPlan,
   TopicRawPredicateFilterPlan,
@@ -92,7 +92,7 @@ export class ColumnarTopicStore {
       this.columns.set(field, []);
     }
     this.readModel = {
-      identity: this,
+      activeQueries: createActiveQueryRegistry(),
       topic,
       scanRows: (visitor) => this.scanRows(visitor),
       scanRawWindow: (plan) => this.scanRawWindow(plan),

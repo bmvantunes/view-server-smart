@@ -2,8 +2,11 @@ import { fromStringUnsafe } from "effect/BigDecimal";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
 import {
+  acquireMaterializedQueryExecution,
   acquireRawQueryExecution,
   activeStoreRawQueryExecutionCount,
+  createActiveQueryRegistry,
+  releaseMaterializedQueryExecution,
   releaseRawQueryExecution,
 } from "./active-query";
 import { prepareRawQuery } from "./raw-query-compiler";
@@ -119,6 +122,91 @@ describe("column-live-view-engine active query execution", () => {
       expect(afterRefcountExhausted.initial("query-d").totalRows).toBe(2);
       expect(yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store))).toBe(1);
       yield* releaseRawQueryExecution(topicStoreReadModel(store), compiled);
+    }),
+  );
+
+  it.effect("keeps execution caches local to the active query registry", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "registry-isolation",
+        Schema.Struct({
+          id: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", score: 1 }, invalidRow);
+
+      const compiled = yield* prepareRawQuery(
+        "registry-isolation",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          orderBy: [{ field: "score", direction: "desc" }],
+        },
+      );
+      const readModel = topicStoreReadModel(store);
+      const isolatedReadModel = {
+        ...readModel,
+        activeQueries: createActiveQueryRegistry(),
+      };
+
+      yield* acquireRawQueryExecution(readModel, compiled);
+      yield* acquireRawQueryExecution(isolatedReadModel, compiled);
+
+      expect(yield* activeStoreRawQueryExecutionCount(readModel)).toBe(1);
+      expect(yield* activeStoreRawQueryExecutionCount(isolatedReadModel)).toBe(1);
+
+      yield* releaseRawQueryExecution(readModel, compiled);
+      expect(yield* activeStoreRawQueryExecutionCount(readModel)).toBe(0);
+      expect(yield* activeStoreRawQueryExecutionCount(isolatedReadModel)).toBe(1);
+
+      yield* releaseRawQueryExecution(isolatedReadModel, compiled);
+      expect(yield* activeStoreRawQueryExecutionCount(isolatedReadModel)).toBe(0);
+    }),
+  );
+
+  it.effect("keeps materialized execution caches local to the active query registry", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "materialized-registry-isolation",
+        Schema.Struct({
+          id: Schema.String,
+        }),
+        "id",
+        () => {},
+      );
+      const readModel = topicStoreReadModel(store);
+      const isolatedReadModel = {
+        ...readModel,
+        activeQueries: createActiveQueryRegistry(),
+      };
+
+      const emptyEvaluation = (version: number) => ({
+        rows: [],
+        keys: [],
+        window: [],
+        totalRows: 0,
+        version,
+      });
+
+      yield* acquireMaterializedQueryExecution(readModel, "grouped", () =>
+        emptyEvaluation(readModel.version()),
+      );
+      yield* acquireMaterializedQueryExecution(isolatedReadModel, "grouped", () =>
+        emptyEvaluation(isolatedReadModel.version()),
+      );
+
+      expect(yield* activeStoreRawQueryExecutionCount(readModel)).toBe(1);
+      expect(yield* activeStoreRawQueryExecutionCount(isolatedReadModel)).toBe(1);
+
+      yield* releaseMaterializedQueryExecution(readModel, "grouped");
+      expect(yield* activeStoreRawQueryExecutionCount(readModel)).toBe(0);
+      expect(yield* activeStoreRawQueryExecutionCount(isolatedReadModel)).toBe(1);
+
+      yield* releaseMaterializedQueryExecution(isolatedReadModel, "grouped");
+      expect(yield* activeStoreRawQueryExecutionCount(isolatedReadModel)).toBe(0);
     }),
   );
 
