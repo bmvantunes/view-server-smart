@@ -117,6 +117,556 @@ describe("@view-server/client", () => {
     });
   });
 
+  it("marks malformed snapshots stale", () => {
+    const previous = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-snapshot",
+      version: 1,
+      keys: ["a"],
+      rows: [{ id: "a" }],
+      totalRows: 1,
+    });
+    const fractionalVersion = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-snapshot",
+      version: 1.5,
+      keys: ["a"],
+      rows: [{ id: "a" }],
+      totalRows: 1,
+    });
+    const negativeTotalRows = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-snapshot",
+      version: 1,
+      keys: ["a"],
+      rows: [{ id: "a" }],
+      totalRows: -1,
+    });
+    const totalRowsBelowWindow = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-snapshot",
+      version: 1,
+      keys: ["a"],
+      rows: [{ id: "a" }],
+      totalRows: 0,
+    });
+    const mismatchedKeysAndRows = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-snapshot",
+      version: 1,
+      keys: ["a", "b"],
+      rows: [{ id: "a" }],
+      totalRows: 2,
+    });
+    const duplicateKeys = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-snapshot",
+      version: 1,
+      keys: ["a", "a"],
+      rows: [{ id: "a" }, { id: "a-copy" }],
+      totalRows: 2,
+    });
+    const invalidRefresh = applyEvent(previous, {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-snapshot",
+      version: 2,
+      keys: ["a"],
+      rows: [{ id: "a-refresh" }],
+      totalRows: -1,
+    });
+
+    expect(fractionalVersion).toMatchObject({
+      rows: [],
+      keys: [],
+      totalRows: 0,
+      version: 0,
+      status: "stale",
+      statusCode: "SnapshotStale",
+    });
+    expect(negativeTotalRows).toMatchObject({
+      rows: [],
+      keys: [],
+      totalRows: 0,
+      version: 0,
+      status: "stale",
+      statusCode: "SnapshotStale",
+    });
+    expect(totalRowsBelowWindow).toMatchObject({
+      rows: [],
+      keys: [],
+      totalRows: 0,
+      version: 0,
+      status: "stale",
+      statusCode: "SnapshotStale",
+    });
+    expect(mismatchedKeysAndRows).toMatchObject({
+      rows: [],
+      keys: [],
+      totalRows: 0,
+      version: 0,
+      status: "stale",
+      statusCode: "SnapshotStale",
+    });
+    expect(duplicateKeys).toMatchObject({
+      rows: [],
+      keys: [],
+      totalRows: 0,
+      version: 0,
+      status: "stale",
+      statusCode: "SnapshotStale",
+    });
+    expect(invalidRefresh).toMatchObject({
+      rows: [{ id: "a" }],
+      keys: ["a"],
+      totalRows: 1,
+      version: 1,
+      status: "stale",
+      statusCode: "SnapshotStale",
+    });
+  });
+
+  it("applies multi-operation deltas without mutating the previous state", () => {
+    const previous = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-batch",
+      version: 1,
+      keys: ["a", "b", "c"],
+      rows: [{ id: "a" }, { id: "b" }, { id: "c" }],
+      totalRows: 3,
+    });
+    const previousRows = previous.rows;
+    const previousKeys = previous.keys;
+
+    const next = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-batch",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [
+        { type: "move", key: "c", fromIndex: 2, toIndex: 0 },
+        { type: "insert", key: "d", row: { id: "d" }, index: 2 },
+        { type: "update", key: "a", row: { id: "a-updated" }, index: 1 },
+        { type: "remove", key: "b" },
+      ],
+    });
+
+    expect(previous.rows).toBe(previousRows);
+    expect(previous.keys).toBe(previousKeys);
+    expect(previous.rows).toStrictEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    expect(previous.keys).toStrictEqual(["a", "b", "c"]);
+    expect(next.rows).toStrictEqual([{ id: "c" }, { id: "a-updated" }, { id: "d" }]);
+    expect(next.keys).toStrictEqual(["c", "a", "d"]);
+    expect(next.totalRows).toBe(3);
+    expect(next.version).toBe(2);
+  });
+
+  it("moves rows by key even when the row value is undefined", () => {
+    const previous = applyEvent(initialClientState<undefined>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-undefined-row",
+      version: 1,
+      keys: ["a", "b"],
+      rows: [undefined, undefined],
+      totalRows: 2,
+    });
+
+    const next = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-undefined-row",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 2,
+      operations: [{ type: "move", key: "b", fromIndex: 1, toIndex: 0 }],
+    });
+
+    expect(next.rows).toStrictEqual([undefined, undefined]);
+    expect(next.keys).toStrictEqual(["b", "a"]);
+    expect(next.status).toBe("ready");
+    expect(next.version).toBe(2);
+  });
+
+  it("marks the state stale when a delta cannot apply to the current snapshot", () => {
+    const previous = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "snapshot",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      version: 1,
+      keys: ["a", "b", "c"],
+      rows: [{ id: "a" }, { id: "b" }, { id: "c" }],
+      totalRows: 3,
+    });
+
+    const staleVersion = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 0,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [],
+    });
+    const equalToVersion = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 1,
+      totalRows: 3,
+      operations: [],
+    });
+    const backwardToVersion = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 0,
+      totalRows: 3,
+      operations: [],
+    });
+    const fractionalToVersion = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 1.5,
+      totalRows: 3,
+      operations: [],
+    });
+    const infiniteToVersion = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: Number.POSITIVE_INFINITY,
+      totalRows: 3,
+      operations: [],
+    });
+    const nanFromVersion = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: Number.NaN,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [],
+    });
+    const negativeFromVersion = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: -1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [],
+    });
+    const fractionalStateVersion = applyEvent(
+      {
+        ...previous,
+        version: 1.5,
+      },
+      {
+        type: "delta",
+        topic: "orders",
+        queryId: "query-invalid-delta",
+        fromVersion: 1.5,
+        toVersion: 2,
+        totalRows: 3,
+        operations: [],
+      },
+    );
+    const negativeDeltaTotalRows = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: -1,
+      operations: [],
+    });
+    const fractionalDeltaTotalRows = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 1.5,
+      operations: [],
+    });
+    const totalRowsBelowWindow = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 2,
+      operations: [],
+    });
+    const loadingStateDelta = applyEvent(initialClientState<{ readonly id: string }>(), {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 0,
+      toVersion: 1,
+      totalRows: 0,
+      operations: [],
+    });
+    const duplicateInsert = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 4,
+      operations: [{ type: "insert", key: "a", row: { id: "a-duplicate" }, index: 1 }],
+    });
+    const negativeInsert = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 4,
+      operations: [{ type: "insert", key: "d", row: { id: "d" }, index: -1 }],
+    });
+    const nanInsert = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 4,
+      operations: [{ type: "insert", key: "d", row: { id: "d" }, index: Number.NaN }],
+    });
+    const outOfRangeInsert = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 4,
+      operations: [{ type: "insert", key: "d", row: { id: "d" }, index: 4 }],
+    });
+    const mismatchedUpdate = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "update", key: "z", row: { id: "z" }, index: 1 }],
+    });
+    const fractionalUpdate = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "update", key: "b", row: { id: "b" }, index: 1.5 }],
+    });
+    const missingMoveSource = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "move", key: "missing", fromIndex: 99, toIndex: 0 }],
+    });
+    const mismatchedMoveKey = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "move", key: "z", fromIndex: 0, toIndex: 1 }],
+    });
+    const negativeMoveTarget = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "move", key: "a", fromIndex: 0, toIndex: -1 }],
+    });
+    const fractionalMoveSource = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "move", key: "a", fromIndex: 0.5, toIndex: 1 }],
+    });
+    const fractionalMoveTarget = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "move", key: "a", fromIndex: 0, toIndex: 1.5 }],
+    });
+    const outOfRangeMoveTarget = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 3,
+      operations: [{ type: "move", key: "a", fromIndex: 0, toIndex: 3 }],
+    });
+    const missingRemove = applyEvent(previous, {
+      type: "delta",
+      topic: "orders",
+      queryId: "query-invalid-delta",
+      fromVersion: 1,
+      toVersion: 2,
+      totalRows: 2,
+      operations: [{ type: "remove", key: "missing" }],
+    });
+
+    expect(staleVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(equalToVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(backwardToVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(fractionalToVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(infiniteToVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(nanFromVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(negativeFromVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(fractionalStateVersion).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1.5,
+    });
+    expect(negativeDeltaTotalRows).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(fractionalDeltaTotalRows).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(totalRowsBelowWindow).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(loadingStateDelta).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 0,
+    });
+    expect(duplicateInsert).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(negativeInsert).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(nanInsert).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(outOfRangeInsert).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(mismatchedUpdate).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(fractionalUpdate).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(missingMoveSource).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(mismatchedMoveKey).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(negativeMoveTarget).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(fractionalMoveSource).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(fractionalMoveTarget).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(outOfRangeMoveTarget).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+    expect(missingRemove).toMatchObject({
+      status: "stale",
+      statusCode: "SnapshotStale",
+      version: 1,
+    });
+  });
+
   it("maps async atom lifecycle states into live query results", () => {
     expect(liveQueryResultFromAsyncResult(AsyncResult.initial())).toMatchObject({
       status: "loading",

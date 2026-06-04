@@ -29,54 +29,166 @@ export const liveQueryResult = <Row>(state: ClientState<Row>): LiveQueryResult<R
 });
 
 const applySnapshot = <Row>(
+  state: ClientState<Row>,
   event: Extract<ViewServerLiveEvent<Row>, { readonly type: "snapshot" }>,
-): ClientState<Row> => ({
-  rows: event.rows,
-  keys: event.keys,
-  totalRows: event.totalRows,
-  version: event.version,
-  status: "ready",
-  statusCode: "Ready",
-});
+): ClientState<Row> => {
+  if (!isValidSnapshotEvent(event)) {
+    return staleSnapshotState(state);
+  }
+  return {
+    rows: event.rows,
+    keys: event.keys,
+    totalRows: event.totalRows,
+    version: event.version,
+    status: "ready",
+    statusCode: "Ready",
+  };
+};
+
+const reindexKeys = (
+  keys: ReadonlyArray<string>,
+  keyIndexes: Map<string, number>,
+  startIndex: number,
+): void => {
+  for (let index = startIndex; index < keys.length; index += 1) {
+    keyIndexes.set(keys[index]!, index);
+  }
+};
+
+const isInsertIndex = (index: number, length: number): boolean =>
+  Number.isSafeInteger(index) && index >= 0 && index <= length;
+
+const isExistingIndex = (index: number, length: number): boolean =>
+  Number.isSafeInteger(index) && index >= 0 && index < length;
+
+const isNonNegativeSafeInteger = (value: number): boolean =>
+  Number.isSafeInteger(value) && value >= 0;
+
+const hasUniqueKeys = (keys: ReadonlyArray<string>): boolean => {
+  const seenKeys = new Set<string>();
+  for (const key of keys) {
+    if (seenKeys.has(key)) {
+      return false;
+    }
+    seenKeys.add(key);
+  }
+  return true;
+};
+
+const isValidSnapshotEvent = <Row>(
+  event: Extract<ViewServerLiveEvent<Row>, { readonly type: "snapshot" }>,
+): boolean =>
+  isNonNegativeSafeInteger(event.version) &&
+  isNonNegativeSafeInteger(event.totalRows) &&
+  event.totalRows >= event.rows.length &&
+  event.keys.length === event.rows.length &&
+  hasUniqueKeys(event.keys);
 
 const applyDeltaOperation = <Row>(
-  state: ClientState<Row>,
+  rows: Array<Row>,
+  keys: Array<string>,
+  keyIndexes: Map<string, number>,
   operation: DeltaEvent<Row>["operations"][number],
-): ClientState<Row> => {
+): boolean => {
   if (operation.type === "insert") {
-    const nextRows = state.rows.slice();
-    const nextKeys = state.keys.slice();
-    nextRows.splice(operation.index, 0, operation.row);
-    nextKeys.splice(operation.index, 0, operation.key);
-    return { ...state, rows: nextRows, keys: nextKeys };
+    if (!isInsertIndex(operation.index, keys.length) || keyIndexes.has(operation.key)) {
+      return false;
+    }
+    rows.splice(operation.index, 0, operation.row);
+    keys.splice(operation.index, 0, operation.key);
+    reindexKeys(keys, keyIndexes, operation.index);
+    return true;
   }
   if (operation.type === "update") {
-    const nextRows = state.rows.slice();
-    const nextKeys = state.keys.slice();
-    nextRows[operation.index] = operation.row;
-    nextKeys[operation.index] = operation.key;
-    return { ...state, rows: nextRows, keys: nextKeys };
+    if (!isExistingIndex(operation.index, keys.length)) {
+      return false;
+    }
+    const previousKey = keys[operation.index];
+    if (previousKey !== operation.key) {
+      return false;
+    }
+    rows[operation.index] = operation.row;
+    keyIndexes.set(operation.key, operation.index);
+    return true;
   }
   if (operation.type === "move") {
-    const nextRows = state.rows.slice();
-    const nextKeys = state.keys.slice();
-    nextRows.splice(operation.toIndex, 0, ...nextRows.splice(operation.fromIndex, 1));
-    nextKeys.splice(operation.toIndex, 0, ...nextKeys.splice(operation.fromIndex, 1));
-    return { ...state, rows: nextRows, keys: nextKeys };
+    if (
+      !isExistingIndex(operation.fromIndex, keys.length) ||
+      !isExistingIndex(operation.toIndex, keys.length)
+    ) {
+      return false;
+    }
+    const key = keys[operation.fromIndex];
+    if (key !== operation.key) {
+      return false;
+    }
+    const movedRows = rows.splice(operation.fromIndex, 1);
+    const movedKeys = keys.splice(operation.fromIndex, 1);
+    rows.splice(operation.toIndex, 0, ...movedRows);
+    keys.splice(operation.toIndex, 0, ...movedKeys);
+    reindexKeys(keys, keyIndexes, Math.min(operation.fromIndex, operation.toIndex));
+    return true;
   }
-  const nextRows = state.rows.filter((_row, index) => state.keys[index] !== operation.key);
-  const nextKeys = state.keys.filter((key) => key !== operation.key);
-  return { ...state, rows: nextRows, keys: nextKeys };
+  const index = keyIndexes.get(operation.key);
+  if (index === undefined) {
+    return false;
+  }
+  rows.splice(index, 1);
+  keys.splice(index, 1);
+  keyIndexes.delete(operation.key);
+  reindexKeys(keys, keyIndexes, index);
+  return true;
+};
+
+const staleDeltaState = <Row>(state: ClientState<Row>): ClientState<Row> => ({
+  ...state,
+  status: "stale",
+  statusCode: "SnapshotStale",
+  message: "Received an invalid delta; waiting for a fresh snapshot.",
+});
+
+const staleSnapshotState = <Row>(state: ClientState<Row>): ClientState<Row> => ({
+  ...state,
+  status: "stale",
+  statusCode: "SnapshotStale",
+  message: "Received an invalid snapshot; waiting for a fresh snapshot.",
+});
+
+const canApplyDeltaFromVersion = <Row>(
+  state: ClientState<Row>,
+  event: DeltaEvent<Row>,
+): boolean => {
+  if (state.status !== "ready") {
+    return false;
+  }
+  return (
+    isNonNegativeSafeInteger(state.version) &&
+    isNonNegativeSafeInteger(event.fromVersion) &&
+    isNonNegativeSafeInteger(event.toVersion) &&
+    isNonNegativeSafeInteger(event.totalRows) &&
+    state.version === event.fromVersion &&
+    event.toVersion > state.version
+  );
 };
 
 const applyDelta = <Row>(state: ClientState<Row>, event: DeltaEvent<Row>): ClientState<Row> => {
-  let nextState = state;
+  if (!canApplyDeltaFromVersion(state, event)) {
+    return staleDeltaState(state);
+  }
+  const rows = state.rows.slice();
+  const keys = state.keys.slice();
+  const keyIndexes = new Map(keys.map((key, index) => [key, index]));
   for (const operation of event.operations) {
-    nextState = applyDeltaOperation(nextState, operation);
+    if (!applyDeltaOperation(rows, keys, keyIndexes, operation)) {
+      return staleDeltaState(state);
+    }
+  }
+  if (event.totalRows < rows.length) {
+    return staleDeltaState(state);
   }
   return {
-    rows: nextState.rows,
-    keys: nextState.keys,
+    rows,
+    keys,
     totalRows: event.totalRows,
     version: event.toVersion,
     status: "ready",
@@ -99,7 +211,7 @@ export const applyEvent = <Row>(
   event: ViewServerLiveEvent<Row>,
 ): ClientState<Row> => {
   if (event.type === "snapshot") {
-    return applySnapshot(event);
+    return applySnapshot(state, event);
   }
   if (event.type === "delta") {
     return applyDelta(state, event);
