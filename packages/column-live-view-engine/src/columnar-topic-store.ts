@@ -67,6 +67,7 @@ const noOrderedRangeBounds: OrderedRangeBounds = {
   lower: undefined,
   upper: undefined,
 };
+const maxBoundedRawWindowEnd = 1_024;
 
 export type PreparedTopicRow = {
   readonly key: string;
@@ -189,28 +190,10 @@ export class ColumnarTopicStore {
       return this.scanRawWindowOrderedSlots(plan, orderedWindow);
     }
 
-    const compareSlots = this.rawWindowSlotComparator(plan);
-    if (compareSlots !== undefined) {
-      return this.scanRawWindowSlots(plan, compareSlots);
-    }
-
-    const filtered: Array<TopicRowEntry<object>> = [];
-    for (let slot = 0; slot < this.slots.length; slot += 1) {
-      const entry = this.slots[slot]!;
-      if (this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
-        filtered.push(entry);
-      }
-    }
-    const ordered = filtered.toSorted(plan.compare);
-    const window = ordered.slice(
-      plan.offset,
-      plan.limit === undefined ? undefined : plan.offset + plan.limit,
-    );
-    return {
-      keys: window.map((entry) => entry.key),
-      window,
-      totalRows: filtered.length,
-    };
+    const compareSlots =
+      this.rawWindowSlotComparator(plan) ??
+      ((left, right) => plan.compare(this.slots[left]!, this.slots[right]!));
+    return this.scanRawWindowSlots(plan, compareSlots);
   }
 
   private scanRawWindowOrderedSlots(
@@ -246,6 +229,11 @@ export class ColumnarTopicStore {
     plan: TopicRawWindowScanPlan<object>,
     compareSlots: (left: number, right: number) => number,
   ): TopicRawWindowScanResult<object> {
+    const boundedWindowEnd = boundedRawWindowEnd(plan);
+    if (boundedWindowEnd !== undefined) {
+      return this.scanRawWindowBoundedSlots(plan, compareSlots, boundedWindowEnd);
+    }
+
     let totalRows = 0;
     const filteredSlots: Array<number> = [];
     for (let slot = 0; slot < this.slots.length; slot += 1) {
@@ -264,6 +252,39 @@ export class ColumnarTopicStore {
       plan.limit === undefined ? undefined : plan.offset + plan.limit,
     );
     const window = windowSlots.map((slot) => this.slots[slot]!);
+    return {
+      keys: window.map((entry) => entry.key),
+      window,
+      totalRows,
+    };
+  }
+
+  private scanRawWindowBoundedSlots(
+    plan: TopicRawWindowScanPlan<object>,
+    compareSlots: (left: number, right: number) => number,
+    windowEnd: number,
+  ): TopicRawWindowScanResult<object> {
+    let totalRows = 0;
+    const windowSlots: Array<number> = [];
+    for (let slot = 0; slot < this.slots.length; slot += 1) {
+      const entry = this.slots[slot]!;
+      if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
+        continue;
+      }
+      totalRows += 1;
+      if (windowSlots.length < windowEnd) {
+        const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
+        windowSlots.splice(insertAt, 0, slot);
+        continue;
+      }
+      const worstSlot = windowSlots[windowSlots.length - 1]!;
+      if (compareSlots(slot, worstSlot) < 0) {
+        const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
+        windowSlots.splice(insertAt, 0, slot);
+        windowSlots.pop();
+      }
+    }
+    const window = windowSlots.slice(plan.offset).map((slot) => this.slots[slot]!);
     return {
       keys: window.map((entry) => entry.key),
       window,
@@ -747,6 +768,20 @@ const compareRangeColumnValue = (left: unknown, right: unknown): number | undefi
 const orderedSlotIndexKey = (orderBy: ReadonlyArray<TopicRawOrderByPlan>): string => {
   const order = orderBy[0]!;
   return `${order.field.length}:${order.field}:${order.direction}`;
+};
+
+const boundedRawWindowEnd = (plan: TopicRawWindowScanPlan<object>): number | undefined => {
+  if (plan.limit === undefined || plan.limit <= 0) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(plan.offset) || plan.offset < 0 || !Number.isSafeInteger(plan.limit)) {
+    return undefined;
+  }
+  const windowEnd = plan.offset + plan.limit;
+  if (!Number.isSafeInteger(windowEnd) || windowEnd > maxBoundedRawWindowEnd) {
+    return undefined;
+  }
+  return windowEnd;
 };
 
 const orderedSlotIndexInsertionPoint = (

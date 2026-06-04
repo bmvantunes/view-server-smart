@@ -212,6 +212,14 @@ const rowField = (row: object, field: string): unknown => {
 const rowIds = (rows: ReadonlyArray<object>): ReadonlyArray<unknown> =>
   rows.map((row) => rowField(row, "id"));
 
+const numericRowField = (row: object, field: string): number => {
+  const value = fieldValue(row, field);
+  if (typeof value === "number") {
+    return value;
+  }
+  throw new Error(`Expected numeric row field ${field}.`);
+};
+
 const normalizeDecimalFields = <Row extends object>(
   rows: ReadonlyArray<Row>,
 ): ReadonlyArray<Record<string, unknown>> =>
@@ -3969,6 +3977,87 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(zeroLimitPlan.keys).toStrictEqual([]);
       expect(zeroLimitPlan.totalRows).toBe(2);
+
+      const unsafeWindowEndPlan = readModel.scanRawWindow({
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByKey,
+        offset: Number.MAX_SAFE_INTEGER,
+        limit: 1,
+      });
+      expect(unsafeWindowEndPlan.keys).toStrictEqual([]);
+      expect(unsafeWindowEndPlan.totalRows).toBe(2);
+    }),
+  );
+
+  it.effect("uses bounded fallback scans for finite windows with stable row-key ties", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      yield* publishTopicStoreRow(store, order("d", "open", 20, 4), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("b", "open", 10, 2), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("a", "open", 10, 1), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("c", "open", 10, 3), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("e", "open", 30, 5), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const compareByPriceThenKey = (
+        left: { readonly key: string; readonly row: object },
+        right: { readonly key: string; readonly row: object },
+      ) => {
+        const priceComparison =
+          numericRowField(left.row, "price") - numericRowField(right.row, "price");
+        if (priceComparison !== 0) {
+          return priceComparison;
+        }
+        return left.key.localeCompare(right.key);
+      };
+
+      const readModel = topicStoreReadModel(store);
+      const boundedWindow = readModel.scanRawWindow({
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByPriceThenKey,
+        offset: 1,
+        limit: 3,
+      });
+
+      expect(boundedWindow.keys).toStrictEqual(["b", "c", "d"]);
+      expect(boundedWindow.window.map((entry) => entry.key)).toStrictEqual(["b", "c", "d"]);
+      expect(rowIds(boundedWindow.window.map((entry) => entry.row))).toStrictEqual(["b", "c", "d"]);
+      expect(boundedWindow.totalRows).toBe(5);
+
+      const cappedLargeWindow = readModel.scanRawWindow({
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByPriceThenKey,
+        offset: 1_024,
+        limit: 1,
+      });
+
+      expect(cappedLargeWindow.keys).toStrictEqual([]);
+      expect(cappedLargeWindow.window).toStrictEqual([]);
+      expect(cappedLargeWindow.totalRows).toBe(5);
     }),
   );
 
