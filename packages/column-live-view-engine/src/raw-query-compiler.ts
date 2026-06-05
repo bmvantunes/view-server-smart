@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { compareQueryValue, stableQueryValueString } from "./query-value";
-import { isRangePlanValue, type CompiledRawPredicate } from "./raw-predicate-compiler";
+import type { CompiledRawPredicate } from "./raw-predicate-compiler";
+import { isRangePlanValue } from "./raw-predicate-plan";
 import { makeRawQueryPlan, type RawQueryPlan } from "./raw-query-plan";
 import {
   decodeRawQuery,

@@ -1,4 +1,5 @@
-import type { TopicRawOrderByPlan, TopicRawPredicateFilterPlan } from "./raw-window-scan";
+import type { TopicRawPredicateFilterPlan } from "./raw-predicate-plan";
+import type { TopicRawOrderByPlan } from "./raw-window-scan";
 import {
   compareQueryValue,
   isRangePlanValue,
