@@ -15,6 +15,9 @@ export {
   type ViewServerWireLiveQuery,
   ViewServerWireRawQuerySchema,
   type ViewServerWireRawQuery,
+} from "./protocol-query-schema";
+
+export {
   viewServerDecodeHealthQuery,
   viewServerDecodeTopic,
   viewServerEncodeLiveQuery,

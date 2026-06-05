@@ -7,7 +7,7 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { Schema } from "effect";
 import { ViewServerWireEventSchema } from "./protocol-event-codec";
 import { ViewServerHealthSchema } from "./protocol-health-codec";
-import { ViewServerSubscribePayloadSchema } from "./protocol-query-codec";
+import { ViewServerSubscribePayloadSchema } from "./protocol-query-schema";
 
 export const ViewServerBackpressureErrorSchema: Schema.Codec<ViewServerBackpressureError> =
   Schema.TaggedStruct("ViewServerBackpressureError", {
@@ -66,4 +66,4 @@ export const ViewServerRpcs = RpcGroup.make(
 
 export type ViewServerRpcError = typeof ViewServerRpcErrorSchema.Type;
 
-export { ViewServerHealthQuerySchema } from "./protocol-query-codec";
+export { ViewServerHealthQuerySchema } from "./protocol-query-schema";
