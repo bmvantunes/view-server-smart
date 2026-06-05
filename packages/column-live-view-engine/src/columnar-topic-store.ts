@@ -48,6 +48,13 @@ type OrderedRangeBounds = {
   readonly upper: OrderedRangeBound | undefined;
 };
 
+type ScalarCandidateSlots = ReadonlyArray<number>;
+type ScalarCandidateFilter = {
+  readonly column: ColumnValues;
+  readonly sampleMatches: number;
+  readonly valueKeys: ReadonlySet<string>;
+};
+
 type TopicRawRangePredicateFilterPlan = TopicRawPredicateFilterPlan & {
   readonly operator: "gt" | "gte" | "lt" | "lte";
   readonly value: unknown;
@@ -68,6 +75,8 @@ const noOrderedRangeBounds: OrderedRangeBounds = {
   upper: undefined,
 };
 const maxBoundedRawWindowEnd = 1_024;
+const maxScalarCandidateSampleSlots = 4_096;
+const maxTransientScalarCandidateSlots = 65_536;
 
 export type PreparedTopicRow = {
   readonly key: string;
@@ -187,7 +196,12 @@ export class ColumnarTopicStore {
   scanRawWindow(plan: TopicRawWindowScanPlan<object>): TopicRawWindowScanResult<object> {
     const orderedWindow = this.rawWindowOrderedWindow(plan);
     if (orderedWindow !== undefined) {
-      return this.scanRawWindowOrderedSlots(plan, orderedWindow);
+      const candidateSlots =
+        plan.predicate.callbackSkippable === true &&
+        orderedRawWindowSlotCount(orderedWindow) * 2 > this.slots.length
+          ? this.scalarPredicateCandidateSlots(plan.predicate.filters)
+          : undefined;
+      return this.scanRawWindowOrderedSlots(plan, orderedWindow, candidateSlots);
     }
 
     const compareSlots =
@@ -199,13 +213,26 @@ export class ColumnarTopicStore {
   private scanRawWindowOrderedSlots(
     plan: TopicRawWindowScanPlan<object>,
     orderedWindow: OrderedRawWindow,
+    candidateSlots: ScalarCandidateSlots | undefined,
   ): TopicRawWindowScanResult<object> {
+    if (candidateSlots !== undefined && candidateSlots.length === 0) {
+      return {
+        keys: [],
+        window: [],
+        totalRows: 0,
+      };
+    }
     let totalRows = 0;
     const windowSlots: Array<number> = [];
     const windowEnd = plan.offset + orderedWindow.limit;
+    const candidateSlotSet =
+      candidateSlots === undefined ? undefined : new Set<number>(candidateSlots);
     for (const span of orderedWindow.spans) {
       for (let slotIndex = span.startIndex; slotIndex < span.endIndex; slotIndex += 1) {
         const slot = orderedWindow.slots[slotIndex]!;
+        if (candidateSlotSet !== undefined && !candidateSlotSet.has(slot)) {
+          continue;
+        }
         const entry = this.slots[slot]!;
         if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
           continue;
@@ -229,21 +256,38 @@ export class ColumnarTopicStore {
     plan: TopicRawWindowScanPlan<object>,
     compareSlots: (left: number, right: number) => number,
   ): TopicRawWindowScanResult<object> {
+    const candidateSlots =
+      plan.predicate.callbackSkippable === true
+        ? this.scalarPredicateCandidateSlots(plan.predicate.filters)
+        : undefined;
     const boundedWindowEnd = boundedRawWindowEnd(plan);
     if (boundedWindowEnd !== undefined) {
-      return this.scanRawWindowBoundedSlots(plan, compareSlots, boundedWindowEnd);
+      return this.scanRawWindowBoundedSlots(plan, compareSlots, boundedWindowEnd, candidateSlots);
     }
 
     let totalRows = 0;
     const filteredSlots: Array<number> = [];
-    for (let slot = 0; slot < this.slots.length; slot += 1) {
-      const entry = this.slots[slot]!;
-      if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
-        continue;
+    if (candidateSlots !== undefined) {
+      for (const slot of candidateSlots) {
+        const entry = this.slots[slot]!;
+        if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
+          continue;
+        }
+        totalRows += 1;
+        if (plan.limit !== 0) {
+          filteredSlots.push(slot);
+        }
       }
-      totalRows += 1;
-      if (plan.limit !== 0) {
-        filteredSlots.push(slot);
+    } else {
+      for (let slot = 0; slot < this.slots.length; slot += 1) {
+        const entry = this.slots[slot]!;
+        if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
+          continue;
+        }
+        totalRows += 1;
+        if (plan.limit !== 0) {
+          filteredSlots.push(slot);
+        }
       }
     }
     filteredSlots.sort(compareSlots);
@@ -263,25 +307,47 @@ export class ColumnarTopicStore {
     plan: TopicRawWindowScanPlan<object>,
     compareSlots: (left: number, right: number) => number,
     windowEnd: number,
+    candidateSlots: ScalarCandidateSlots | undefined,
   ): TopicRawWindowScanResult<object> {
     let totalRows = 0;
     const windowSlots: Array<number> = [];
-    for (let slot = 0; slot < this.slots.length; slot += 1) {
-      const entry = this.slots[slot]!;
-      if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
-        continue;
+    if (candidateSlots !== undefined) {
+      for (const slot of candidateSlots) {
+        const entry = this.slots[slot]!;
+        if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
+          continue;
+        }
+        totalRows += 1;
+        if (windowSlots.length < windowEnd) {
+          const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
+          windowSlots.splice(insertAt, 0, slot);
+          continue;
+        }
+        const worstSlot = windowSlots[windowSlots.length - 1]!;
+        if (compareSlots(slot, worstSlot) < 0) {
+          const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
+          windowSlots.splice(insertAt, 0, slot);
+          windowSlots.pop();
+        }
       }
-      totalRows += 1;
-      if (windowSlots.length < windowEnd) {
-        const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
-        windowSlots.splice(insertAt, 0, slot);
-        continue;
-      }
-      const worstSlot = windowSlots[windowSlots.length - 1]!;
-      if (compareSlots(slot, worstSlot) < 0) {
-        const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
-        windowSlots.splice(insertAt, 0, slot);
-        windowSlots.pop();
+    } else {
+      for (let slot = 0; slot < this.slots.length; slot += 1) {
+        const entry = this.slots[slot]!;
+        if (!this.slotMatchesPredicatePlan(slot, plan, entry.row)) {
+          continue;
+        }
+        totalRows += 1;
+        if (windowSlots.length < windowEnd) {
+          const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
+          windowSlots.splice(insertAt, 0, slot);
+          continue;
+        }
+        const worstSlot = windowSlots[windowSlots.length - 1]!;
+        if (compareSlots(slot, worstSlot) < 0) {
+          const insertAt = orderedSlotIndexInsertionPoint(windowSlots, slot, compareSlots);
+          windowSlots.splice(insertAt, 0, slot);
+          windowSlots.pop();
+        }
       }
     }
     const window = windowSlots.slice(plan.offset).map((slot) => this.slots[slot]!);
@@ -290,6 +356,106 @@ export class ColumnarTopicStore {
       window,
       totalRows,
     };
+  }
+
+  private scalarPredicateCandidateSlots(
+    filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
+  ): ScalarCandidateSlots | undefined {
+    let selectedFilter: ScalarCandidateFilter | undefined;
+    for (const filter of filters) {
+      const candidateFilter = this.scalarPredicateFilter(filter);
+      if (candidateFilter === undefined) {
+        continue;
+      }
+      if (
+        selectedFilter === undefined ||
+        candidateFilter.sampleMatches < selectedFilter.sampleMatches
+      ) {
+        selectedFilter = candidateFilter;
+      }
+    }
+    if (selectedFilter === undefined) {
+      return undefined;
+    }
+    return this.scalarColumnCandidateSlots(selectedFilter.column, selectedFilter.valueKeys);
+  }
+
+  private scalarPredicateFilter(
+    filter: TopicRawPredicateFilterPlan,
+  ): ScalarCandidateFilter | undefined {
+    if (filter.operator === "eq") {
+      const key = scalarEqualityKey(filter.value);
+      if (key === undefined) {
+        return undefined;
+      }
+      const column = this.columns.get(filter.field);
+      if (column === undefined) {
+        return undefined;
+      }
+      return this.scalarColumnCandidateFilter(column, new Set([key]));
+    }
+    if (filter.operator !== "in" || filter.valueKeys === undefined) {
+      return undefined;
+    }
+    const column = this.columns.get(filter.field);
+    if (column === undefined) {
+      return undefined;
+    }
+    return this.scalarColumnCandidateFilter(column, filter.valueKeys);
+  }
+
+  private scalarColumnCandidateFilter(
+    column: ColumnValues,
+    valueKeys: ReadonlySet<string>,
+  ): ScalarCandidateFilter | undefined {
+    const sampleMatches = this.scalarColumnSampleMatchCount(column, valueKeys);
+    if (sampleMatches === undefined) {
+      return undefined;
+    }
+    return {
+      column,
+      sampleMatches,
+      valueKeys,
+    };
+  }
+
+  private scalarColumnCandidateSlots(
+    column: ColumnValues,
+    valueKeys: ReadonlySet<string>,
+  ): ScalarCandidateSlots | undefined {
+    const maxSlots = scalarCandidateSlotLimit(this.slots.length);
+    const slots: Array<number> = [];
+    for (let slot = 0; slot < this.slots.length; slot += 1) {
+      const key = scalarEqualityKey(column[slot]);
+      if (key === undefined || !valueKeys.has(key)) {
+        continue;
+      }
+      slots.push(slot);
+      if (slots.length > maxSlots) {
+        return undefined;
+      }
+    }
+    return slots;
+  }
+
+  private scalarColumnSampleMatchCount(
+    column: ColumnValues,
+    valueKeys: ReadonlySet<string>,
+  ): number | undefined {
+    const sampleSize = Math.min(this.slots.length, maxScalarCandidateSampleSlots);
+    const maxMatches = scalarCandidateSampleMatchLimit(sampleSize);
+    let matches = 0;
+    for (let slot = 0; slot < sampleSize; slot += 1) {
+      const key = scalarEqualityKey(column[slot]);
+      if (key === undefined || !valueKeys.has(key)) {
+        continue;
+      }
+      matches += 1;
+      if (matches > maxMatches) {
+        return undefined;
+      }
+    }
+    return matches;
   }
 
   private rawWindowOrderedWindow(
@@ -787,6 +953,20 @@ const boundedRawWindowEnd = (plan: TopicRawWindowScanPlan<object>): number | und
   }
   return windowEnd;
 };
+
+const orderedRawWindowSlotCount = (window: OrderedRawWindow): number => {
+  let count = 0;
+  for (const span of window.spans) {
+    count += span.endIndex - span.startIndex;
+  }
+  return count;
+};
+
+const scalarCandidateSlotLimit = (rowCount: number): number =>
+  Math.min(maxTransientScalarCandidateSlots, Math.floor(rowCount / 2));
+
+const scalarCandidateSampleMatchLimit = (sampleSize: number): number =>
+  Math.max(8, Math.floor(sampleSize / 8));
 
 const orderedSlotIndexInsertionPoint = (
   slots: ReadonlyArray<number>,

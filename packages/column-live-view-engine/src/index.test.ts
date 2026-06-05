@@ -46,6 +46,7 @@ import {
   collectTopicStoreHealth,
   deleteTopicStoreRow,
   publishTopicStoreRow,
+  publishTopicStoreRows,
   registerTopicStoreSubscription,
   resetTopicStore,
   TopicStore,
@@ -617,6 +618,32 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         { id: "e", price: 5 },
       ]);
       expect(ascendingInclusive.totalRows).toBe(7);
+
+      const scalarFilteredOrderedWindow = yield* engine.snapshot("orders", {
+        select: ["id", "price", "status"],
+        where: {
+          status: "closed",
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 1,
+      });
+
+      expect(scalarFilteredOrderedWindow.rows).toStrictEqual([
+        { id: "z", price: 99, status: "closed" },
+      ]);
+      expect(scalarFilteredOrderedWindow.totalRows).toBe(1);
+
+      const scalarFilteredEmptyOrderedWindow = yield* engine.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        where: {
+          customerId: "missing-customer",
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 1,
+      });
+
+      expect(scalarFilteredEmptyOrderedWindow.rows).toStrictEqual([]);
+      expect(scalarFilteredEmptyOrderedWindow.totalRows).toBe(0);
 
       const numericEquality = yield* engine.snapshot("orders", {
         select: ["id", "price"],
@@ -4257,7 +4284,6 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         { ...order("noted", "open", 40, 4), note: "hello" },
         (topic, message) => InvalidRowError.make({ topic, message }),
       );
-
       const readModel = topicStoreReadModel(store);
       const indexedNumberIn = readModel.scanRawWindow({
         predicate: {
@@ -4308,6 +4334,541 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
       expect(indexedOptionalIn.keys).toStrictEqual(["noted"]);
       expect(indexedOptionalIn.totalRows).toBe(1);
+    }),
+  );
+
+  it.effect("uses scalar predicate candidate scans across row mutations", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      yield* publishTopicStoreRow(store, order("cheap", "open", 10, 1), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("matched", "open", 20, 2), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(
+        store,
+        { ...order("noted", "open", 40, 4), note: "hello" },
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("cold", "closed", 99, 9), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const readModel = topicStoreReadModel(store);
+      const compareByKey = (left: { readonly key: string }, right: { readonly key: string }) =>
+        left.key.localeCompare(right.key);
+
+      const initialPriceMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20],
+              valueKeys: new Set(["number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete scalar in predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(initialPriceMatch.keys).toStrictEqual(["matched"]);
+
+      const initialPriceCountOnly = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20],
+              valueKeys: new Set(["number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete scalar count-only predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: 0,
+      });
+      expect(initialPriceCountOnly.keys).toStrictEqual([]);
+      expect(initialPriceCountOnly.totalRows).toBe(1);
+
+      const partialPriceBuckets = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20, 999],
+              valueKeys: new Set(["number:20", "number:999"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("missing scalar buckets should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(partialPriceBuckets.keys).toStrictEqual(["matched"]);
+
+      const stableTieWindow = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20, 10],
+              valueKeys: new Set(["number:20", "number:10"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete scalar in tie windows should not call row callbacks");
+        },
+        compare: () => 0,
+        offset: 0,
+        limit: 1,
+      });
+      expect(stableTieWindow.keys).toStrictEqual(["cheap"]);
+
+      const boundedCandidateRejectedBySecondFilter = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "status",
+              operator: "in",
+              values: ["closed"],
+              valueKeys: new Set(["string:6:closed"]),
+            },
+            {
+              field: "price",
+              operator: "in",
+              values: [10, 20],
+              valueKeys: new Set(["number:10", "number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("bounded scalar candidate scans should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: 1,
+      });
+      expect(boundedCandidateRejectedBySecondFilter.keys).toStrictEqual([]);
+
+      const boundedCandidateReplacement = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [10, 20],
+              valueKeys: new Set(["number:10", "number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("bounded scalar candidate top-k scans should not call row callbacks");
+        },
+        compare: (left, right) => right.key.localeCompare(left.key),
+        offset: 0,
+        limit: 1,
+      });
+      expect(boundedCandidateReplacement.keys).toStrictEqual(["matched"]);
+
+      const notedMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "note",
+              operator: "in",
+              values: ["hello"],
+              valueKeys: new Set(["string:5:hello"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete optional scalar in predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(notedMatch.keys).toStrictEqual(["noted"]);
+
+      const closedStatusMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "status",
+              operator: "in",
+              values: ["closed"],
+              valueKeys: new Set(["string:6:closed"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("selective status predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(closedStatusMatch.keys).toStrictEqual(["cold"]);
+
+      const sameSizeCandidateMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "status",
+              operator: "in",
+              values: ["closed"],
+              valueKeys: new Set(["string:6:closed"]),
+            },
+            {
+              field: "note",
+              operator: "in",
+              values: ["hello"],
+              valueKeys: new Set(["string:5:hello"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("same-size scalar candidates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(sameSizeCandidateMatch.keys).toStrictEqual([]);
+
+      const broadStatusMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "status",
+              operator: "in",
+              values: ["open"],
+              valueKeys: new Set(["string:4:open"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("broad complete scalar predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(broadStatusMatch.keys).toStrictEqual(["cheap", "matched", "noted"]);
+
+      yield* publishTopicStoreRow(store, order("also-matched", "open", 20, 3), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("other", "open", 30, 5), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+      yield* publishTopicStoreRow(store, order("missing-note", "open", 50, 6), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const insertedPriceMatches = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20],
+              valueKeys: new Set(["number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("scalar candidate scans should not call row callbacks after append");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(insertedPriceMatches.keys).toStrictEqual(["also-matched", "matched"]);
+
+      const newPriceBucket = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [30],
+              valueKeys: new Set(["number:30"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("new scalar candidate buckets should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(newPriceBucket.keys).toStrictEqual(["other"]);
+
+      const smallerCandidateWins = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "status",
+              operator: "in",
+              values: ["open"],
+              valueKeys: new Set(["string:4:open"]),
+            },
+            {
+              field: "price",
+              operator: "eq",
+              value: 20,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete scalar predicate candidates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(smallerCandidateWins.keys).toStrictEqual(["also-matched", "matched"]);
+
+      yield* publishTopicStoreRow(store, order("matched", "open", 30, 7), (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const rebuiltPriceMatches = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20],
+              valueKeys: new Set(["number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("scalar candidate scans should not call row callbacks after replace");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(rebuiltPriceMatches.keys).toStrictEqual(["also-matched"]);
+
+      const manualObjectEquality = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "eq",
+              value: { price: 20 },
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(manualObjectEquality.keys).toStrictEqual([]);
+
+      const missingFieldEq = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "missing",
+              operator: "eq",
+              value: "anything",
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(missingFieldEq.keys).toStrictEqual([
+        "also-matched",
+        "cheap",
+        "cold",
+        "matched",
+        "missing-note",
+        "noted",
+        "other",
+      ]);
+
+      const missingFieldIn = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "missing",
+              operator: "in",
+              values: ["anything"],
+              valueKeys: new Set(["string:8:anything"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(missingFieldIn.keys).toStrictEqual([
+        "also-matched",
+        "cheap",
+        "cold",
+        "matched",
+        "missing-note",
+        "noted",
+        "other",
+      ]);
+
+      yield* deleteTopicStoreRow(store, "other");
+
+      const afterDeletePriceMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "eq",
+              value: 30,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("scalar candidate scans after delete should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(afterDeletePriceMatch.keys).toStrictEqual(["matched"]);
+
+      yield* publishTopicStoreRows(
+        store,
+        [order("bulk-a", "open", 20, 8), order("bulk-b", "closed", 60, 9)],
+        (topic, message) => InvalidRowError.make({ topic, message }),
+      );
+
+      const afterBulkPriceMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20],
+              valueKeys: new Set(["number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error(
+            "scalar candidate scans after bulk publish should not call row callbacks",
+          );
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(afterBulkPriceMatch.keys).toStrictEqual(["also-matched", "bulk-a"]);
+
+      yield* resetTopicStore(store);
+
+      const afterResetPriceMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20],
+              valueKeys: new Set(["number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("scalar candidate scans after reset should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(afterResetPriceMatch.keys).toStrictEqual([]);
     }),
   );
 

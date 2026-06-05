@@ -273,6 +273,26 @@ describe(`raw snapshot and delta engine benchmark: ${profile.rowCount} rows`, ()
   );
 
   bench(
+    "selective equality filter + fallback top-k sort",
+    async () => {
+      await Effect.runPromise(
+        profileEngine(profile).snapshot("orders", {
+          select: ["id", "price", "status", "updatedAt"],
+          where: {
+            price: { eq: Math.floor(profile.rowCount / 2) % 1_000_000 },
+          },
+          orderBy: [
+            { field: "updatedAt", direction: "desc" },
+            { field: "id", direction: "asc" },
+          ],
+          limit: 50,
+        }),
+      );
+    },
+    benchOptions,
+  );
+
+  bench(
     "ordered equality filter + indexed seek",
     async () => {
       await Effect.runPromise(
