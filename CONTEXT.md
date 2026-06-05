@@ -78,6 +78,10 @@ _Avoid_: Query object, filter function
 The compiled internal representation of a Raw Query, including predicate hints, deterministic ordering, projection, cache keys, and window scan inputs.
 _Avoid_: Query object, filter callback, storage scan object
 
+**Raw Predicate Plan**:
+The storage-admissible predicate hint set compiled from a Raw Query, including exact scalar filters and whether row callback evaluation is still required.
+_Avoid_: Filter helper, where object, matcher callback
+
 **Grouped Query Plan**:
 The compiled internal representation of a Grouped Query, including group key calculation, aggregate definitions, ordering, window settings, and cache keys.
 _Avoid_: Grouped query object, aggregate config, groupBy helper
@@ -141,6 +145,7 @@ _Avoid_: Browser write, send, emit
 - A **Subscription** belongs to one **Live Query** and emits one **Snapshot** followed by zero or more **Deltas** and **Status Events**.
 - A **Column Live View Engine** owns one **Columnar Topic Store** per **View Server Topic**.
 - A **Raw Query Plan** is compiled once from a **Raw Query** before the **Columnar Topic Store** scans rows.
+- A **Raw Predicate Plan** is part of a **Raw Query Plan** and lets storage narrow scans without replacing the correctness callback unless it is proven exact.
 - A **Grouped Query Plan** is compiled once from a **Grouped Query** before grouped full-scan or incremental execution.
 - An **Active Query** may serve many equivalent **Subscriptions**.
 - A **Live Client** can subscribe to **Live Queries** but cannot publish mutations.

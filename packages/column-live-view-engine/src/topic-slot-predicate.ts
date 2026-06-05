@@ -1,4 +1,5 @@
-import type { TopicRawPredicateFilterPlan, TopicRawWindowScanPlan } from "./raw-window-scan";
+import type { TopicRawPredicateFilterPlan } from "./raw-predicate-plan";
+import type { TopicRawWindowScanPlan } from "./raw-window-scan";
 import { scalarEqualityKey, valuesEqual } from "./row-values";
 import {
   columnValueDoesNotEqual,
