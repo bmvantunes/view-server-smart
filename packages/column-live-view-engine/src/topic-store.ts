@@ -30,6 +30,7 @@ import {
   type RawQueryCompilerMetadata,
 } from "./raw-query-compiler";
 import type { QueryEvaluation } from "./query-result";
+import type { InvalidRowErrorFactory } from "./topic-row-preparation";
 import {
   acquireSubscriptionHandoff,
   type MarkAcquiredSubscription,
@@ -39,7 +40,6 @@ import type { LiveTopicSubscriber } from "./topic-subscriber";
 
 type RowObject = object;
 
-type InvalidRowErrorFactory<Error> = (topic: string, message: string) => Error;
 const topicStoreSubscriptionPermitBrand: unique symbol = Symbol("TopicStoreSubscriptionPermit");
 
 export type TopicStoreSubscriptionPermit = {
