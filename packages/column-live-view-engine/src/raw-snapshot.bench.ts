@@ -346,6 +346,27 @@ describe(`raw snapshot and delta engine benchmark: ${profile.rowCount} rows`, ()
   );
 
   bench(
+    "selective range filter + fallback top-k sort",
+    async () => {
+      const priceDomainSize = Math.min(profile.rowCount, 1_000_000);
+      await Effect.runPromise(
+        profileEngine(profile).snapshot("orders", {
+          select: ["id", "price", "region", "updatedAt"],
+          where: {
+            price: { gte: Math.max(0, priceDomainSize - 100) },
+          },
+          orderBy: [
+            { field: "updatedAt", direction: "desc" },
+            { field: "id", direction: "asc" },
+          ],
+          limit: 100,
+        }),
+      );
+    },
+    benchOptions,
+  );
+
+  bench(
     "compound filter + top-k sort",
     async () => {
       await Effect.runPromise(

@@ -4406,6 +4406,172 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(initialPriceCountOnly.keys).toStrictEqual([]);
       expect(initialPriceCountOnly.totalRows).toBe(1);
 
+      const initialRangeGreaterThan = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gt",
+              value: 30,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete range gt predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(initialRangeGreaterThan.keys).toStrictEqual(["cold", "noted"]);
+
+      const initialRangeGreaterThanOrEqual = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gte",
+              value: 40,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete range gte predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(initialRangeGreaterThanOrEqual.keys).toStrictEqual(["cold", "noted"]);
+
+      const initialRangeLessThan = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "lt",
+              value: 20,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete range lt predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(initialRangeLessThan.keys).toStrictEqual(["cheap"]);
+
+      const initialRangeLessThanOrEqual = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "lte",
+              value: 10,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete range lte predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(initialRangeLessThanOrEqual.keys).toStrictEqual(["cheap"]);
+
+      const initialRangeCountOnly = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gt",
+              value: 30,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete range count-only predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: 0,
+      });
+      expect(initialRangeCountOnly.keys).toStrictEqual([]);
+      expect(initialRangeCountOnly.totalRows).toBe(2);
+
+      const rangeCandidateRejectedBySecondFilter = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gt",
+              value: 30,
+            },
+            {
+              field: "status",
+              operator: "in",
+              values: ["open"],
+              valueKeys: new Set(["string:4:open"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("compound range candidate predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(rangeCandidateRejectedBySecondFilter.keys).toStrictEqual(["noted"]);
+
+      const rangeCandidateRejectedByIncompatibleSecondFilter = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gt",
+              value: 30,
+            },
+            {
+              field: "note",
+              operator: "gt",
+              value: 30,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("incompatible compound range predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(rangeCandidateRejectedByIncompatibleSecondFilter.keys).toStrictEqual([]);
+
       const partialPriceBuckets = readModel.scanRawWindow({
         predicate: {
           filters: [
@@ -4658,6 +4824,28 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(newPriceBucket.keys).toStrictEqual(["other"]);
 
+      const insertedRangeMatches = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gte",
+              value: 50,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("range candidate scans should not call row callbacks after append");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(insertedRangeMatches.keys).toStrictEqual(["cold", "missing-note"]);
+
       const smallerCandidateWins = readModel.scanRawWindow({
         predicate: {
           filters: [
@@ -4790,7 +4978,62 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         "other",
       ]);
 
+      const missingFieldRange = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "missing",
+              operator: "gt",
+              value: 1,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(missingFieldRange.keys).toStrictEqual([
+        "also-matched",
+        "cheap",
+        "cold",
+        "matched",
+        "missing-note",
+        "noted",
+        "other",
+      ]);
+
       yield* deleteTopicStoreRow(store, "other");
+
+      const afterDeleteRangeMatch = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gte",
+              value: 30,
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("range candidate scans after delete should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(afterDeleteRangeMatch.keys).toStrictEqual([
+        "cold",
+        "matched",
+        "missing-note",
+        "noted",
+      ]);
 
       const afterDeletePriceMatch = readModel.scanRawWindow({
         predicate: {
@@ -4875,18 +5118,23 @@ describe("ColumnLiveViewEngine subscriptions", () => {
   it.effect("keeps optional column values out of exact range scans without row callbacks", () =>
     Effect.gen(function* () {
       const OptionalPrice = Schema.Struct({
+        group: Schema.String,
         id: Schema.String,
         price: Schema.optionalKey(Schema.Finite),
       });
       const store = new TopicStore("optional-prices", OptionalPrice, "id", () => {});
-      yield* publishTopicStoreRow(store, { id: "missing" }, (topic, message) =>
+      yield* publishTopicStoreRow(store, { group: "candidate", id: "missing" }, (topic, message) =>
         InvalidRowError.make({ topic, message }),
       );
-      yield* publishTopicStoreRow(store, { id: "cheap", price: 5 }, (topic, message) =>
-        InvalidRowError.make({ topic, message }),
+      yield* publishTopicStoreRow(
+        store,
+        { group: "other", id: "cheap", price: 5 },
+        (topic, message) => InvalidRowError.make({ topic, message }),
       );
-      yield* publishTopicStoreRow(store, { id: "expensive", price: 20 }, (topic, message) =>
-        InvalidRowError.make({ topic, message }),
+      yield* publishTopicStoreRow(
+        store,
+        { group: "other", id: "expensive", price: 20 },
+        (topic, message) => InvalidRowError.make({ topic, message }),
       );
 
       const readModel = topicStoreReadModel(store);
@@ -4907,6 +5155,75 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
       expect(callbackSkipped.keys).toStrictEqual(["expensive"]);
       expect(callbackSkipped.totalRows).toBe(1);
+
+      const scalarCandidateRejectedByMissingRangeValue = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "group",
+              operator: "in",
+              values: ["candidate"],
+              valueKeys: new Set(["string:9:candidate"]),
+            },
+            { field: "price", operator: "gt", value: 0 },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("missing optional range values should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+
+      expect(scalarCandidateRejectedByMissingRangeValue.keys).toStrictEqual([]);
+      expect(scalarCandidateRejectedByMissingRangeValue.totalRows).toBe(0);
+    }),
+  );
+
+  it.effect("falls back when stratified samples underestimate predicate candidate size", () =>
+    Effect.gen(function* () {
+      const SkewedRow = Schema.Struct({
+        id: Schema.String,
+        status: Schema.String,
+      });
+      const rowCount = 20_000;
+      const sampleSize = 4_096;
+      const sampledSlots = new Set(
+        Array.from({ length: sampleSize }, (_value, sampleIndex) =>
+          Math.round((sampleIndex * (rowCount - 1)) / (sampleSize - 1)),
+        ),
+      );
+      const rows = Array.from({ length: rowCount }, (_value, index) => ({
+        id: `row-${index.toString().padStart(5, "0")}`,
+        status: sampledSlots.has(index) ? "skip" : "match",
+      }));
+      const store = new TopicStore("skewed", SkewedRow, "id", () => {});
+      yield* publishTopicStoreRows(store, rows, (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const readModel = topicStoreReadModel(store);
+      const fallbackResult = readModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "status", operator: "eq", value: "match" }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("complete skewed predicates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: 0,
+      });
+
+      expect(fallbackResult.keys).toStrictEqual([]);
+      expect(fallbackResult.totalRows).toBe(rowCount - sampledSlots.size);
     }),
   );
 
