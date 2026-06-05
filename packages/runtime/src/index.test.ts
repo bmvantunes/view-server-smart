@@ -129,6 +129,45 @@ describe("@view-server/runtime", () => {
     }),
   );
 
+  it.live("forwards runtime options to the in-memory runtime and websocket server", () =>
+    Effect.gen(function* () {
+      type RuntimeDependencies = ViewServerRuntimeDependencies<typeof viewServer.topics>;
+      let inMemoryOptions: Parameters<RuntimeDependencies["makeInMemory"]>[1] | undefined;
+      let serverOptions: Parameters<RuntimeDependencies["makeServer"]>[2] | undefined;
+      const dependencies: RuntimeDependencies = {
+        makeInMemory: (config, options) => {
+          inMemoryOptions = options;
+          return makeInMemoryViewServer(config, options);
+        },
+        makeServer: (_config, _input, options) => {
+          serverOptions = options;
+          return Effect.succeed({
+            url: "ws://127.0.0.1:0/custom-rpc",
+            healthUrl: "http://127.0.0.1:0/custom-health",
+            close: Effect.void,
+          });
+        },
+      };
+
+      const runtime = yield* makeViewServerRuntimeWithDependencies(dependencies, viewServer, {
+        host: "0.0.0.0",
+        websocketPort: 1234,
+        rpcPath: "/custom-rpc",
+        healthPath: "/custom-health",
+        subscriptionQueueCapacity: 7,
+      });
+
+      expect(inMemoryOptions).toStrictEqual({ subscriptionQueueCapacity: 7 });
+      expect(serverOptions).toStrictEqual({
+        host: "0.0.0.0",
+        port: 1234,
+        path: "/custom-rpc",
+        healthPath: "/custom-health",
+      });
+      yield* runtime.close;
+    }),
+  );
+
   it.live(
     "releases the in-memory runtime when server startup fails before returning a runtime",
     () =>
