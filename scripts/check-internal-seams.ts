@@ -4,8 +4,32 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const engineSourceRoot = join(repoRoot, "packages", "column-live-view-engine", "src");
-const restrictedTopicStoreHelpers =
-  /\b(makeTopicStoreSubscriptionPermit|topicStoreRawQueryMetadata|topicStoreReadModel|topicStoreState)\b/;
+const topicStoreFile = join(engineSourceRoot, "topic-store.ts");
+const topicStoreMutationFile = join(engineSourceRoot, "topic-store-mutation.ts");
+const topicStoreStateFile = join(engineSourceRoot, "topic-store-state.ts");
+
+const restrictedTopicStoreHelpers = [
+  {
+    name: "makeTopicStoreSubscriptionPermit",
+    pattern: /\bmakeTopicStoreSubscriptionPermit\b/,
+    allowedPaths: new Set([topicStoreFile, topicStoreStateFile]),
+  },
+  {
+    name: "topicStoreRawQueryMetadata",
+    pattern: /\btopicStoreRawQueryMetadata\b/,
+    allowedPaths: new Set([topicStoreFile, topicStoreStateFile]),
+  },
+  {
+    name: "topicStoreReadModel",
+    pattern: /\btopicStoreReadModel\b/,
+    allowedPaths: new Set([topicStoreFile, topicStoreStateFile]),
+  },
+  {
+    name: "topicStoreState",
+    pattern: /\btopicStoreState\b/,
+    allowedPaths: new Set([topicStoreFile, topicStoreMutationFile, topicStoreStateFile]),
+  },
+] as const;
 
 const sourceFiles = (directory: string): ReadonlyArray<string> => {
   const entries = readdirSync(directory, { withFileTypes: true });
@@ -28,23 +52,20 @@ const sourceFiles = (directory: string): ReadonlyArray<string> => {
 const isTestFile = (path: string): boolean =>
   path.endsWith(".test.ts") || path.endsWith(".test-d.ts");
 
-const isAllowedTopicStoreOwner = (path: string): boolean =>
-  path === join(engineSourceRoot, "topic-store.ts") ||
-  path === join(engineSourceRoot, "topic-store-state.ts");
-
 const violations: Array<string> = [];
 
 for (const path of sourceFiles(engineSourceRoot)) {
-  if (isTestFile(path) || isAllowedTopicStoreOwner(path)) {
+  if (isTestFile(path)) {
     continue;
   }
 
   const contents = readFileSync(path, "utf8");
-  if (!restrictedTopicStoreHelpers.test(contents)) {
-    continue;
+  for (const helper of restrictedTopicStoreHelpers) {
+    if (helper.allowedPaths.has(path) || !helper.pattern.test(contents)) {
+      continue;
+    }
+    violations.push(`${relative(repoRoot, path)} uses ${helper.name}`);
   }
-
-  violations.push(relative(repoRoot, path));
 }
 
 if (violations.length > 0) {
