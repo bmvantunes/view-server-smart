@@ -6816,6 +6816,20 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       );
 
       const positionReadModel = topicStoreReadModel(positionStore);
+      const manualBigDecimalRangeHint = positionReadModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "gt", value: fromStringUnsafe("20") }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      });
+      expect(manualBigDecimalRangeHint.keys).toStrictEqual(["excluded-price"]);
+      expect(manualBigDecimalRangeHint.totalRows).toBe(1);
+
       const exactMixedNotEqual = positionReadModel.scanRawWindow({
         predicate: {
           filters: [

@@ -11,6 +11,13 @@ import type {
   TopicRowVisitor,
 } from "./row-scan";
 import {
+  columnValueDoesNotEqual,
+  compareExactRangeColumnValue,
+  compareRangeColumnValue,
+  isComparableRangeValue,
+  rangeComparisonMatches,
+} from "./topic-range-value";
+import {
   compareQueryValue,
   isRangePlanValue,
   rawQueryCompilerMetadata,
@@ -18,7 +25,6 @@ import {
 } from "./raw-query-compiler";
 import { cloneRow, fieldValue, isPlainRecord, scalarEqualityKey, valuesEqual } from "./row-values";
 import { TopicRowChangeJournal } from "./topic-row-change-journal";
-import { isBigDecimal, Order as orderBigDecimal } from "effect/BigDecimal";
 
 type RowObject = object;
 
@@ -936,76 +942,6 @@ export class ColumnarTopicStore {
     return comparison <= 0;
   }
 }
-
-const isComparableRangeValue = (value: unknown): boolean =>
-  (typeof value === "number" && Number.isFinite(value)) ||
-  typeof value === "bigint" ||
-  isBigDecimal(value);
-
-const compareExactRangeColumnValue = (left: unknown, right: unknown): number | undefined => {
-  if (typeof left === "number" && typeof right === "number") {
-    if (!Number.isFinite(left) || !Number.isFinite(right)) {
-      return undefined;
-    }
-    return left === right ? 0 : left < right ? -1 : 1;
-  }
-  if (typeof left === "bigint" && typeof right === "bigint") {
-    if (left === right) {
-      return 0;
-    }
-    return left < right ? -1 : 1;
-  }
-  if (isBigDecimal(left) && isBigDecimal(right)) {
-    return orderBigDecimal(left, right);
-  }
-  return undefined;
-};
-
-const rangeComparisonMatches = (
-  operator: TopicRawRangePredicateFilterPlan["operator"],
-  comparison: number,
-): boolean => {
-  if (operator === "gt") {
-    return comparison > 0;
-  }
-  if (operator === "gte") {
-    return comparison >= 0;
-  }
-  if (operator === "lt") {
-    return comparison < 0;
-  }
-  return comparison <= 0;
-};
-
-const columnValueDoesNotEqual = (value: unknown, notEqual: unknown): boolean => {
-  return equalityComparableValues(value, notEqual) && !valuesEqual(value, notEqual);
-};
-
-const equalityComparableValues = (left: unknown, right: unknown): boolean => {
-  if (isBigDecimal(left) || isBigDecimal(right)) {
-    return isBigDecimal(left) && isBigDecimal(right);
-  }
-  if (typeof left === "number" || typeof right === "number") {
-    return typeof left === "number" && typeof right === "number" && Number.isFinite(right);
-  }
-  return typeof left === typeof right;
-};
-
-const compareRangeColumnValue = (left: unknown, right: unknown): number | undefined => {
-  if (typeof left === "number" && typeof right === "number") {
-    if (!Number.isFinite(left) || !Number.isFinite(right)) {
-      return undefined;
-    }
-    return left - right;
-  }
-  if (typeof left === "bigint" && typeof right === "bigint") {
-    if (left === right) {
-      return 0;
-    }
-    return left < right ? -1 : 1;
-  }
-  return undefined;
-};
 
 const orderedSlotIndexKey = (orderBy: ReadonlyArray<TopicRawOrderByPlan>): string => {
   const order = orderBy[0]!;
