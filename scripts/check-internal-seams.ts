@@ -8,12 +8,13 @@ const topicStoreFile = join(engineSourceRoot, "topic-store.ts");
 const topicStoreLifecycleFile = join(engineSourceRoot, "topic-store-lifecycle.ts");
 const topicStoreMutationFile = join(engineSourceRoot, "topic-store-mutation.ts");
 const topicStoreStateFile = join(engineSourceRoot, "topic-store-state.ts");
+const topicStoreSubscriptionFile = join(engineSourceRoot, "topic-store-subscription.ts");
 
 const restrictedTopicStoreHelpers = [
   {
     name: "makeTopicStoreSubscriptionPermit",
     pattern: /\bmakeTopicStoreSubscriptionPermit\b/,
-    allowedPaths: new Set([topicStoreFile, topicStoreStateFile]),
+    allowedPaths: new Set([topicStoreFile, topicStoreStateFile, topicStoreSubscriptionFile]),
   },
   {
     name: "topicStoreRawQueryMetadata",
@@ -33,6 +34,7 @@ const restrictedTopicStoreHelpers = [
       topicStoreLifecycleFile,
       topicStoreMutationFile,
       topicStoreStateFile,
+      topicStoreSubscriptionFile,
     ]),
   },
 ] as const;
