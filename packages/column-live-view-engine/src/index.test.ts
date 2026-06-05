@@ -39,11 +39,8 @@ import {
   rawQueryCompilerMetadata,
   stableQueryValueString,
 } from "./raw-query-compiler";
-import {
-  evaluateCompiledGroupedQuery,
-  makeIncrementalGroupedQueryExecution,
-  prepareGroupedQuery,
-} from "./grouped-query-compiler";
+import { evaluateCompiledGroupedQuery, prepareGroupedQuery } from "./grouped-query-compiler";
+import { makeIncrementalGroupedQueryExecution } from "./grouped-incremental-execution";
 import { cloneRecord, cloneRow, fieldValue, rowsEqual, scalarEqualityKey } from "./row-values";
 import type { TopicRowChangeBatch } from "./row-scan";
 import {
