@@ -9,6 +9,13 @@ import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 import type { QueryEvaluation } from "./query-result";
 import type { TopicRawWindowScan, TopicRawWindowScanResult } from "./raw-window-scan";
 import type { TopicRowScan } from "./row-scan";
+import type { MaterializedQueryExecutionSlot } from "./active-materialized-query";
+import { clearMaterializedQueryExecutions } from "./active-materialized-query";
+export {
+  acquireMaterializedQueryExecution,
+  releaseMaterializedQueryExecution,
+} from "./active-materialized-query";
+export type { MaterializedQueryExecution } from "./active-materialized-query";
 
 type RowObject = object;
 
@@ -56,24 +63,8 @@ type RawQueryExecutionWindowSlot = {
   refs: number;
 };
 
-type MaterializedQueryExecutionSlot = {
-  readonly execution: ActiveMaterializedQueryExecution;
-  readonly releaseRetainedChanges: () => void;
-  refs: number;
-};
-
 type ActiveQueryBaseEvaluation<Row extends RowObject> = TopicRawWindowScanResult<Row> & {
   readonly version: number;
-};
-
-type ActiveMaterializedQueryExecution = {
-  readonly incremental: boolean;
-  readonly latest: () => QueryEvaluation<object>;
-};
-
-export type MaterializedQueryExecution<ResultRow extends RowObject> = {
-  readonly incremental: boolean;
-  readonly latest: () => QueryEvaluation<ResultRow>;
 };
 
 export type ActiveQueryRegistry = {
@@ -111,12 +102,6 @@ const queryWindowCacheKey = (window: CompiledRawQuery<object, object>["window"])
 
 const getActiveQueryMap = (store: ActiveQueryStoreState): Map<string, RawQueryExecutionSlot> => {
   return store.activeQueries.raw;
-};
-
-const getActiveMaterializedQueryMap = (
-  store: ActiveQueryStoreState,
-): Map<string, MaterializedQueryExecutionSlot> => {
-  return store.activeQueries.materialized;
 };
 
 const getActiveQueryEntry = <ResultRow extends RowObject>(
@@ -224,38 +209,6 @@ const leaseRawQueryExecution = <ResultRow extends RowObject>(
       }),
   };
 };
-
-const leaseMaterializedQueryExecution = <ResultRow extends RowObject>(
-  store: ActiveQueryStoreState,
-  execution: ActiveMaterializedQueryExecution,
-): LiveQueryExecution<ResultRow> => {
-  const latestEvaluation = () => typedQueryEvaluation<ResultRow>(execution.latest());
-
-  return {
-    initial: (queryId) => snapshotEvent(store, queryId, latestEvaluation()),
-    createCursor: () => ({
-      evaluation: latestEvaluation(),
-    }),
-    next: (queryId, cursor) =>
-      Effect.sync(() => {
-        const previous = cursor.evaluation;
-        const next = latestEvaluation();
-        const operations = deltaOperations(previous, next);
-        if (operations.length === 0 && previous.totalRows === next.totalRows) {
-          return Option.none();
-        }
-        cursor.evaluation = next;
-        return Option.some(deltaEvent(store, queryId, previous.version, next, operations));
-      }),
-  };
-};
-
-function typedQueryEvaluation<ResultRow extends RowObject>(
-  evaluation: QueryEvaluation<object>,
-): QueryEvaluation<ResultRow>;
-function typedQueryEvaluation(evaluation: QueryEvaluation<object>): QueryEvaluation<object> {
-  return evaluation;
-}
 
 const baseWindowForActiveWindows = (
   windows: ReadonlyMap<string, RawQueryExecutionWindowSlot>,
@@ -397,74 +350,17 @@ export const releaseRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
     }),
 );
 
-export const acquireMaterializedQueryExecution = Effect.fn(
-  "ColumnLiveViewEngine.activeQuery.materialized.acquire",
-)(function <ResultRow extends RowObject>(
-  store: ActiveQueryStoreState,
-  cacheKey: string,
-  makeExecution: (releaseRetainedChanges: () => void) => MaterializedQueryExecution<ResultRow>,
-) {
-  return Effect.sync(() => {
-    const map = getActiveMaterializedQueryMap(store);
-    const existing = map.get(cacheKey);
-    if (existing !== undefined) {
-      const entry = existing;
-      entry.refs += 1;
-      return leaseMaterializedQueryExecution<ResultRow>(store, entry.execution);
-    }
-
-    let retainedChanges = false;
-    const releaseRetainedChanges = () => {
-      if (!retainedChanges) {
-        return;
-      }
-      retainedChanges = false;
-      store.releaseChanges();
-    };
-    const execution = makeExecution(releaseRetainedChanges);
-    if (execution.incremental) {
-      retainedChanges = true;
-      store.retainChanges();
-    }
-    map.set(cacheKey, {
-      execution,
-      releaseRetainedChanges,
-      refs: 1,
-    });
-    return leaseMaterializedQueryExecution<ResultRow>(store, execution);
-  });
-});
-
-export const releaseMaterializedQueryExecution = Effect.fn(
-  "ColumnLiveViewEngine.activeQuery.materialized.release",
-)((store: ActiveQueryStoreState, cacheKey: string) =>
-  Effect.sync(() => {
-    const map = getActiveMaterializedQueryMap(store);
-    const existing = map.get(cacheKey);
-    if (existing === undefined) {
-      return undefined;
-    }
-    const entry = existing;
-    if (entry.refs > 1) {
-      entry.refs -= 1;
-      return undefined;
-    }
-    entry.releaseRetainedChanges();
-    map.delete(cacheKey);
-    return undefined;
-  }),
-);
-
 export const clearStoreRawQueryExecutions = Effect.fn(
   "ColumnLiveViewEngine.activeQuery.clearStore",
 )((store: ActiveQueryStoreState) =>
-  Effect.sync(() => {
-    store.activeQueries.raw.clear();
-    for (const entry of store.activeQueries.materialized.values()) {
-      entry.releaseRetainedChanges();
-    }
-    store.activeQueries.materialized.clear();
-  }),
+  Effect.uninterruptible(
+    Effect.gen(function* () {
+      yield* Effect.sync(() => {
+        store.activeQueries.raw.clear();
+      });
+      yield* clearMaterializedQueryExecutions(store);
+    }),
+  ),
 );
 
 export const activeStoreRawQueryExecutionCount = Effect.fn(
