@@ -13,10 +13,10 @@ import {
 import { ColumnarTopicStore } from "./columnar-topic-store";
 import {
   evaluateCompiledGroupedQuery,
-  makeIncrementalGroupedQueryExecution,
   prepareGroupedQuery,
   type CompiledGroupedQuery,
 } from "./grouped-query-compiler";
+import { makeIncrementalGroupedQueryExecution } from "./grouped-incremental-execution";
 import { createTopicHealthLedger } from "./topic-health-ledger";
 import {
   runTopicStoreMutationTransaction,
