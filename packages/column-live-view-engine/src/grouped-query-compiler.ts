@@ -1,21 +1,23 @@
 import { Effect } from "effect";
 import {
-  type GroupState,
   type MaterializedIncrementalGroupState,
-  newGroupState,
   newIncrementalGroupState,
   recomputeIncrementalGroupState,
   updateAggregateState,
 } from "./grouped-aggregate-state";
 import { decodeGroupedQuery, type RuntimeGroupedQuery } from "./grouped-query-decoder";
 import {
+  evaluateGroupedRows,
+  groupedCacheKey,
+  groupKey,
+  typedGroupedEvaluation,
+} from "./grouped-query-evaluation";
+import {
   emptyGroupedEvaluation,
   groupedEvaluationFromEntries,
   groupedEvaluationFromGroups,
 } from "./grouped-window-evaluation";
 import { type RawQueryCompilerMetadata, prepareRawQuery } from "./raw-query-compiler";
-import { stableQueryValueString } from "./raw-query-compiler";
-import { fieldValue } from "./row-values";
 import type { QueryEvaluation } from "./query-result";
 import type { TopicRowChangeBatch, TopicRowScan } from "./row-scan";
 
@@ -44,47 +46,10 @@ const maxIncrementalGroupedMembers = 65_536;
 const maxIncrementalGroupedMembersPerGroup = 4_096;
 const maxIncrementalGroupedGroups = 8_192;
 
-const groupKey = (groupBy: ReadonlyArray<string>, row: RowObject): string =>
-  stableQueryValueString(groupBy.map((field) => [field, fieldValue(row, field)]));
-
 const newZeroLimitIncrementalGroupState = (key: string): CountOnlyIncrementalGroupState => ({
   key,
   count: 0,
 });
-
-const evaluateZeroLimitGroupedRows = <Row extends RowObject>(
-  store: TopicRowScan<Row>,
-  query: RuntimeGroupedQuery,
-  matches: (row: Row) => boolean,
-): QueryEvaluation<RowObject> => {
-  const groupKeys = new Set<string>();
-  store.scanRows((_key, row) => {
-    if (matches(row)) {
-      groupKeys.add(groupKey(query.groupBy, row));
-    }
-  });
-  return emptyGroupedEvaluation(groupKeys.size, store.version());
-};
-
-const groupedCacheKey = (query: RuntimeGroupedQuery): string =>
-  stableQueryValueString([
-    "grouped",
-    query.groupBy,
-    Object.entries(query.aggregates).toSorted(
-      ([left], [right]) => Number(left > right) - Number(left < right),
-    ),
-    query.where === undefined ? [] : stableQueryValueString(query.where),
-    query.orderBy ?? [],
-    query.offset ?? null,
-    query.limit ?? null,
-  ]);
-
-function typedEvaluation<ResultRow extends RowObject>(
-  evaluation: QueryEvaluation<RowObject>,
-): QueryEvaluation<ResultRow>;
-function typedEvaluation(evaluation: QueryEvaluation<RowObject>): QueryEvaluation<RowObject> {
-  return evaluation;
-}
 
 export const prepareGroupedQuery = Effect.fn("ColumnLiveViewEngine.groupedQuery.prepare")(
   function* <Row extends RowObject, ResultRow extends RowObject>(
@@ -102,36 +67,11 @@ export const prepareGroupedQuery = Effect.fn("ColumnLiveViewEngine.groupedQuery.
       query: decoded,
       cacheKey: groupedCacheKey(decoded),
       matches,
-      evaluate: (store) => typedEvaluation<ResultRow>(evaluateGroupedRows(store, decoded, matches)),
+      evaluate: (store) =>
+        typedGroupedEvaluation<ResultRow>(evaluateGroupedRows(store, decoded, matches)),
     } satisfies CompiledGroupedQuery<Row, ResultRow>;
   },
 );
-
-const evaluateGroupedRows = <Row extends RowObject>(
-  store: TopicRowScan<Row>,
-  query: RuntimeGroupedQuery,
-  matches: (row: Row) => boolean,
-): QueryEvaluation<RowObject> => {
-  if (query.limit === 0) {
-    return evaluateZeroLimitGroupedRows(store, query, matches);
-  }
-  const groups = new Map<string, GroupState>();
-  store.scanRows((_key, row) => {
-    if (!matches(row)) {
-      return;
-    }
-    const key = groupKey(query.groupBy, row);
-    let group = groups.get(key);
-    if (group === undefined) {
-      group = newGroupState(key, query.groupBy, query.aggregates, row);
-      groups.set(key, group);
-    }
-    for (const [alias, aggregate] of Object.entries(query.aggregates)) {
-      updateAggregateState(group.aggregates[alias]!, aggregate, row);
-    }
-  });
-  return groupedEvaluationFromGroups(groups.values(), query, store.version());
-};
 
 type IncrementalGroupedQueryState =
   | {
@@ -572,7 +512,7 @@ export const makeIncrementalGroupedQueryExecution = <
       }
       const storeVersion = store.version();
       if (state.version === storeVersion) {
-        return typedEvaluation<ResultRow>(state.evaluation);
+        return typedGroupedEvaluation<ResultRow>(state.evaluation);
       }
       const batches = store.changesSince(state.version);
       if (batches === undefined) {
@@ -581,12 +521,12 @@ export const makeIncrementalGroupedQueryExecution = <
           return activateFallback().latest();
         }
         state = build.state;
-        return typedEvaluation<ResultRow>(state.evaluation);
+        return typedGroupedEvaluation<ResultRow>(state.evaluation);
       }
       if (!applyIncrementalGroupedQueryBatches(state, compiled.query, compiled.matches, batches)) {
         return activateFallback().latest();
       }
-      return typedEvaluation<ResultRow>(state.evaluation);
+      return typedGroupedEvaluation<ResultRow>(state.evaluation);
     },
   };
 };
