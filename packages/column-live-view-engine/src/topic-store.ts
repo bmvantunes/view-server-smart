@@ -1,10 +1,8 @@
 import { Effect } from "effect";
-import type { StatusEvent } from "@view-server/config";
 import {
   acquireMaterializedQueryExecution,
   acquireRawQueryExecution,
   activeStoreRawQueryExecutionCount,
-  clearStoreRawQueryExecutions,
   evaluateRawQuery,
   releaseMaterializedQueryExecution,
   releaseRawQueryExecution,
@@ -31,7 +29,6 @@ import {
   topicStoreRawQueryMetadata,
   topicStoreReadModel,
   topicStoreState,
-  type TopicStoreState,
   type TopicStoreSubscriptionPermit,
 } from "./topic-store-state";
 
@@ -44,6 +41,7 @@ export {
   publishTopicStoreRow,
   publishTopicStoreRows,
 } from "./topic-store-mutation";
+export { closeTopicStoreSubscriptions, resetTopicStore } from "./topic-store-lifecycle";
 export type { TopicStoreSubscriptionPermit } from "./topic-store-state";
 
 export const prepareTopicStoreRawQuery = Effect.fn(
@@ -146,27 +144,6 @@ export function acquireTopicStoreSubscription<
   );
 }
 
-const resetStatusEvent = (store: TopicStore, subscriber: LiveTopicSubscriber): StatusEvent => ({
-  type: "status",
-  topic: store.topic,
-  queryId: subscriber.queryId,
-  status: "closed",
-  code: "SubscriptionClosed",
-  message: "Subscription closed because the engine reset.",
-});
-
-const engineClosedStatusEvent = (
-  store: TopicStore,
-  subscriber: LiveTopicSubscriber,
-): StatusEvent => ({
-  type: "status",
-  topic: store.topic,
-  queryId: subscriber.queryId,
-  status: "closed",
-  code: "SubscriptionClosed",
-  message: "Subscription closed because the engine closed.",
-});
-
 export const collectTopicStoreHealth = Effect.fn("ColumnLiveViewEngine.topicStore.health")(
   function* (store: TopicStore, closed: boolean) {
     const activeViews = yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store));
@@ -193,31 +170,6 @@ const unregisterTopicStoreSubscription = Effect.fn(
     state.subscribers.delete(subscriber);
   });
 });
-
-const drainTopicStoreSubscribersForReset = (
-  state: TopicStoreState,
-): ReadonlyArray<LiveTopicSubscriber> => {
-  state.storage.clear();
-  const closingSubscribers = [...state.subscribers];
-  for (const subscriber of closingSubscribers) {
-    subscriber.closed = true;
-  }
-  state.subscribers.clear();
-  state.healthLedger.reset();
-  return closingSubscribers;
-};
-
-function drainTopicStoreSubscribersForClose(
-  state: TopicStoreState,
-): ReadonlyArray<LiveTopicSubscriber> {
-  const closingSubscribers = Array.from(state.subscribers);
-  for (const subscriber of closingSubscribers) {
-    subscriber.closed = true;
-    state.healthLedger.closeSubscription(subscriber);
-  }
-  state.subscribers.clear();
-  return closingSubscribers;
-}
 
 export const trackTopicStoreSubscriptionQueueDepth = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.queueDepth",
@@ -272,47 +224,5 @@ export const closeBackpressuredTopicStoreSubscription = Effect.fn(
       yield* unregisterTopicStoreSubscription(store, subscriber);
       yield* finalize;
     }),
-  );
-});
-
-export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset")(function* (
-  store: TopicStore,
-) {
-  const state = topicStoreState(store);
-  yield* withTopicStoreNotification(
-    state,
-    withTopicStoreTransaction(
-      state,
-      Effect.gen(function* () {
-        const subscribers = yield* Effect.sync(() => {
-          return drainTopicStoreSubscribersForReset(topicStoreState(store));
-        });
-        yield* clearStoreRawQueryExecutions(topicStoreReadModel(store));
-        for (const subscriber of subscribers) {
-          yield* subscriber.closeWithStatus(resetStatusEvent(store, subscriber));
-        }
-      }),
-    ),
-  );
-});
-
-export const closeTopicStoreSubscriptions = Effect.fn(
-  "ColumnLiveViewEngine.topicStore.closeSubscriptions",
-)(function* (store: TopicStore) {
-  const state = topicStoreState(store);
-  yield* withTopicStoreNotification(
-    state,
-    withTopicStoreTransaction(
-      state,
-      Effect.gen(function* () {
-        const subscribers = yield* Effect.sync(() => {
-          return drainTopicStoreSubscribersForClose(topicStoreState(store));
-        });
-        yield* clearStoreRawQueryExecutions(topicStoreReadModel(store));
-        for (const subscriber of subscribers) {
-          yield* subscriber.closeWithStatus(engineClosedStatusEvent(store, subscriber));
-        }
-      }),
-    ),
   );
 });
