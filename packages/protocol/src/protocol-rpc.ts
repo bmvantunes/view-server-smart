@@ -5,7 +5,7 @@ import type {
 } from "@view-server/config";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { Schema } from "effect";
-import { ViewServerWireEventSchema } from "./protocol-event-codec";
+import { ViewServerWireEventSchema } from "./protocol-event-schema";
 import { ViewServerHealthSchema } from "./protocol-health-codec";
 import { ViewServerSubscribePayloadSchema } from "./protocol-query-schema";
 

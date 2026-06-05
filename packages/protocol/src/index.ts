@@ -36,9 +36,9 @@ export {
   type ViewServerWireRow,
   ViewServerWireEventSchema,
   type ViewServerWireEvent,
-  viewServerEncodeLiveEvent,
-  viewServerDecodeLiveEvent,
-} from "./protocol-event-codec";
+} from "./protocol-event-schema";
+
+export { viewServerEncodeLiveEvent, viewServerDecodeLiveEvent } from "./protocol-event-codec";
 
 export {
   ViewServerHealthSchema,
