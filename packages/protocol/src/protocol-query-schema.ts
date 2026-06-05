@@ -27,6 +27,8 @@ export const ViewServerWireAggregateSchema = Schema.Union([
   }),
 ]);
 
+export type ViewServerWireAggregate = typeof ViewServerWireAggregateSchema.Type;
+
 export const ViewServerWireGroupedQuerySchema = Schema.Struct({
   groupBy: Schema.Array(Schema.String),
   aggregates: Schema.Record(Schema.String, ViewServerWireAggregateSchema),
@@ -51,6 +53,13 @@ export const ViewServerWireGroupedQuerySchema = Schema.Struct({
 
 export type ViewServerWireGroupedQuery = typeof ViewServerWireGroupedQuerySchema.Type;
 export type ViewServerWireLiveQuery = ViewServerWireRawQuery | ViewServerWireGroupedQuery;
+
+export type ViewServerEventRawQuery = Pick<ViewServerWireRawQuery, "select">;
+export type ViewServerEventGroupedQuery = Pick<
+  ViewServerWireGroupedQuery,
+  "groupBy" | "aggregates"
+>;
+export type ViewServerEventQuery = ViewServerEventRawQuery | ViewServerEventGroupedQuery;
 
 export const ViewServerSubscribePayloadSchema = Schema.Struct({
   topic: Schema.String,

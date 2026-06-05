@@ -3,26 +3,11 @@ import { viewServerSchemaFieldMetadata } from "@view-server/config";
 import { Effect, Schema } from "effect";
 import * as BigDecimal from "effect/BigDecimal";
 import { ViewServerWireRowSchema, type ViewServerWireRow } from "./protocol-event-schema";
-
-export type ViewServerEventRawQuery = {
-  readonly select: ReadonlyArray<string>;
-};
-
-export type ViewServerEventGroupedAggregate =
-  | {
-      readonly aggFunc: "count";
-    }
-  | {
-      readonly aggFunc: "countDistinct" | "sum" | "avg" | "min" | "max";
-      readonly field: string;
-    };
-
-export type ViewServerEventGroupedQuery = {
-  readonly groupBy: ReadonlyArray<string>;
-  readonly aggregates: Readonly<Record<string, ViewServerEventGroupedAggregate>>;
-};
-
-export type ViewServerEventQuery = ViewServerEventRawQuery | ViewServerEventGroupedQuery;
+import type {
+  ViewServerEventGroupedQuery,
+  ViewServerEventQuery,
+  ViewServerWireAggregate,
+} from "./protocol-query-schema";
 
 const invalidRow = (topic: string, message: string): ViewServerRuntimeError => ({
   _tag: "ViewServerRuntimeError",
@@ -248,7 +233,7 @@ const encodeAggregateValue = Effect.fn("ViewServerProtocol.row.aggregate.encode"
   config: { readonly topics: Topics },
   topic: Extract<keyof Topics, string>,
   field: string,
-  aggregate: ViewServerEventGroupedAggregate,
+  aggregate: ViewServerWireAggregate,
   value: unknown,
 ) {
   if (aggregate.aggFunc === "count" || aggregate.aggFunc === "countDistinct") {
@@ -273,7 +258,7 @@ const decodeAggregateValue = Effect.fn("ViewServerProtocol.row.aggregate.decode"
   config: { readonly topics: Topics },
   topic: Extract<keyof Topics, string>,
   field: string,
-  aggregate: ViewServerEventGroupedAggregate,
+  aggregate: ViewServerWireAggregate,
   value: unknown,
 ) {
   if (aggregate.aggFunc === "count" || aggregate.aggFunc === "countDistinct") {

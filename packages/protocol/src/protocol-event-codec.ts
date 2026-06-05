@@ -7,6 +7,7 @@ import type {
 } from "@view-server/config";
 import { Effect, Schema } from "effect";
 import { type ViewServerWireEvent } from "./protocol-event-schema";
+import type { ViewServerEventQuery } from "./protocol-query-schema";
 import {
   decodeGroupedRow,
   decodeProjectedRow,
@@ -15,7 +16,6 @@ import {
   encodeProjectedRow,
   encodeSystemRow,
   isViewServerEventGroupedQuery,
-  type ViewServerEventQuery,
 } from "./protocol-row-codec";
 
 export { ViewServerWireEventSchema, ViewServerWireRowSchema } from "./protocol-event-schema";
