@@ -1,4 +1,4 @@
-import { Effect, Schema, Semaphore } from "effect";
+import { Effect } from "effect";
 import type { StatusEvent } from "@view-server/config";
 import {
   acquireMaterializedQueryExecution,
@@ -8,27 +8,19 @@ import {
   evaluateRawQuery,
   releaseMaterializedQueryExecution,
   releaseRawQueryExecution,
-  type ActiveQueryStoreState,
 } from "./active-query";
-import { ColumnarTopicStore } from "./columnar-topic-store";
 import {
   evaluateCompiledGroupedQuery,
   prepareGroupedQuery,
   type CompiledGroupedQuery,
 } from "./grouped-query-compiler";
 import { makeIncrementalGroupedQueryExecution } from "./grouped-incremental-execution";
-import { createTopicHealthLedger } from "./topic-health-ledger";
 import {
   runTopicStoreMutationTransaction,
   withTopicStoreNotification,
   withTopicStoreTransaction,
-  type TopicStoreMutationState,
 } from "./topic-store-mutation";
-import {
-  prepareRawQuery,
-  type CompiledRawQuery,
-  type RawQueryCompilerMetadata,
-} from "./raw-query-compiler";
+import { prepareRawQuery, type CompiledRawQuery } from "./raw-query-compiler";
 import type { QueryEvaluation } from "./query-result";
 import type { InvalidRowErrorFactory } from "./topic-row-preparation";
 import {
@@ -38,52 +30,20 @@ import {
 } from "./subscription-handoff";
 import type { LiveTopicSubscriber } from "./topic-subscriber";
 import { collectTopicStoreHealthView, type TopicStoreHealthState } from "./topic-store-health";
+import {
+  makeTopicStoreSubscriptionPermit,
+  TopicStore,
+  topicStoreRawQueryMetadata,
+  topicStoreReadModel,
+  topicStoreState,
+  type TopicStoreState,
+  type TopicStoreSubscriptionPermit,
+} from "./topic-store-state";
 
 type RowObject = object;
 
-const topicStoreSubscriptionPermitBrand: unique symbol = Symbol("TopicStoreSubscriptionPermit");
-
-export type TopicStoreSubscriptionPermit = {
-  readonly [topicStoreSubscriptionPermitBrand]: true;
-  readonly store: TopicStore;
-};
-
-type TopicStoreState = TopicStoreMutationState;
-
-const topicStoreStates = new WeakMap<TopicStore, TopicStoreState>();
-
-export class TopicStore {
-  declare private readonly topicStoreBrand: void;
-
-  constructor(
-    readonly topic: string,
-    schema: Schema.Decoder<object>,
-    keyField: string,
-    onCommit: () => void,
-  ) {
-    const storage = new ColumnarTopicStore(topic, schema, keyField);
-    const subscribers = new Set<LiveTopicSubscriber>();
-    const state: TopicStoreState = {
-      storage,
-      subscribers,
-      mutationSemaphore: Semaphore.makeUnsafe(1),
-      notificationSemaphore: Semaphore.makeUnsafe(1),
-      healthLedger: createTopicHealthLedger(),
-      onCommit,
-    };
-    topicStoreStates.set(this, state);
-  }
-}
-
-const topicStoreState = (store: TopicStore): TopicStoreState => {
-  return topicStoreStates.get(store)!;
-};
-
-export const topicStoreRawQueryMetadata = (store: TopicStore): RawQueryCompilerMetadata =>
-  topicStoreState(store).storage.rawQueryMetadata;
-
-export const topicStoreReadModel = (store: TopicStore): ActiveQueryStoreState =>
-  topicStoreState(store).storage.readModel;
+export { TopicStore, topicStoreRawQueryMetadata, topicStoreReadModel };
+export type { TopicStoreSubscriptionPermit } from "./topic-store-state";
 
 export const prepareTopicStoreRawQuery = Effect.fn(
   "ColumnLiveViewEngine.topicStore.query.raw.prepare",
@@ -179,13 +139,7 @@ export function acquireTopicStoreSubscription<
     (markAcquired: (subscription: Subscription) => Effect.Effect<void>) =>
       withTopicStoreTransaction(
         topicStoreState(store),
-        acquire(
-          {
-            [topicStoreSubscriptionPermitBrand]: true,
-            store,
-          },
-          markAcquired,
-        ),
+        acquire(makeTopicStoreSubscriptionPermit(store), markAcquired),
       ),
     options,
   );

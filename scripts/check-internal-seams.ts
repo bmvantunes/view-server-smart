@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const engineSourceRoot = join(repoRoot, "packages", "column-live-view-engine", "src");
-const restrictedTopicStoreHelpers = /\b(topicStoreReadModel|topicStoreRawQueryMetadata)\b/;
+const restrictedTopicStoreHelpers =
+  /\b(makeTopicStoreSubscriptionPermit|topicStoreRawQueryMetadata|topicStoreReadModel|topicStoreState)\b/;
 
 const sourceFiles = (directory: string): ReadonlyArray<string> => {
   const entries = readdirSync(directory, { withFileTypes: true });
@@ -28,7 +29,8 @@ const isTestFile = (path: string): boolean =>
   path.endsWith(".test.ts") || path.endsWith(".test-d.ts");
 
 const isAllowedTopicStoreOwner = (path: string): boolean =>
-  path === join(engineSourceRoot, "topic-store.ts");
+  path === join(engineSourceRoot, "topic-store.ts") ||
+  path === join(engineSourceRoot, "topic-store-state.ts");
 
 const violations: Array<string> = [];
 
@@ -48,7 +50,7 @@ for (const path of sourceFiles(engineSourceRoot)) {
 if (violations.length > 0) {
   throw new Error(
     [
-      "Production engine modules must not use topicStoreReadModel or topicStoreRawQueryMetadata.",
+      "Production engine modules must not use restricted TopicStore state helpers.",
       "Route query/read-model behavior through TopicStore helper operations instead.",
       ...violations.map((path) => `- ${path}`),
     ].join("\n"),
