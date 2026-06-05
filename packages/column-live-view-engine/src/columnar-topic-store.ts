@@ -45,19 +45,20 @@ import {
   rawQueryCompilerMetadata,
   type RawQueryCompilerMetadata,
 } from "./raw-query-compiler";
-import { cloneRow, fieldValue, isPlainRecord, scalarEqualityKey, valuesEqual } from "./row-values";
+import { fieldValue, scalarEqualityKey, valuesEqual } from "./row-values";
 import { TopicRowChangeJournal } from "./topic-row-change-journal";
+import {
+  prepareTopicPatch,
+  prepareTopicRow,
+  type InvalidRowErrorFactory,
+  type PreparedTopicRow,
+  type TopicRowPreparationContext,
+} from "./topic-row-preparation";
 
 type RowObject = object;
 
-type InvalidRowErrorFactory<Error> = (topic: string, message: string) => Error;
 type ColumnValues = Array<unknown>;
 const maxBoundedRawWindowEnd = 1_024;
-
-export type PreparedTopicRow = {
-  readonly key: string;
-  readonly row: object;
-};
 
 export class ColumnarTopicStore {
   readonly rawQueryMetadata: RawQueryCompilerMetadata;
@@ -68,14 +69,21 @@ export class ColumnarTopicStore {
   private readonly columns = new Map<string, ColumnValues>();
   private readonly orderedSlotIndexes = new Map<string, OrderedSlotIndex>();
   private readonly rowChangeJournal = new TopicRowChangeJournal<object>();
+  private readonly rowPreparation: TopicRowPreparationContext;
   private versionValue = 0;
 
   constructor(
     readonly topic: string,
-    private readonly schema: Schema.Decoder<object>,
-    private readonly keyField: string,
+    schema: Schema.Decoder<object>,
+    keyField: string,
   ) {
     this.rawQueryMetadata = rawQueryCompilerMetadata(schema);
+    this.rowPreparation = {
+      fieldNames: this.rawQueryMetadata.fieldNames,
+      keyField,
+      schema,
+      topic,
+    };
     for (const field of this.rawQueryMetadata.fieldNames) {
       this.columns.set(field, []);
     }
@@ -540,12 +548,7 @@ export class ColumnarTopicStore {
     Error,
     Row extends RowObject,
   >(this: ColumnarTopicStore, row: Row, invalidRow: InvalidRowErrorFactory<Error>) {
-    const decoded = yield* this.decodeRow(row, invalidRow);
-    const key = yield* this.rowKey(decoded, invalidRow);
-    return {
-      key,
-      row: decoded,
-    } satisfies PreparedTopicRow;
+    return yield* prepareTopicRow(this.rowPreparation, row, invalidRow);
   });
 
   prepareRows = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.rows.prepare")(function* <
@@ -564,65 +567,13 @@ export class ColumnarTopicStore {
     patch: Patch,
     invalidRow: InvalidRowErrorFactory<Error>,
   ) {
-    yield* this.validatePatchKeys(patch, invalidRow);
-    const current = this.rowForKey(key);
-    if (current === undefined) {
-      return yield* Effect.fail(invalidRow(this.topic, `Cannot patch missing key: ${key}`));
-    }
-    const decoded = yield* this.decodeRow({ ...current, ...patch }, invalidRow);
-    const decodedKey = yield* this.rowKey(decoded, invalidRow);
-    if (decodedKey !== key) {
-      return yield* Effect.fail(invalidRow(this.topic, "Patch must not change the row key."));
-    }
-    return {
+    return yield* prepareTopicPatch(
+      this.rowPreparation,
       key,
-      row: decoded,
-    } satisfies PreparedTopicRow;
-  });
-
-  private decodeRow = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.row.decode")(function* <
-    Error,
-  >(this: ColumnarTopicStore, row: RowObject, invalidRow: InvalidRowErrorFactory<Error>) {
-    return yield* Effect.try({
-      try: () => {
-        const decoded = Schema.decodeUnknownSync(this.schema)(row);
-        return cloneRow(decoded);
-      },
-      catch: (cause) => invalidRow(this.topic, String(cause)),
-    });
-  });
-
-  private rowKey = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.row.key")(function* <Error>(
-    this: ColumnarTopicStore,
-    row: RowObject,
-    invalidRow: InvalidRowErrorFactory<Error>,
-  ) {
-    const key = fieldValue(row, this.keyField);
-    if (typeof key !== "string") {
-      return yield* Effect.fail(
-        invalidRow(this.topic, `Key field ${this.keyField} must decode to a string.`),
-      );
-    }
-    return key;
-  });
-
-  private validatePatchKeys = Effect.fn(
-    "ColumnLiveViewEngine.columnarTopicStore.patchKeys.validate",
-  )(function* <Error>(
-    this: ColumnarTopicStore,
-    patch: unknown,
-    invalidRow: InvalidRowErrorFactory<Error>,
-  ) {
-    if (!isPlainRecord(patch)) {
-      return yield* Effect.fail(invalidRow(this.topic, "Patch must be a plain object."));
-    }
-    for (const key of Reflect.ownKeys(patch)) {
-      if (typeof key !== "string" || !this.rawQueryMetadata.fieldNames.has(key)) {
-        return yield* Effect.fail(
-          invalidRow(this.topic, `Patch contains unknown field: ${String(key)}.`),
-        );
-      }
-    }
+      this.rowForKey(key),
+      patch,
+      invalidRow,
+    );
   });
 
   private writeSlot(slot: number, prepared: PreparedTopicRow): void {

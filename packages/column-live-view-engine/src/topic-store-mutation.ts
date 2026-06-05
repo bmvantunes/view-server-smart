@@ -1,11 +1,11 @@
 import { Clock, Effect, Semaphore } from "effect";
-import type { ColumnarTopicStore, PreparedTopicRow } from "./columnar-topic-store";
+import type { ColumnarTopicStore } from "./columnar-topic-store";
+import type { InvalidRowErrorFactory, PreparedTopicRow } from "./topic-row-preparation";
 import type { createTopicHealthLedger } from "./topic-health-ledger";
 import type { LiveTopicSubscriber } from "./topic-subscriber";
 import type { TopicStore } from "./topic-store";
 
 type RowObject = object;
-type InvalidRowErrorFactory<Error> = (topic: string, message: string) => Error;
 
 export type TopicStoreMutationState = {
   readonly storage: ColumnarTopicStore;
