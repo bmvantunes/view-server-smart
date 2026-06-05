@@ -130,3 +130,7 @@ export const clearMaterializedQueryExecutions = Effect.fn(
     map.clear();
   }),
 );
+
+export const activeMaterializedQueryExecutionCount = Effect.fn(
+  "ColumnLiveViewEngine.activeQuery.materialized.countStore",
+)((store: ActiveQueryStoreState) => Effect.sync(() => getActiveMaterializedQueryMap(store).size));
