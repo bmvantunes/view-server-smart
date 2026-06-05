@@ -96,8 +96,13 @@ type GroupState = {
   readonly aggregates: Record<string, AggregateState>;
 };
 
-type IncrementalGroupState = GroupState & {
+type MaterializedIncrementalGroupState = GroupState & {
   readonly members: Map<string, RowObject>;
+};
+
+type CountOnlyIncrementalGroupState = {
+  readonly key: string;
+  count: number;
 };
 
 export type IncrementalGroupedQueryExecution<ResultRow extends RowObject> = {
@@ -108,6 +113,7 @@ export type IncrementalGroupedQueryExecution<ResultRow extends RowObject> = {
 const maxIncrementalGroupedMembers = 65_536;
 const maxIncrementalGroupedMembersPerGroup = 4_096;
 const maxIncrementalGroupedGroups = 8_192;
+const maxBoundedGroupedWindowEnd = 1_024;
 
 const groupedQueryKeys = new Set([
   "groupBy",
@@ -261,6 +267,22 @@ const aggregateStateValue = (state: AggregateState): unknown => {
   return cloneUnknown(state.value);
 };
 
+const aggregateStateCompareValue = (state: AggregateState): unknown => {
+  if (state.aggFunc === "count") {
+    return state.count;
+  }
+  if (state.aggFunc === "countDistinct") {
+    return state.count;
+  }
+  if (state.aggFunc === "sum") {
+    return state.resultKind === "bigint" ? state.bigintTotal : state.decimalTotal;
+  }
+  if (state.aggFunc === "avg") {
+    return state.count === 0n ? fromBigInt(0n) : divideUnsafe(state.total, fromBigInt(state.count));
+  }
+  return state.value;
+};
+
 const groupKey = (groupBy: ReadonlyArray<string>, row: RowObject): string =>
   stableQueryValueString(groupBy.map((field) => [field, fieldValue(row, field)]));
 
@@ -290,9 +312,14 @@ const newIncrementalGroupState = (
   groupBy: ReadonlyArray<string>,
   aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
   row: RowObject,
-): IncrementalGroupState => ({
+): MaterializedIncrementalGroupState => ({
   ...newGroupState(key, groupBy, aggregates, row),
   members: new Map(),
+});
+
+const newZeroLimitIncrementalGroupState = (key: string): CountOnlyIncrementalGroupState => ({
+  key,
+  count: 0,
 });
 
 const resetAggregateStates = (
@@ -308,7 +335,7 @@ const resetAggregateStates = (
 };
 
 const recomputeIncrementalGroupState = (
-  group: IncrementalGroupState,
+  group: MaterializedIncrementalGroupState,
   aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
 ): void => {
   resetAggregateStates(group, aggregates);
@@ -343,6 +370,246 @@ const compareGroupedRows = (
     }
   }
   return Number(left.key > right.key) - Number(left.key < right.key);
+};
+
+type BoundedGroupEntry = {
+  group: GroupState;
+  orderValues: Array<unknown>;
+};
+
+const emptyBoundedGroupOrderValues: Array<unknown> = [];
+
+const groupedWindowEnd = (query: RuntimeGroupedQuery): number | undefined => {
+  if (query.limit === undefined) {
+    return undefined;
+  }
+  const windowEnd = (query.offset ?? 0) + query.limit;
+  if (!Number.isSafeInteger(windowEnd) || windowEnd > maxBoundedGroupedWindowEnd) {
+    return undefined;
+  }
+  return windowEnd;
+};
+
+const writeGroupOrderValues = (
+  target: Array<unknown>,
+  group: GroupState,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+): Array<unknown> => {
+  target.length = 0;
+  for (const order of orderBy) {
+    target.push(
+      "field" in order
+        ? fieldValue(group.row, order.field)
+        : aggregateStateCompareValue(group.aggregates[order.aggregate]!),
+    );
+  }
+  return target;
+};
+
+const newBoundedGroupEntry = (
+  group: GroupState,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+): BoundedGroupEntry => {
+  if (orderBy.length === 0) {
+    return {
+      group,
+      orderValues: emptyBoundedGroupOrderValues,
+    };
+  }
+  return {
+    group,
+    orderValues: writeGroupOrderValues([], group, orderBy),
+  };
+};
+
+const compareBoundedGroupEntries = (
+  left: BoundedGroupEntry,
+  right: BoundedGroupEntry,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+): number => {
+  for (let index = 0; index < orderBy.length; index += 1) {
+    const order = orderBy[index]!;
+    const comparison = compareQueryValue(left.orderValues[index], right.orderValues[index]);
+    if (comparison !== 0) {
+      return order.direction === "asc" ? comparison : -comparison;
+    }
+  }
+  return Number(left.group.key > right.group.key) - Number(left.group.key < right.group.key);
+};
+
+const compareGroupToBoundedGroupEntry = (
+  group: GroupState,
+  orderValues: ReadonlyArray<unknown>,
+  right: BoundedGroupEntry,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+): number => {
+  for (let index = 0; index < orderBy.length; index += 1) {
+    const order = orderBy[index]!;
+    const comparison = compareQueryValue(orderValues[index], right.orderValues[index]);
+    if (comparison !== 0) {
+      return order.direction === "asc" ? comparison : -comparison;
+    }
+  }
+  return Number(group.key > right.group.key) - Number(group.key < right.group.key);
+};
+
+const boundedGroupEntryIsWorse = (
+  left: BoundedGroupEntry,
+  right: BoundedGroupEntry,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+): boolean => compareBoundedGroupEntries(left, right, orderBy) > 0;
+
+const swapBoundedGroupEntries = (
+  groups: Array<BoundedGroupEntry>,
+  left: number,
+  right: number,
+): void => {
+  const leftGroup = groups[left]!;
+  groups[left] = groups[right]!;
+  groups[right] = leftGroup;
+};
+
+const siftWorstBoundedGroupEntryUp = (
+  groups: Array<BoundedGroupEntry>,
+  index: number,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+): void => {
+  let current = index;
+  while (current > 0) {
+    const parent = (current - 1) >>> 1;
+    if (!boundedGroupEntryIsWorse(groups[current]!, groups[parent]!, orderBy)) {
+      return;
+    }
+    swapBoundedGroupEntries(groups, current, parent);
+    current = parent;
+  }
+};
+
+const siftWorstBoundedGroupEntryDown = (
+  groups: Array<BoundedGroupEntry>,
+  index: number,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+): void => {
+  let current = index;
+  while (true) {
+    const left = current * 2 + 1;
+    const right = left + 1;
+    let worst = current;
+    if (left < groups.length && boundedGroupEntryIsWorse(groups[left]!, groups[worst]!, orderBy)) {
+      worst = left;
+    }
+    if (
+      right < groups.length &&
+      boundedGroupEntryIsWorse(groups[right]!, groups[worst]!, orderBy)
+    ) {
+      worst = right;
+    }
+    if (worst === current) {
+      return;
+    }
+    swapBoundedGroupEntries(groups, current, worst);
+    current = worst;
+  }
+};
+
+const retainBoundedGroup = (
+  groups: Array<BoundedGroupEntry>,
+  group: GroupState,
+  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  windowEnd: number,
+  scratchOrderValues: Array<unknown>,
+): Array<unknown> => {
+  if (groups.length < windowEnd) {
+    groups.push(newBoundedGroupEntry(group, orderBy));
+    siftWorstBoundedGroupEntryUp(groups, groups.length - 1, orderBy);
+    return scratchOrderValues;
+  }
+  const worstGroup = groups[0]!;
+  const candidateOrderValues =
+    orderBy.length === 0
+      ? emptyBoundedGroupOrderValues
+      : writeGroupOrderValues(scratchOrderValues, group, orderBy);
+  if (compareGroupToBoundedGroupEntry(group, candidateOrderValues, worstGroup, orderBy) >= 0) {
+    return scratchOrderValues;
+  }
+  const nextScratchOrderValues =
+    worstGroup.orderValues === emptyBoundedGroupOrderValues
+      ? scratchOrderValues
+      : worstGroup.orderValues;
+  worstGroup.group = group;
+  worstGroup.orderValues = candidateOrderValues;
+  siftWorstBoundedGroupEntryDown(groups, 0, orderBy);
+  return nextScratchOrderValues;
+};
+
+const boundedGroupedEvaluationFromGroups = (
+  groups: Iterable<GroupState>,
+  query: RuntimeGroupedQuery,
+  version: number,
+  windowEnd: number,
+): QueryEvaluation<RowObject> => {
+  const orderBy = query.orderBy ?? [];
+  const retainedGroups: Array<BoundedGroupEntry> = [];
+  let scratchOrderValues: Array<unknown> = [];
+  let totalRows = 0;
+  for (const group of groups) {
+    totalRows += 1;
+    scratchOrderValues = retainBoundedGroup(
+      retainedGroups,
+      group,
+      orderBy,
+      windowEnd,
+      scratchOrderValues,
+    );
+  }
+  const window = retainedGroups
+    .toSorted((left, right) => compareBoundedGroupEntries(left, right, orderBy))
+    .slice(query.offset ?? 0)
+    .map((entry) => finalizeGroup(entry.group));
+  return {
+    rows: window.map((entry) => entry.row),
+    keys: window.map((entry) => entry.key),
+    window,
+    totalRows,
+    version,
+  };
+};
+
+const emptyGroupedEvaluation = (
+  totalRows: number,
+  version: number,
+): QueryEvaluation<RowObject> => ({
+  rows: [],
+  keys: [],
+  window: [],
+  totalRows,
+  version,
+});
+
+const evaluateZeroLimitGroupedRows = <Row extends RowObject>(
+  store: TopicRowScan<Row>,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+): QueryEvaluation<RowObject> => {
+  const groupKeys = new Set<string>();
+  store.scanRows((_key, row) => {
+    if (matches(row)) {
+      groupKeys.add(groupKey(query.groupBy, row));
+    }
+  });
+  return emptyGroupedEvaluation(groupKeys.size, store.version());
+};
+
+const groupedEvaluationFromGroups = (
+  groups: Iterable<GroupState>,
+  query: RuntimeGroupedQuery,
+  version: number,
+): QueryEvaluation<RowObject> => {
+  const windowEnd = groupedWindowEnd(query);
+  if (windowEnd !== undefined) {
+    return boundedGroupedEvaluationFromGroups(groups, query, version, windowEnd);
+  }
+  return groupedEvaluationFromEntries(Array.from(groups, finalizeGroup), query, version);
 };
 
 const groupedEvaluationFromEntries = (
@@ -661,6 +928,9 @@ const evaluateGroupedRows = <Row extends RowObject>(
   query: RuntimeGroupedQuery,
   matches: (row: Row) => boolean,
 ): QueryEvaluation<RowObject> => {
+  if (query.limit === 0) {
+    return evaluateZeroLimitGroupedRows(store, query, matches);
+  }
   const groups = new Map<string, GroupState>();
   store.scanRows((_key, row) => {
     if (!matches(row)) {
@@ -676,19 +946,23 @@ const evaluateGroupedRows = <Row extends RowObject>(
       updateAggregateState(group.aggregates[alias]!, aggregate, row);
     }
   });
-  return groupedEvaluationFromEntries(
-    Array.from(groups.values(), finalizeGroup),
-    query,
-    store.version(),
-  );
+  return groupedEvaluationFromGroups(groups.values(), query, store.version());
 };
 
-type IncrementalGroupedQueryState = {
-  readonly groups: Map<string, IncrementalGroupState>;
-  evaluation: QueryEvaluation<RowObject>;
-  memberCount: number;
-  version: number;
-};
+type IncrementalGroupedQueryState =
+  | {
+      readonly mode: "materialized";
+      readonly groups: Map<string, MaterializedIncrementalGroupState>;
+      evaluation: QueryEvaluation<RowObject>;
+      memberCount: number;
+      version: number;
+    }
+  | {
+      readonly mode: "countOnly";
+      readonly groups: Map<string, CountOnlyIncrementalGroupState>;
+      evaluation: QueryEvaluation<RowObject>;
+      version: number;
+    };
 
 type IncrementalGroupedQueryBuildState =
   | {
@@ -700,11 +974,10 @@ type IncrementalGroupedQueryBuildState =
     };
 
 const evaluateIncrementalGroupedQuery = (
-  groups: ReadonlyMap<string, IncrementalGroupState>,
+  state: Extract<IncrementalGroupedQueryState, { readonly mode: "materialized" }>,
   query: RuntimeGroupedQuery,
   version: number,
-): QueryEvaluation<RowObject> =>
-  groupedEvaluationFromEntries(Array.from(groups.values(), finalizeGroup), query, version);
+): QueryEvaluation<RowObject> => groupedEvaluationFromGroups(state.groups.values(), query, version);
 
 const clearIncrementalGroupedQueryState = (
   state: IncrementalGroupedQueryState,
@@ -712,17 +985,67 @@ const clearIncrementalGroupedQueryState = (
   version: number,
 ): void => {
   state.groups.clear();
-  state.evaluation = groupedEvaluationFromEntries([], query, version);
-  state.memberCount = 0;
+  state.evaluation =
+    state.mode === "countOnly"
+      ? emptyGroupedEvaluation(0, version)
+      : groupedEvaluationFromEntries([], query, version);
+  if (state.mode === "materialized") {
+    state.memberCount = 0;
+  }
   state.version = version;
 };
 
-const buildIncrementalGroupedQueryState = <Row extends RowObject>(
+const buildCountOnlyIncrementalGroupedQueryState = <Row extends RowObject>(
   store: TopicRowScan<Row>,
   query: RuntimeGroupedQuery,
   matches: (row: Row) => boolean,
 ): IncrementalGroupedQueryBuildState => {
-  const groups = new Map<string, IncrementalGroupState>();
+  const groups = new Map<string, CountOnlyIncrementalGroupState>();
+  let admitted = true;
+  store.scanRows((_key, row) => {
+    if (!admitted) {
+      return undefined;
+    }
+    if (!matches(row)) {
+      return undefined;
+    }
+    const groupedKey = groupKey(query.groupBy, row);
+    let group = groups.get(groupedKey);
+    if (group === undefined) {
+      group = newZeroLimitIncrementalGroupState(groupedKey);
+      groups.set(groupedKey, group);
+    }
+    group.count += 1;
+    if (groups.size > maxIncrementalGroupedGroups) {
+      groups.clear();
+      admitted = false;
+      return false;
+    }
+    return undefined;
+  });
+  if (!admitted) {
+    return {
+      admitted: false,
+    };
+  }
+  const version = store.version();
+  return {
+    admitted: true,
+    state: {
+      mode: "countOnly",
+      groups,
+      evaluation: emptyGroupedEvaluation(groups.size, version),
+      version,
+    },
+  };
+};
+
+const buildMaterializedIncrementalGroupedQueryState = <Row extends RowObject>(
+  store: TopicRowScan<Row>,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+): IncrementalGroupedQueryBuildState => {
+  const groups = new Map<string, MaterializedIncrementalGroupState>();
   let memberCount = 0;
   let admitted = true;
   store.scanRows((key, row) => {
@@ -760,24 +1083,35 @@ const buildIncrementalGroupedQueryState = <Row extends RowObject>(
     };
   }
   const version = store.version();
+  const state: IncrementalGroupedQueryState = {
+    mode: "materialized",
+    groups,
+    evaluation: groupedEvaluationFromGroups(groups.values(), query, version),
+    memberCount,
+    version,
+  };
   return {
     admitted: true,
-    state: {
-      groups,
-      evaluation: evaluateIncrementalGroupedQuery(groups, query, version),
-      memberCount,
-      version,
-    },
+    state,
   };
 };
 
-const removeIncrementalGroupedMember = <Row extends RowObject>(
-  groups: Map<string, IncrementalGroupState>,
+const buildIncrementalGroupedQueryState = <Row extends RowObject>(
+  store: TopicRowScan<Row>,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+): IncrementalGroupedQueryBuildState =>
+  query.limit === 0
+    ? buildCountOnlyIncrementalGroupedQueryState(store, query, matches)
+    : buildMaterializedIncrementalGroupedQueryState(store, query, matches);
+
+const removeMaterializedIncrementalGroupedMember = <Row extends RowObject>(
+  groups: Map<string, MaterializedIncrementalGroupState>,
   query: RuntimeGroupedQuery,
   matches: (row: Row) => boolean,
   key: string,
   row: Row,
-  dirtyGroups: Set<IncrementalGroupState>,
+  dirtyGroups: Set<MaterializedIncrementalGroupState>,
 ): boolean => {
   if (!matches(row)) {
     return false;
@@ -800,18 +1134,39 @@ const removeIncrementalGroupedMember = <Row extends RowObject>(
   return true;
 };
 
+const removeCountOnlyIncrementalGroupedMember = <Row extends RowObject>(
+  groups: Map<string, CountOnlyIncrementalGroupState>,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+  row: Row,
+): boolean => {
+  if (!matches(row)) {
+    return false;
+  }
+  const groupedKey = groupKey(query.groupBy, row);
+  const group = groups.get(groupedKey);
+  if (group === undefined) {
+    return false;
+  }
+  group.count -= 1;
+  if (group.count === 0) {
+    groups.delete(groupedKey);
+  }
+  return true;
+};
+
 type UpsertIncrementalGroupedMemberResult = {
   readonly groupSize: number;
   readonly inserted: boolean;
 };
 
-const upsertIncrementalGroupedMember = <Row extends RowObject>(
-  groups: Map<string, IncrementalGroupState>,
+const upsertMaterializedIncrementalGroupedMember = <Row extends RowObject>(
+  groups: Map<string, MaterializedIncrementalGroupState>,
   query: RuntimeGroupedQuery,
   matches: (row: Row) => boolean,
   key: string,
   row: Row,
-  dirtyGroups: Set<IncrementalGroupState>,
+  dirtyGroups: Set<MaterializedIncrementalGroupState>,
 ): UpsertIncrementalGroupedMemberResult | undefined => {
   if (!matches(row)) {
     return undefined;
@@ -831,16 +1186,35 @@ const upsertIncrementalGroupedMember = <Row extends RowObject>(
   };
 };
 
-const applyIncrementalGroupedQueryBatch = <Row extends RowObject>(
-  state: IncrementalGroupedQueryState,
+const upsertCountOnlyIncrementalGroupedMember = <Row extends RowObject>(
+  groups: Map<string, CountOnlyIncrementalGroupState>,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+  row: Row,
+): boolean => {
+  if (!matches(row)) {
+    return false;
+  }
+  const groupedKey = groupKey(query.groupBy, row);
+  let group = groups.get(groupedKey);
+  if (group === undefined) {
+    group = newZeroLimitIncrementalGroupState(groupedKey);
+    groups.set(groupedKey, group);
+  }
+  group.count += 1;
+  return true;
+};
+
+const applyMaterializedIncrementalGroupedQueryBatch = <Row extends RowObject>(
+  state: Extract<IncrementalGroupedQueryState, { readonly mode: "materialized" }>,
   query: RuntimeGroupedQuery,
   matches: (row: Row) => boolean,
   batch: TopicRowChangeBatch<Row>,
-  dirtyGroups: Set<IncrementalGroupState>,
+  dirtyGroups: Set<MaterializedIncrementalGroupState>,
 ): boolean => {
   for (const change of batch.changes) {
     if (change.previous !== undefined) {
-      const removed = removeIncrementalGroupedMember(
+      const removed = removeMaterializedIncrementalGroupedMember(
         state.groups,
         query,
         matches,
@@ -853,7 +1227,7 @@ const applyIncrementalGroupedQueryBatch = <Row extends RowObject>(
       }
     }
     if (change.next !== undefined) {
-      const upserted = upsertIncrementalGroupedMember(
+      const upserted = upsertMaterializedIncrementalGroupedMember(
         state.groups,
         query,
         matches,
@@ -881,15 +1255,43 @@ const applyIncrementalGroupedQueryBatch = <Row extends RowObject>(
   return true;
 };
 
-const applyIncrementalGroupedQueryBatches = <Row extends RowObject>(
-  state: IncrementalGroupedQueryState,
+const applyCountOnlyIncrementalGroupedQueryBatch = <Row extends RowObject>(
+  state: Extract<IncrementalGroupedQueryState, { readonly mode: "countOnly" }>,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+  batch: TopicRowChangeBatch<Row>,
+): boolean => {
+  for (const change of batch.changes) {
+    if (change.previous !== undefined) {
+      removeCountOnlyIncrementalGroupedMember(state.groups, query, matches, change.previous);
+    }
+    if (change.next !== undefined) {
+      const inserted = upsertCountOnlyIncrementalGroupedMember(
+        state.groups,
+        query,
+        matches,
+        change.next,
+      );
+      if (!inserted) {
+        continue;
+      }
+      if (state.groups.size > maxIncrementalGroupedGroups) {
+        return false;
+      }
+    }
+  }
+  return true;
+};
+
+const applyMaterializedIncrementalGroupedQueryBatches = <Row extends RowObject>(
+  state: Extract<IncrementalGroupedQueryState, { readonly mode: "materialized" }>,
   query: RuntimeGroupedQuery,
   matches: (row: Row) => boolean,
   batches: ReadonlyArray<TopicRowChangeBatch<Row>>,
 ): boolean => {
-  const dirtyGroups = new Set<IncrementalGroupState>();
+  const dirtyGroups = new Set<MaterializedIncrementalGroupState>();
   for (const batch of batches) {
-    if (!applyIncrementalGroupedQueryBatch(state, query, matches, batch, dirtyGroups)) {
+    if (!applyMaterializedIncrementalGroupedQueryBatch(state, query, matches, batch, dirtyGroups)) {
       state.groups.clear();
       state.memberCount = 0;
       return false;
@@ -899,8 +1301,37 @@ const applyIncrementalGroupedQueryBatches = <Row extends RowObject>(
   for (const group of dirtyGroups) {
     recomputeIncrementalGroupState(group, query.aggregates);
   }
-  state.evaluation = evaluateIncrementalGroupedQuery(state.groups, query, state.version);
+  state.evaluation = evaluateIncrementalGroupedQuery(state, query, state.version);
   return true;
+};
+
+const applyCountOnlyIncrementalGroupedQueryBatches = <Row extends RowObject>(
+  state: Extract<IncrementalGroupedQueryState, { readonly mode: "countOnly" }>,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+  batches: ReadonlyArray<TopicRowChangeBatch<Row>>,
+): boolean => {
+  for (const batch of batches) {
+    if (!applyCountOnlyIncrementalGroupedQueryBatch(state, query, matches, batch)) {
+      state.groups.clear();
+      return false;
+    }
+    state.version = batch.version;
+  }
+  state.evaluation = emptyGroupedEvaluation(state.groups.size, state.version);
+  return true;
+};
+
+const applyIncrementalGroupedQueryBatches = <Row extends RowObject>(
+  state: IncrementalGroupedQueryState,
+  query: RuntimeGroupedQuery,
+  matches: (row: Row) => boolean,
+  batches: ReadonlyArray<TopicRowChangeBatch<Row>>,
+): boolean => {
+  if (state.mode === "countOnly") {
+    return applyCountOnlyIncrementalGroupedQueryBatches(state, query, matches, batches);
+  }
+  return applyMaterializedIncrementalGroupedQueryBatches(state, query, matches, batches);
 };
 
 const makeFallbackGroupedQueryExecution = <Row extends RowObject, ResultRow extends RowObject>(
