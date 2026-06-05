@@ -1,28 +1,10 @@
 import { type GroupState, newGroupState, updateAggregateState } from "./grouped-aggregate-state";
-import type { RuntimeGroupedQuery } from "./grouped-query-decoder";
+import type { GroupedQueryPlan } from "./grouped-query-plan";
 import { emptyGroupedEvaluation, groupedEvaluationFromGroups } from "./grouped-window-evaluation";
-import { stableQueryValueString } from "./query-value";
-import { fieldValue } from "./row-values";
 import type { QueryEvaluation } from "./query-result";
 import type { TopicRowScan } from "./row-scan";
 
 type RowObject = object;
-
-export const groupedCacheKey = (query: RuntimeGroupedQuery): string =>
-  stableQueryValueString([
-    "grouped",
-    query.groupBy,
-    Object.entries(query.aggregates).toSorted(
-      ([left], [right]) => Number(left > right) - Number(left < right),
-    ),
-    query.where === undefined ? [] : stableQueryValueString(query.where),
-    query.orderBy ?? [],
-    query.offset ?? null,
-    query.limit ?? null,
-  ]);
-
-export const groupKey = (groupBy: ReadonlyArray<string>, row: RowObject): string =>
-  stableQueryValueString(groupBy.map((field) => [field, fieldValue(row, field)]));
 
 export function typedGroupedEvaluation<ResultRow extends RowObject>(
   evaluation: QueryEvaluation<RowObject>,
@@ -35,13 +17,13 @@ export function typedGroupedEvaluation(
 
 const evaluateZeroLimitGroupedRows = <Row extends RowObject>(
   store: TopicRowScan<Row>,
-  query: RuntimeGroupedQuery,
+  plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
 ): QueryEvaluation<RowObject> => {
   const groupKeys = new Set<string>();
   store.scanRows((_key, row) => {
     if (matches(row)) {
-      groupKeys.add(groupKey(query.groupBy, row));
+      groupKeys.add(plan.groupKey(row));
     }
   });
   return emptyGroupedEvaluation(groupKeys.size, store.version());
@@ -49,26 +31,26 @@ const evaluateZeroLimitGroupedRows = <Row extends RowObject>(
 
 export const evaluateGroupedRows = <Row extends RowObject>(
   store: TopicRowScan<Row>,
-  query: RuntimeGroupedQuery,
+  plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
 ): QueryEvaluation<RowObject> => {
-  if (query.limit === 0) {
-    return evaluateZeroLimitGroupedRows(store, query, matches);
+  if (plan.zeroLimit) {
+    return evaluateZeroLimitGroupedRows(store, plan, matches);
   }
   const groups = new Map<string, GroupState>();
   store.scanRows((_key, row) => {
     if (!matches(row)) {
       return;
     }
-    const key = groupKey(query.groupBy, row);
+    const key = plan.groupKey(row);
     let group = groups.get(key);
     if (group === undefined) {
-      group = newGroupState(key, query.groupBy, query.aggregates, row);
+      group = newGroupState(key, plan.groupBy, plan.aggregates, row);
       groups.set(key, group);
     }
-    for (const [alias, aggregate] of Object.entries(query.aggregates)) {
+    for (const [alias, aggregate] of Object.entries(plan.aggregates)) {
       updateAggregateState(group.aggregates[alias]!, aggregate, row);
     }
   });
-  return groupedEvaluationFromGroups(groups.values(), query, store.version());
+  return groupedEvaluationFromGroups(groups.values(), plan, store.version());
 };

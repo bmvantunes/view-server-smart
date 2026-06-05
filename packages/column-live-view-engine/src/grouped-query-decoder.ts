@@ -1,18 +1,11 @@
 import { Effect } from "effect";
 import type { RuntimeGroupedAggregate } from "./grouped-aggregate-state";
-import type { RuntimeGroupedOrderBy } from "./grouped-window-evaluation";
+import type { GroupedQueryPlanInput, RuntimeGroupedOrderBy } from "./grouped-query-plan";
 import { InvalidQueryError, isDenseArray } from "./raw-query-decoder";
 import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
 import { isPlainRecord } from "./row-values";
 
-export type RuntimeGroupedQuery = {
-  readonly groupBy: ReadonlyArray<string>;
-  readonly aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>;
-  readonly where?: Record<string, unknown>;
-  readonly orderBy?: ReadonlyArray<RuntimeGroupedOrderBy>;
-  readonly offset?: number;
-  readonly limit?: number;
-};
+export type RuntimeGroupedQuery = GroupedQueryPlanInput;
 
 const groupedQueryKeys = new Set([
   "groupBy",

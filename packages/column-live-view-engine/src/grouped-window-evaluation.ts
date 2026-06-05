@@ -3,27 +3,12 @@ import {
   finalizeGroup,
   type GroupState,
 } from "./grouped-aggregate-state";
+import type { GroupedQueryPlan, RuntimeGroupedOrderBy } from "./grouped-query-plan";
 import { compareQueryValue } from "./raw-query-compiler";
 import type { QueryEvaluation, StoredRowOf } from "./query-result";
 import { fieldValue } from "./row-values";
 
 type RowObject = object;
-
-export type RuntimeGroupedOrderBy =
-  | {
-      readonly field: string;
-      readonly direction: "asc" | "desc";
-    }
-  | {
-      readonly aggregate: string;
-      readonly direction: "asc" | "desc";
-    };
-
-type RuntimeGroupedWindowQuery = {
-  readonly orderBy?: ReadonlyArray<RuntimeGroupedOrderBy>;
-  readonly offset?: number;
-  readonly limit?: number;
-};
 
 type BoundedGroupEntry = {
   group: GroupState;
@@ -48,11 +33,13 @@ const compareGroupedRows = (
   return Number(left.key > right.key) - Number(left.key < right.key);
 };
 
-const groupedWindowEnd = (query: RuntimeGroupedWindowQuery): number | undefined => {
-  if (query.limit === undefined) {
+const groupedWindowEnd = <Row extends RowObject>(
+  plan: GroupedQueryPlan<Row>,
+): number | undefined => {
+  if (plan.limit === undefined) {
     return undefined;
   }
-  const windowEnd = (query.offset ?? 0) + query.limit;
+  const windowEnd = plan.offset + plan.limit;
   if (!Number.isSafeInteger(windowEnd) || windowEnd > maxBoundedGroupedWindowEnd) {
     return undefined;
   }
@@ -211,13 +198,13 @@ const retainBoundedGroup = (
   return nextScratchOrderValues;
 };
 
-const boundedGroupedEvaluationFromGroups = (
+const boundedGroupedEvaluationFromGroups = <Row extends RowObject>(
   groups: Iterable<GroupState>,
-  query: RuntimeGroupedWindowQuery,
+  plan: GroupedQueryPlan<Row>,
   version: number,
   windowEnd: number,
 ): QueryEvaluation<RowObject> => {
-  const orderBy = query.orderBy ?? [];
+  const orderBy = plan.orderBy;
   const retainedGroups: Array<BoundedGroupEntry> = [];
   let scratchOrderValues: Array<unknown> = [];
   let totalRows = 0;
@@ -233,7 +220,7 @@ const boundedGroupedEvaluationFromGroups = (
   }
   const window = retainedGroups
     .toSorted((left, right) => compareBoundedGroupEntries(left, right, orderBy))
-    .slice(query.offset ?? 0)
+    .slice(plan.offset)
     .map((entry) => finalizeGroup(entry.group));
   return {
     rows: window.map((entry) => entry.row),
@@ -255,31 +242,26 @@ export const emptyGroupedEvaluation = (
   version,
 });
 
-export const groupedEvaluationFromGroups = (
+export const groupedEvaluationFromGroups = <Row extends RowObject>(
   groups: Iterable<GroupState>,
-  query: RuntimeGroupedWindowQuery,
+  plan: GroupedQueryPlan<Row>,
   version: number,
 ): QueryEvaluation<RowObject> => {
-  const windowEnd = groupedWindowEnd(query);
+  const windowEnd = groupedWindowEnd(plan);
   if (windowEnd !== undefined) {
-    return boundedGroupedEvaluationFromGroups(groups, query, version, windowEnd);
+    return boundedGroupedEvaluationFromGroups(groups, plan, version, windowEnd);
   }
-  return groupedEvaluationFromEntries(Array.from(groups, finalizeGroup), query, version);
+  return groupedEvaluationFromEntries(Array.from(groups, finalizeGroup), plan, version);
 };
 
-export const groupedEvaluationFromEntries = (
+export const groupedEvaluationFromEntries = <Row extends RowObject>(
   entries: ReadonlyArray<StoredRowOf<RowObject>>,
-  query: RuntimeGroupedWindowQuery,
+  plan: GroupedQueryPlan<Row>,
   version: number,
 ): QueryEvaluation<RowObject> => {
-  const ordered = entries.toSorted((left, right) =>
-    compareGroupedRows(left, right, query.orderBy ?? []),
-  );
-  const offset = query.offset ?? 0;
-  const window = ordered.slice(
-    offset,
-    query.limit === undefined ? undefined : offset + query.limit,
-  );
+  const ordered = entries.toSorted((left, right) => compareGroupedRows(left, right, plan.orderBy));
+  const offset = plan.offset;
+  const window = ordered.slice(offset, plan.limit === undefined ? undefined : offset + plan.limit);
   return {
     rows: window.map((entry) => entry.row),
     keys: window.map((entry) => entry.key),
