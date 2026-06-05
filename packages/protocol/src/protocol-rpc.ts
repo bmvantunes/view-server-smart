@@ -6,7 +6,7 @@ import type {
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { Schema } from "effect";
 import { ViewServerWireEventSchema } from "./protocol-event-schema";
-import { ViewServerHealthSchema } from "./protocol-health-codec";
+import { ViewServerHealthSchema } from "./protocol-health-schema";
 import { ViewServerSubscribePayloadSchema } from "./protocol-query-schema";
 
 export const ViewServerBackpressureErrorSchema: Schema.Codec<ViewServerBackpressureError> =

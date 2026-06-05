@@ -45,6 +45,9 @@ export {
   type ViewServerWireHealth,
   ViewServerHealthSummaryRowSchema,
   ViewServerHealthTopicRowSchema,
+} from "./protocol-health-schema";
+
+export {
   viewServerEncodeHealthSummaryEvent,
   viewServerDecodeHealthSummaryEvent,
   viewServerEncodeHealthTopicEvent,
