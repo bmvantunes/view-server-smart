@@ -15,8 +15,11 @@ import {
   compareExactRangeColumnValue,
   compareRangeColumnValue,
   isComparableRangeValue,
-  rangeComparisonMatches,
 } from "./topic-range-value";
+import {
+  selectedPredicateCandidateFilter,
+  type PredicateCandidateFilter,
+} from "./topic-predicate-candidate-filter";
 import {
   compareQueryValue,
   isRangePlanValue,
@@ -58,17 +61,6 @@ type OrderedRangeBounds = {
   readonly upper: OrderedRangeBound | undefined;
 };
 
-type PredicateCandidateFilter = {
-  readonly column: ColumnValues;
-  readonly matches: (value: unknown) => boolean;
-  readonly sampleMatches: number;
-};
-
-type PredicateCandidateSample = {
-  readonly sampleMatches: number;
-  readonly sampleSize: number;
-};
-
 type TopicRawRangePredicateFilterPlan = TopicRawPredicateFilterPlan & {
   readonly operator: "gt" | "gte" | "lt" | "lte";
   readonly value: unknown;
@@ -89,8 +81,6 @@ const noOrderedRangeBounds: OrderedRangeBounds = {
   upper: undefined,
 };
 const maxBoundedRawWindowEnd = 1_024;
-const maxPredicateCandidateSampleSlots = 4_096;
-const maxTransientPredicateCandidateSlots = 65_536;
 
 export type PreparedTopicRow = {
   readonly key: string;
@@ -242,8 +232,10 @@ export class ColumnarTopicStore {
       const candidateFilter =
         plan.predicate.callbackSkippable === true &&
         orderedRawWindowSlotCount(orderedWindow) * 2 > this.slots.length
-          ? this.selectedPredicateCandidateFilter(
+          ? selectedPredicateCandidateFilter(
               plan.predicate.filters,
+              this.columns,
+              this.slots.length,
               orderedWindow.candidateExcludedField,
             )
           : undefined;
@@ -298,7 +290,7 @@ export class ColumnarTopicStore {
   ): TopicRawWindowScanResult<object> {
     const candidateFilter =
       plan.predicate.callbackSkippable === true
-        ? this.selectedPredicateCandidateFilter(plan.predicate.filters)
+        ? selectedPredicateCandidateFilter(plan.predicate.filters, this.columns, this.slots.length)
         : undefined;
     const boundedWindowEnd = boundedRawWindowEnd(plan);
     if (boundedWindowEnd !== undefined) {
@@ -367,130 +359,6 @@ export class ColumnarTopicStore {
       keys: window.map((entry) => entry.key),
       window,
       totalRows,
-    };
-  }
-
-  private selectedPredicateCandidateFilter(
-    filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
-    excludedField?: string,
-  ): PredicateCandidateFilter | undefined {
-    let selectedFilter: PredicateCandidateFilter | undefined;
-    for (const filter of filters) {
-      if (filter.field === excludedField) {
-        continue;
-      }
-      const candidateFilter = this.predicateCandidateFilter(filter);
-      if (candidateFilter === undefined) {
-        continue;
-      }
-      if (
-        selectedFilter === undefined ||
-        candidateFilter.sampleMatches < selectedFilter.sampleMatches
-      ) {
-        selectedFilter = candidateFilter;
-      }
-    }
-    if (selectedFilter === undefined) {
-      return undefined;
-    }
-    return selectedFilter;
-  }
-
-  private predicateCandidateFilter(
-    filter: TopicRawPredicateFilterPlan,
-  ): PredicateCandidateFilter | undefined {
-    if (filter.operator === "eq") {
-      const key = scalarEqualityKey(filter.value);
-      if (key === undefined) {
-        return undefined;
-      }
-      const column = this.columns.get(filter.field);
-      if (column === undefined) {
-        return undefined;
-      }
-      return this.scalarColumnCandidateFilter(column, new Set([key]));
-    }
-    if (filter.operator === "in" && filter.valueKeys !== undefined) {
-      const column = this.columns.get(filter.field);
-      if (column === undefined) {
-        return undefined;
-      }
-      return this.scalarColumnCandidateFilter(column, filter.valueKeys);
-    }
-    if (!isRangeFilterPlan(filter) || !isComparableRangeValue(filter.value)) {
-      return undefined;
-    }
-    const column = this.columns.get(filter.field);
-    if (column === undefined) {
-      return undefined;
-    }
-    return this.rangeColumnCandidateFilter(column, filter.operator, filter.value);
-  }
-
-  private scalarColumnCandidateFilter(
-    column: ColumnValues,
-    valueKeys: ReadonlySet<string>,
-  ): PredicateCandidateFilter | undefined {
-    const matches = (value: unknown) => {
-      const key = scalarEqualityKey(value);
-      return key !== undefined && valueKeys.has(key);
-    };
-    return this.predicateColumnCandidateFilter(column, matches);
-  }
-
-  private rangeColumnCandidateFilter(
-    column: ColumnValues,
-    operator: TopicRawRangePredicateFilterPlan["operator"],
-    value: unknown,
-  ): PredicateCandidateFilter | undefined {
-    const matches = (columnValue: unknown) => {
-      const comparison = compareExactRangeColumnValue(columnValue, value);
-      return comparison !== undefined && rangeComparisonMatches(operator, comparison);
-    };
-    return this.predicateColumnCandidateFilter(column, matches);
-  }
-
-  private predicateColumnCandidateFilter(
-    column: ColumnValues,
-    matches: (value: unknown) => boolean,
-  ): PredicateCandidateFilter | undefined {
-    const sample = this.predicateColumnCandidateSample(column, matches);
-    if (sample === undefined) {
-      return undefined;
-    }
-    if (sample.sampleMatches === 0 && sample.sampleSize < this.slots.length) {
-      return undefined;
-    }
-    return {
-      column,
-      matches,
-      sampleMatches: sample.sampleMatches,
-    };
-  }
-
-  private predicateColumnCandidateSample(
-    column: ColumnValues,
-    matches: (value: unknown) => boolean,
-  ): PredicateCandidateSample | undefined {
-    const sampleSize = Math.min(this.slots.length, maxPredicateCandidateSampleSlots);
-    const maxMatches = predicateCandidateSampleMatchLimit(sampleSize);
-    let matchCount = 0;
-    for (let sampleIndex = 0; sampleIndex < sampleSize; sampleIndex += 1) {
-      const slot = predicateCandidateSampleSlot(this.slots.length, sampleSize, sampleIndex);
-      if (!matches(column[slot])) {
-        continue;
-      }
-      matchCount += 1;
-      if (matchCount > maxMatches) {
-        return undefined;
-      }
-    }
-    if (predicateCandidateSampleExceedsSlotLimit(matchCount, sampleSize, this.slots.length)) {
-      return undefined;
-    }
-    return {
-      sampleMatches: matchCount,
-      sampleSize,
     };
   }
 
@@ -968,35 +836,6 @@ const orderedRawWindowSlotCount = (window: OrderedRawWindow): number => {
     count += span.endIndex - span.startIndex;
   }
   return count;
-};
-
-const predicateCandidateSlotLimit = (rowCount: number): number =>
-  Math.min(maxTransientPredicateCandidateSlots, Math.floor(rowCount / 2));
-
-const predicateCandidateSampleMatchLimit = (sampleSize: number): number =>
-  Math.max(8, Math.floor(sampleSize / 8));
-
-const predicateCandidateSampleSlot = (
-  rowCount: number,
-  sampleSize: number,
-  sampleIndex: number,
-): number => {
-  if (sampleSize <= 1) {
-    return 0;
-  }
-  return Math.round((sampleIndex * (rowCount - 1)) / (sampleSize - 1));
-};
-
-const predicateCandidateSampleExceedsSlotLimit = (
-  sampleMatches: number,
-  sampleSize: number,
-  rowCount: number,
-): boolean => {
-  return (
-    sampleMatches > 0 &&
-    sampleSize > 0 &&
-    sampleMatches * rowCount > predicateCandidateSlotLimit(rowCount) * sampleSize
-  );
 };
 
 const orderedSlotIndexInsertionPoint = (
