@@ -1,11 +1,12 @@
 import { Effect, Option } from "effect";
 import type { DeltaEvent } from "@view-server/config";
 import type { ActiveQueryStoreState, RawQueryExecution } from "./active-query";
+import type { CompiledRawQuery } from "./raw-query-compiler";
 import {
-  stableQueryValueString,
-  type CompiledRawQuery,
-  type RuntimeRawQuery,
-} from "./raw-query-compiler";
+  rawQueryPlanWindow,
+  rawQueryWindowScanPlan,
+  type RawQueryPlanWindow,
+} from "./raw-query-plan";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 import type { QueryEvaluation } from "./query-result";
 import type { TopicRawWindowScan, TopicRawWindowScanResult } from "./raw-window-scan";
@@ -23,35 +24,12 @@ export type RawQueryExecutionSlot = {
 };
 
 type RawQueryExecutionWindowSlot = {
-  readonly window: CompiledRawQuery<object, object>["window"];
+  readonly window: RawQueryPlanWindow;
   refs: number;
 };
 
 type ActiveQueryBaseEvaluation<Row extends RowObject> = TopicRawWindowScanResult<Row> & {
   readonly version: number;
-};
-
-type QueryCacheToken = readonly ["raw", string, string];
-type QueryWindowCacheToken = readonly ["window", string, string];
-
-const queryCacheKey = (query: RuntimeRawQuery): string => {
-  const orderBy: ReadonlyArray<readonly [string, "asc" | "desc"]> =
-    query.orderBy === undefined ? [] : query.orderBy.map((entry) => [entry.field, entry.direction]);
-  const token: QueryCacheToken = [
-    "raw",
-    query.where === undefined ? "" : stableQueryValueString(query.where),
-    stableQueryValueString(orderBy),
-  ];
-  return JSON.stringify(token);
-};
-
-const queryWindowCacheKey = (window: CompiledRawQuery<object, object>["window"]): string => {
-  const token: QueryWindowCacheToken = [
-    "window",
-    stableQueryValueString(window.offset),
-    stableQueryValueString(window.limit ?? null),
-  ];
-  return JSON.stringify(token);
 };
 
 const getActiveRawQueryMap = (store: ActiveQueryStoreState): Map<string, RawQueryExecutionSlot> => {
@@ -65,7 +43,7 @@ const getActiveRawQueryEntry = <ResultRow extends RowObject>(
   map: Map<string, RawQueryExecutionSlot>;
   key: string;
 } => {
-  const key = queryCacheKey(compiled.query);
+  const key = compiled.plan.queryCacheKey;
   const map = getActiveRawQueryMap(store);
   return { map, key };
 };
@@ -73,18 +51,10 @@ const getActiveRawQueryEntry = <ResultRow extends RowObject>(
 const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   store: TopicRawWindowScan<Row> & { readonly version: () => number },
   compiled: CompiledRawQuery<Row, ResultRow>,
-  queryWindow: CompiledRawQuery<Row, ResultRow>["window"] = compiled.window,
+  queryWindow: RawQueryPlanWindow = compiled.plan.window,
 ): ActiveQueryBaseEvaluation<Row> => {
   const version = store.version();
-  const scanResult = store.scanRawWindow({
-    predicate: compiled.predicate.plan,
-    orderBy: compiled.ordering.plan,
-    storageOrderBy: compiled.ordering.plan,
-    matches: compiled.predicate.matches,
-    compare: compiled.ordering.compare,
-    offset: queryWindow.offset,
-    limit: queryWindow.limit,
-  });
+  const scanResult = store.scanRawWindow(rawQueryWindowScanPlan(compiled.plan, queryWindow));
   return {
     ...scanResult,
     version,
@@ -97,7 +67,7 @@ const projectBaseEvaluation = <Row extends RowObject, ResultRow extends RowObjec
 ): QueryEvaluation<ResultRow> => {
   const window = evaluation.window.map((entry) => ({
     key: entry.key,
-    row: compiled.projection.project(entry.row),
+    row: compiled.plan.project(entry.row),
   }));
 
   return {
@@ -114,13 +84,13 @@ const projectWindowEvaluation = <Row extends RowObject, ResultRow extends RowObj
   evaluation: ActiveQueryBaseEvaluation<Row>,
 ): QueryEvaluation<ResultRow> => {
   const end =
-    compiled.window.limit === undefined
+    compiled.plan.window.limit === undefined
       ? undefined
-      : compiled.window.offset + compiled.window.limit;
-  const sourceWindow = evaluation.window.slice(compiled.window.offset, end);
+      : compiled.plan.window.offset + compiled.plan.window.limit;
+  const sourceWindow = evaluation.window.slice(compiled.plan.window.offset, end);
   const window = sourceWindow.map((entry) => ({
     key: entry.key,
-    row: compiled.projection.project(entry.row),
+    row: compiled.plan.project(entry.row),
   }));
 
   return {
@@ -166,29 +136,23 @@ const leaseRawQueryExecution = <ResultRow extends RowObject>(
 
 const baseWindowForActiveWindows = (
   windows: ReadonlyMap<string, RawQueryExecutionWindowSlot>,
-): CompiledRawQuery<object, object>["window"] => {
+): RawQueryPlanWindow => {
   let limit = 0;
   for (const { window } of windows.values()) {
     if (window.limit === undefined) {
-      return {
-        offset: 0,
-        limit: undefined,
-      };
+      return rawQueryPlanWindow(0, undefined);
     }
     const windowEnd = window.limit === 0 ? 0 : window.offset + window.limit;
     limit = Math.max(limit, windowEnd);
   }
-  return {
-    offset: 0,
-    limit,
-  };
+  return rawQueryPlanWindow(0, limit);
 };
 
 const acquireRawQueryWindow = (
   windows: Map<string, RawQueryExecutionWindowSlot>,
-  window: CompiledRawQuery<object, object>["window"],
+  window: RawQueryPlanWindow,
 ): void => {
-  const key = queryWindowCacheKey(window);
+  const key = window.cacheKey;
   const existing = windows.get(key);
   if (existing !== undefined) {
     existing.refs += 1;
@@ -202,9 +166,9 @@ const acquireRawQueryWindow = (
 
 const releaseRawQueryWindow = (
   windows: Map<string, RawQueryExecutionWindowSlot>,
-  window: CompiledRawQuery<object, object>["window"],
+  window: RawQueryPlanWindow,
 ): boolean => {
-  const key = queryWindowCacheKey(window);
+  const key = window.cacheKey;
   const existing = windows.get(key);
   if (existing === undefined) {
     return false;
@@ -263,12 +227,12 @@ export const acquireRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
     if (existing !== undefined) {
       const entry = existing;
       entry.refs += 1;
-      acquireRawQueryWindow(entry.windows, compiled.window);
+      acquireRawQueryWindow(entry.windows, compiled.plan.window);
       return leaseRawQueryExecution(store, entry.execution, compiled);
     }
 
     const windows = new Map<string, RawQueryExecutionWindowSlot>();
-    acquireRawQueryWindow(windows, compiled.window);
+    acquireRawQueryWindow(windows, compiled.plan.window);
     const execution = yield* makeRawQueryExecution(store, compiled, windows);
     map.set(key, {
       execution,
@@ -291,7 +255,7 @@ export const releaseRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
         return undefined;
       }
       const entry = existing;
-      if (!releaseRawQueryWindow(entry.windows, compiled.window)) {
+      if (!releaseRawQueryWindow(entry.windows, compiled.plan.window)) {
         return undefined;
       }
       if (entry.refs > 1) {

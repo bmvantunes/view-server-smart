@@ -74,6 +74,10 @@ _Avoid_: Map wrapper, row array, topic state bag
 The engine-side representation of a compiled Live Query that can evaluate snapshots and deltas and may be shared by equivalent subscriptions.
 _Avoid_: Query object, filter function
 
+**Raw Query Plan**:
+The compiled internal representation of a Raw Query, including predicate hints, deterministic ordering, projection, cache keys, and window scan inputs.
+_Avoid_: Query object, filter callback, storage scan object
+
 **Health Ledger**:
 The owner of counters and sampled health state for mutations, subscriptions, queues, backpressure, ingestion, and transport pressure.
 _Avoid_: Health object builder, metrics dump
@@ -132,6 +136,7 @@ _Avoid_: Browser write, send, emit
 - A **Grouped Query** returns group fields plus aggregate aliases.
 - A **Subscription** belongs to one **Live Query** and emits one **Snapshot** followed by zero or more **Deltas** and **Status Events**.
 - A **Column Live View Engine** owns one **Columnar Topic Store** per **View Server Topic**.
+- A **Raw Query Plan** is compiled once from a **Raw Query** before the **Columnar Topic Store** scans rows.
 - An **Active Query** may serve many equivalent **Subscriptions**.
 - A **Live Client** can subscribe to **Live Queries** but cannot publish mutations.
 - A **Runtime Client** can publish mutations but is not exposed to browsers by the Real View Server.
