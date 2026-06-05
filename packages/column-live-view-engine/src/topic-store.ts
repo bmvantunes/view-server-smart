@@ -10,7 +10,7 @@ import {
   releaseRawQueryExecution,
   type ActiveQueryStoreState,
 } from "./active-query";
-import { ColumnarTopicStore, type PreparedTopicRow } from "./columnar-topic-store";
+import { ColumnarTopicStore } from "./columnar-topic-store";
 import {
   evaluateCompiledGroupedQuery,
   makeIncrementalGroupedQueryExecution,
@@ -18,6 +18,12 @@ import {
   type CompiledGroupedQuery,
 } from "./grouped-query-compiler";
 import { createTopicHealthLedger } from "./topic-health-ledger";
+import {
+  runTopicStoreMutationTransaction,
+  withTopicStoreNotification,
+  withTopicStoreTransaction,
+  type TopicStoreMutationState,
+} from "./topic-store-mutation";
 import {
   prepareRawQuery,
   type CompiledRawQuery,
@@ -62,25 +68,7 @@ export type TopicStoreHealthView = {
   readonly compactionPending: boolean;
 };
 
-type TopicStoreState = {
-  readonly storage: ColumnarTopicStore;
-  readonly subscribers: Set<LiveTopicSubscriber>;
-  readonly mutationSemaphore: Semaphore.Semaphore;
-  readonly notificationSemaphore: Semaphore.Semaphore;
-  readonly healthLedger: ReturnType<typeof createTopicHealthLedger>;
-  readonly onCommit: () => void;
-};
-
-type TopicStoreMutationContext = {
-  readonly publishPrepared: (prepared: PreparedTopicRow) => number;
-  readonly publishPreparedMany: (preparedRows: ReadonlyArray<PreparedTopicRow>) => number;
-  readonly patch: <Patch extends Partial<RowObject>, Error>(
-    key: string,
-    patch: Patch,
-    invalidRow: InvalidRowErrorFactory<Error>,
-  ) => Effect.Effect<number, Error>;
-  readonly delete: (key: string) => number;
-};
+type TopicStoreState = TopicStoreMutationState;
 
 const topicStoreStates = new WeakMap<TopicStore, TopicStoreState>();
 
@@ -185,28 +173,6 @@ export const releaseTopicStoreMaterializedQueryExecution = <ResultRow extends Ro
 ): Effect.Effect<void> =>
   releaseMaterializedQueryExecution(topicStoreState(store).storage.readModel, compiled.cacheKey);
 
-const withTopicStoreTransaction = Effect.fn("ColumnLiveViewEngine.topicStore.transaction")(
-  function* <Success, Error, Requirements>(
-    store: TopicStore,
-    effect: Effect.Effect<Success, Error, Requirements>,
-  ) {
-    return yield* topicStoreState(store).mutationSemaphore.withPermits(1)(
-      Effect.uninterruptible(effect),
-    );
-  },
-);
-
-const withTopicStoreNotification = Effect.fn("ColumnLiveViewEngine.topicStore.notification")(
-  function* <Success, Error, Requirements>(
-    store: TopicStore,
-    effect: Effect.Effect<Success, Error, Requirements>,
-  ) {
-    return yield* topicStoreState(store).notificationSemaphore.withPermits(1)(
-      Effect.uninterruptible(effect),
-    );
-  },
-);
-
 export function acquireTopicStoreSubscription<
   Subscription extends { readonly close: () => Effect.Effect<void, never> },
   Error,
@@ -222,7 +188,7 @@ export function acquireTopicStoreSubscription<
   return acquireSubscriptionHandoff(
     (markAcquired: (subscription: Subscription) => Effect.Effect<void>) =>
       withTopicStoreTransaction(
-        store,
+        topicStoreState(store),
         acquire(
           {
             [topicStoreSubscriptionPermitBrand]: true,
@@ -255,103 +221,6 @@ const engineClosedStatusEvent = (
   code: "SubscriptionClosed",
   message: "Subscription closed because the engine closed.",
 });
-
-const commitTopicStoreState = (state: TopicStoreState): ReadonlyArray<LiveTopicSubscriber> => {
-  state.storage.advanceVersion();
-  state.onCommit();
-  return [...state.subscribers];
-};
-
-const recordTopicStoreMutation = (
-  state: TopicStoreState,
-  rowsChanged: number,
-  occurredAt: number,
-): ReadonlyArray<LiveTopicSubscriber> => {
-  const subscribersToNotify = commitTopicStoreState(state);
-  state.healthLedger.recordMutation({
-    version: state.storage.version,
-    rowCount: state.storage.rowCount,
-    rowsChanged,
-    occurredAt,
-  });
-  return subscribersToNotify;
-};
-
-const topicStoreMutationContext = (state: TopicStoreState): TopicStoreMutationContext => ({
-  publishPrepared: (prepared) => {
-    state.storage.setPrepared(prepared);
-    return 1;
-  },
-  publishPreparedMany: (preparedRows) => {
-    state.storage.setPreparedMany(preparedRows);
-    return preparedRows.length;
-  },
-  patch: (key, patch, invalidRow) =>
-    Effect.gen(function* () {
-      const prepared = yield* state.storage.preparePatch(key, patch, invalidRow);
-      state.storage.setPrepared(prepared);
-      return 1;
-    }),
-  delete: (key) => state.storage.delete(key),
-});
-
-const notifyTopicStoreSubscribers = Effect.fn("ColumnLiveViewEngine.topicStore.notify")(function* (
-  store: TopicStore,
-  subscribers: ReadonlyArray<LiveTopicSubscriber>,
-) {
-  yield* withTopicStoreNotification(
-    store,
-    Effect.gen(function* () {
-      for (const subscriber of subscribers) {
-        if (!subscriber.closed) {
-          yield* subscriber.notify(store);
-        }
-      }
-    }),
-  );
-});
-
-const runTopicStoreMutationTransaction = Effect.fn(
-  "ColumnLiveViewEngine.topicStore.mutationTransaction",
-)(function* <Error, Requirements>(
-  store: TopicStore,
-  mutate: (mutation: TopicStoreMutationContext) => Effect.Effect<number, Error, Requirements>,
-) {
-  yield* withTopicStoreMutationBatch(
-    store,
-    Effect.gen(function* () {
-      const subscribers = yield* withTopicStoreTransaction(
-        store,
-        Effect.gen(function* () {
-          const state = topicStoreState(store);
-          const rowsChanged = yield* mutate(topicStoreMutationContext(state));
-          const occurredAt = yield* Clock.currentTimeMillis;
-          return recordTopicStoreMutation(state, rowsChanged, occurredAt);
-        }),
-      );
-      yield* notifyTopicStoreSubscribers(store, subscribers);
-    }),
-  );
-});
-
-const withTopicStoreMutationBatch = Effect.fn("ColumnLiveViewEngine.topicStore.mutationBatch")(
-  function* <Success, Error, Requirements>(
-    store: TopicStore,
-    effect: Effect.Effect<Success, Error, Requirements>,
-  ) {
-    const ledger = topicStoreState(store).healthLedger;
-    return yield* Effect.acquireUseRelease(
-      Effect.sync(() => {
-        ledger.beginMutationBatch();
-      }),
-      () => effect,
-      () =>
-        Effect.sync(() => {
-          ledger.endMutationBatch();
-        }),
-    );
-  },
-);
 
 export const collectTopicStoreHealth = Effect.fn("ColumnLiveViewEngine.topicStore.health")(
   function* (store: TopicStore, closed: boolean) {
@@ -459,10 +328,11 @@ const reportTopicStoreSubscriptionBackpressure = Effect.fn(
 export const closeTopicStoreSubscription = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.close",
 )(function* (store: TopicStore, subscriber: LiveTopicSubscriber, finalize: Effect.Effect<void>) {
+  const state = topicStoreState(store);
   yield* withTopicStoreNotification(
-    store,
+    state,
     withTopicStoreTransaction(
-      store,
+      state,
       Effect.gen(function* () {
         if (subscriber.closed) {
           return;
@@ -478,8 +348,9 @@ export const closeTopicStoreSubscription = Effect.fn(
 export const closeBackpressuredTopicStoreSubscription = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.closeBackpressured",
 )(function* (store: TopicStore, subscriber: LiveTopicSubscriber, finalize: Effect.Effect<void>) {
+  const state = topicStoreState(store);
   yield* withTopicStoreTransaction(
-    store,
+    state,
     Effect.gen(function* () {
       if (subscriber.closed) {
         return;
@@ -495,10 +366,11 @@ export const closeBackpressuredTopicStoreSubscription = Effect.fn(
 export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset")(function* (
   store: TopicStore,
 ) {
+  const state = topicStoreState(store);
   yield* withTopicStoreNotification(
-    store,
+    state,
     withTopicStoreTransaction(
-      store,
+      state,
       Effect.gen(function* () {
         const subscribers = yield* Effect.sync(() => {
           return drainTopicStoreSubscribersForReset(topicStoreState(store));
@@ -515,10 +387,11 @@ export const resetTopicStore = Effect.fn("ColumnLiveViewEngine.topicStore.reset"
 export const closeTopicStoreSubscriptions = Effect.fn(
   "ColumnLiveViewEngine.topicStore.closeSubscriptions",
 )(function* (store: TopicStore) {
+  const state = topicStoreState(store);
   yield* withTopicStoreNotification(
-    store,
+    state,
     withTopicStoreTransaction(
-      store,
+      state,
       Effect.gen(function* () {
         const subscribers = yield* Effect.sync(() => {
           return drainTopicStoreSubscribersForClose(topicStoreState(store));
@@ -537,7 +410,7 @@ export const publishTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.p
   Row extends RowObject,
 >(store: TopicStore, row: Row, invalidRow: InvalidRowErrorFactory<Error>) {
   const prepared = yield* topicStoreState(store).storage.prepareRow(row, invalidRow);
-  yield* runTopicStoreMutationTransaction(store, (mutation) =>
+  yield* runTopicStoreMutationTransaction(topicStoreState(store), store, (mutation) =>
     Effect.sync(() => {
       return mutation.publishPrepared(prepared);
     }),
@@ -551,7 +424,7 @@ export const publishTopicStoreRows = Effect.fn("ColumnLiveViewEngine.topicStore.
     invalidRow: InvalidRowErrorFactory<Error>,
   ) {
     const preparedRows = yield* topicStoreState(store).storage.prepareRows(rows, invalidRow);
-    yield* runTopicStoreMutationTransaction(store, (mutation) =>
+    yield* runTopicStoreMutationTransaction(topicStoreState(store), store, (mutation) =>
       Effect.sync(() => {
         return mutation.publishPreparedMany(preparedRows);
       }),
@@ -563,7 +436,7 @@ export const patchTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.pat
   Patch extends Partial<RowObject>,
   Error,
 >(store: TopicStore, key: string, patch: Patch, invalidRow: InvalidRowErrorFactory<Error>) {
-  yield* runTopicStoreMutationTransaction(store, (mutation) =>
+  yield* runTopicStoreMutationTransaction(topicStoreState(store), store, (mutation) =>
     mutation.patch(key, patch, invalidRow),
   );
 });
@@ -572,7 +445,7 @@ export const deleteTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.de
   store: TopicStore,
   key: string,
 ) {
-  yield* runTopicStoreMutationTransaction(store, (mutation) =>
+  yield* runTopicStoreMutationTransaction(topicStoreState(store), store, (mutation) =>
     Effect.sync(() => {
       return mutation.delete(key);
     }),
