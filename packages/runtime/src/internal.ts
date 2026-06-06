@@ -1,6 +1,6 @@
 import type { ViewServerLiveClient, ViewServerRuntimeLiveClient } from "@view-server/client";
 import type { ViewServerConfig } from "@view-server/config";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
 import {
   makeDefaultRuntimeDependencies,
@@ -77,4 +77,41 @@ export const makeViewServerRuntimeWithDependencies: <
     health: runtimeCore.client.health,
     close,
   };
+});
+
+const logRuntimeStarted = Effect.fn("ViewServerRuntime.logStarted")(function* <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+>(runtime: ViewServerRuntime<Topics>) {
+  yield* Effect.logInfo(`View Server WebSocket listening at ${runtime.url}`);
+  yield* Effect.logInfo(`View Server health endpoint listening at ${runtime.healthUrl}`);
+});
+
+const makeViewServerRuntimeLaunchLayer = <const Topics extends ViewServerRuntimeTopicDefinitions>(
+  dependencies: ViewServerRuntimeDependencies<Topics>,
+  config: ViewServerConfig<Topics>,
+  options: ViewServerRuntimeOptions,
+) =>
+  Layer.effectDiscard(
+    Effect.acquireRelease(
+      makeViewServerRuntimeWithDependencies(dependencies, config, options).pipe(
+        Effect.tap(logRuntimeStarted),
+      ),
+      (runtime) => runtime.close,
+    ),
+  );
+
+export const runViewServerRuntimeWithDependencies: <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+>(
+  dependencies: ViewServerRuntimeDependencies<Topics>,
+  config: ViewServerConfig<Topics>,
+  options?: ViewServerRuntimeOptions,
+) => Effect.Effect<never, HttpServerError.ServeError> = Effect.fn(
+  "ViewServerRuntime.runWithDependencies",
+)(function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
+  dependencies: ViewServerRuntimeDependencies<Topics>,
+  config: ViewServerConfig<Topics>,
+  options: ViewServerRuntimeOptions = {},
+) {
+  return yield* makeViewServerRuntimeLaunchLayer(dependencies, config, options).pipe(Layer.launch);
 });

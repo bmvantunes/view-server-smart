@@ -10,30 +10,20 @@ Node entrypoints should use `@effect/platform-node`'s `NodeRuntime.runMain` so
 
 ```ts
 import { NodeRuntime } from "@effect/platform-node";
-import { createViewServerRuntime } from "@view-server/runtime";
-import { Effect } from "effect";
+import { runViewServerRuntime } from "@view-server/runtime";
 import { viewServer } from "./view-server-config";
 
-const program = Effect.scoped(
-  Effect.gen(function* () {
-    const runtime = yield* createViewServerRuntime(viewServer, {
-      host: "127.0.0.1",
-      websocketPort: 8080,
-    });
-
-    yield* Effect.addFinalizer(() => runtime.close);
-    yield* Effect.logInfo(`View Server WebSocket listening at ${runtime.url}`);
-    yield* Effect.logInfo(`View Server health endpoint listening at ${runtime.healthUrl}`);
-    yield* Effect.never;
+NodeRuntime.runMain(
+  runViewServerRuntime(viewServer, {
+    host: "127.0.0.1",
+    websocketPort: 8080,
   }),
 );
-
-NodeRuntime.runMain(program);
 ```
 
-`runtime.healthUrl` serves the cached runtime health snapshot for deployment
-readiness checks. Internal `bigint` health fields, such as Kafka lag, are encoded
-as decimal strings in the JSON response.
+The same-server `GET /health` endpoint serves the cached runtime health snapshot
+for deployment readiness checks. Internal `bigint` health fields, such as Kafka
+lag, are encoded as decimal strings in the JSON response.
 
 Browser React code keeps using the normal provider and hooks:
 

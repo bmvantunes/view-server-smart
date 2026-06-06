@@ -85,6 +85,7 @@ rejectExport("@view-server/react", reactPackage, "createInMemoryViewServerReact"
 requireExport("@view-server/react/testing", reactTestingPackage, "createInMemoryViewServerReact");
 requireExport("@view-server/runtime", runtimeRootPackage, "makeViewServerRuntime");
 requireExport("@view-server/runtime", runtimeRootPackage, "createViewServerRuntime");
+requireExport("@view-server/runtime", runtimeRootPackage, "runViewServerRuntime");
 requireExport("@view-server/server", serverPackage, "makeViewServerWebSocketServer");
 requireExport("@view-server/server", serverPackage, "createViewServerWebSocketServer");
 

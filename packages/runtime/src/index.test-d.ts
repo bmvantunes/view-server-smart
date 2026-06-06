@@ -2,8 +2,10 @@ import { describe, expectTypeOf, it } from "@effect/vitest";
 import { defineViewServerConfig, type ViewServerRuntimeError } from "@view-server/config";
 import type { Effect } from "effect";
 import { Schema } from "effect";
+import type { HttpServerError } from "effect/unstable/http";
 import {
   makeViewServerRuntime,
+  runViewServerRuntime,
   type ViewServerRuntime,
   type ViewServerRuntimeOptions,
 } from "./index";
@@ -23,6 +25,7 @@ const viewServer = defineViewServerConfig({
 });
 
 const runtimeEffect = makeViewServerRuntime(viewServer);
+const runEffect = runViewServerRuntime(viewServer);
 declare const runtime: Effect.Success<typeof runtimeEffect>;
 
 describe("runtime type contracts", () => {
@@ -37,6 +40,8 @@ describe("runtime type contracts", () => {
     expectTypeOf(runtime.close).toEqualTypeOf<
       ViewServerRuntime<typeof viewServer.topics>["close"]
     >();
+    expectTypeOf<Effect.Success<typeof runEffect>>().toEqualTypeOf<never>();
+    expectTypeOf<Effect.Error<typeof runEffect>>().toEqualTypeOf<HttpServerError.ServeError>();
 
     const publish = runtime.client.publish("orders", {
       id: "order-1",

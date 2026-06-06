@@ -3,10 +3,13 @@ import type { ColumnLiveViewEngineHealth } from "@view-server/column-live-view-e
 import { makeViewServerClient } from "@view-server/client/remote";
 import { defineViewServerConfig } from "@view-server/config";
 import { makeViewServerRuntimeCore } from "@view-server/runtime-core";
-import { Effect, Exit, Fiber, Schema, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
 import type { ViewServerRuntimeDependencies } from "./internal";
-import { makeViewServerRuntimeWithDependencies } from "./internal";
-import { makeViewServerRuntime } from "./index";
+import {
+  makeViewServerRuntimeWithDependencies,
+  runViewServerRuntimeWithDependencies,
+} from "./internal";
+import { makeViewServerRuntime, runViewServerRuntime } from "./index";
 import { makeViewServerRuntimeTransportHealth } from "./transport-health";
 
 const Order = Schema.Struct({
@@ -256,6 +259,59 @@ describe("@view-server/runtime", () => {
 
       expect(serverCloseCount).toBe(1);
       expect(health.status).toBe("stopping");
+    }),
+  );
+
+  it.live("run helper keeps the runtime alive until the main fiber is interrupted", () =>
+    Effect.gen(function* () {
+      let serverCloseCount = 0;
+      const serverStarted = yield* Deferred.make<void>();
+      const dependencies: ViewServerRuntimeDependencies<typeof viewServer.topics> = {
+        makeRuntimeCore: makeViewServerRuntimeCore,
+        makeServer: () =>
+          Deferred.succeed(serverStarted, void 0).pipe(
+            Effect.as({
+              url: "ws://127.0.0.1:0/rpc",
+              healthUrl: "http://127.0.0.1:0/health",
+              close: Effect.sync(() => {
+                serverCloseCount += 1;
+              }),
+            }),
+          ),
+      };
+
+      const fiber = yield* runViewServerRuntimeWithDependencies(dependencies, viewServer).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(serverStarted);
+      yield* Effect.sleep("10 millis");
+      expect(serverCloseCount).toBe(0);
+
+      yield* Fiber.interrupt(fiber);
+      expect(serverCloseCount).toBe(1);
+    }),
+  );
+
+  it.live("public run helper starts a launchable websocket runtime", () =>
+    Effect.gen(function* () {
+      const fiber = yield* runViewServerRuntime(viewServer, {
+        host: "127.0.0.1",
+        websocketPort: 0,
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+
+      yield* Effect.sleep("20 millis");
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+
+  it.live("public run helper supports default runtime options", () =>
+    Effect.gen(function* () {
+      const fiber = yield* runViewServerRuntime(viewServer).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+
+      yield* Effect.sleep("20 millis");
+      yield* Fiber.interrupt(fiber);
     }),
   );
 
