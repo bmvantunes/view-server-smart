@@ -7357,6 +7357,58 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     expect(rangeNotSmallerThanBudget).toBeUndefined();
   });
 
+  it("does not materialize broad scalar candidate buckets during raw scans", () => {
+    const openKey = scalarEqualityKey("open");
+    const rows = [
+      ...Array.from({ length: 100_001 }, (_value, index) =>
+        order(`open-${index}`, "open", index, index),
+      ),
+      order("closed-row", "closed", 0, 0),
+    ];
+    const metadata = rawQueryCompilerMetadata(Order);
+    const state = {
+      columns: makeColumns(metadata, [
+        ["id", rows.map((row) => row.id)],
+        ["price", rows.map((row) => row.price)],
+        ["status", rows.map((row) => row.status)],
+      ]),
+      orderedSlotIndexes: new Map(),
+      rawQueryMetadata: metadata,
+      scalarPredicateIndexes: createScalarPredicateIndexes(),
+      slots: rows.map((row) => ({
+        key: row.id,
+        row,
+      })),
+    };
+
+    const result = scanTopicRawWindow(state, {
+      predicate: {
+        filters: [
+          {
+            field: "status",
+            operator: "in",
+            values: ["open"],
+            valueKeys: new Set([openKey]),
+          },
+        ],
+        callbackRequired: false,
+        callbackSkippable: true,
+      },
+      orderBy: [],
+      matches: () => {
+        throw new Error("broad exact scalar fallback should not call row callbacks");
+      },
+      compare: (left, right) => left.key.localeCompare(right.key),
+      offset: 0,
+      limit: 1,
+    });
+
+    expect(result.keys).toStrictEqual(["open-0"]);
+    expect(result.totalRows).toBe(rows.length - 1);
+    expect(state.scalarPredicateIndexes.get("status")?.indexedKeys.has(openKey)).toBe(false);
+    expect(state.scalarPredicateIndexes.get("status")?.buckets.has(openKey)).toBe(false);
+  });
+
   it.effect("uses bigint range hints conservatively for manual plans", () =>
     Effect.gen(function* () {
       const store = new TopicStore("positions", Position, "id", () => {});

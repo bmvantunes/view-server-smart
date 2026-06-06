@@ -31,6 +31,8 @@ export type TopicRawWindowScanState = {
 };
 
 const maxBoundedRawWindowEnd = 1_024;
+const maxMaterializedPredicateCandidateSlots = 100_000;
+const materializedPredicateCandidateSlotBudget = maxMaterializedPredicateCandidateSlots + 1;
 
 export const scanTopicRawWindow = (
   state: TopicRawWindowScanState,
@@ -43,7 +45,7 @@ export const scanTopicRawWindow = (
       allowScalarIndexBuild: false,
       exactRangeCandidates: plan.predicate.callbackSkippable === true,
       excludedField: orderedWindow.candidateExcludedField,
-      maxSlotCount: orderedSlotCount,
+      maxSlotCount: Math.min(orderedSlotCount, materializedPredicateCandidateSlotBudget),
     });
     if (candidateSlots !== undefined && candidateSlots.slots.length < orderedSlotCount) {
       const compareSlots = rawWindowSlotComparator(state, plan)!;
@@ -58,7 +60,7 @@ export const scanTopicRawWindow = (
   const candidateSlots = selectedPredicateCandidateSlots(state, plan.predicate.filters, {
     allowScalarIndexBuild: true,
     exactRangeCandidates: plan.predicate.callbackSkippable === true,
-    maxSlotCount: state.slots.length,
+    maxSlotCount: Math.min(state.slots.length, materializedPredicateCandidateSlotBudget),
   });
   if (candidateSlots !== undefined) {
     return scanRawWindowCandidateSlots(state, plan, compareSlots, candidateSlots);
