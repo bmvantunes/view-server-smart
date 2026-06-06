@@ -17,18 +17,17 @@ const restrictedTopicStoreHelpers = [
   {
     name: "makeTopicStoreSubscriptionPermit",
     pattern: /\bmakeTopicStoreSubscriptionPermit\b/,
-    allowedPaths: new Set([topicStoreFile, topicStoreStateFile, topicStoreSubscriptionFile]),
+    allowedPaths: new Set([topicStoreStateFile, topicStoreSubscriptionFile]),
   },
   {
     name: "topicStoreRawQueryMetadata",
     pattern: /\btopicStoreRawQueryMetadata\b/,
-    allowedPaths: new Set([topicStoreFile, topicStoreQueryFile, topicStoreStateFile]),
+    allowedPaths: new Set([topicStoreQueryFile, topicStoreStateFile]),
   },
   {
     name: "topicStoreReadModel",
     pattern: /\btopicStoreReadModel\b/,
     allowedPaths: new Set([
-      topicStoreFile,
       topicStoreHealthFile,
       topicStoreLifecycleFile,
       topicStoreQueryFile,
@@ -39,7 +38,6 @@ const restrictedTopicStoreHelpers = [
     name: "topicStoreState",
     pattern: /\btopicStoreState\b/,
     allowedPaths: new Set([
-      topicStoreFile,
       topicStoreHealthFile,
       topicStoreLifecycleFile,
       topicStoreMutationFile,
@@ -71,6 +69,58 @@ const isTestFile = (path: string): boolean =>
   path.endsWith(".test.ts") || path.endsWith(".test-d.ts");
 
 const violations: Array<string> = [];
+const topicStoreStateExportViolations: Array<string> = [];
+
+const restrictedTopicStoreStateExports = [
+  {
+    label: "namespace import",
+    pattern: /import\s+\*\s+as\s+\w+\s+from\s+["']\.\/topic-store-state["']/,
+  },
+  {
+    label: "wildcard re-export",
+    pattern: /export\s+\*\s+from\s+["']\.\/topic-store-state["']/,
+  },
+  {
+    label: "namespace re-export",
+    pattern: /export\s+\*\s+as\s+\w+\s+from\s+["']\.\/topic-store-state["']/,
+  },
+  {
+    label: "subscription permit factory re-export",
+    pattern:
+      /export\s+\{[^}]*\bmakeTopicStoreSubscriptionPermit\b[^}]*\}\s+from\s+["']\.\/topic-store-state["']/s,
+  },
+  {
+    label: "local subscription permit factory re-export",
+    pattern: /export\s+\{[^}]*\bmakeTopicStoreSubscriptionPermit\b[^}]*\}/s,
+  },
+  {
+    label: "raw query metadata helper re-export",
+    pattern:
+      /export\s+\{[^}]*\btopicStoreRawQueryMetadata\b[^}]*\}\s+from\s+["']\.\/topic-store-state["']/s,
+  },
+  {
+    label: "local raw query metadata helper re-export",
+    pattern: /export\s+\{[^}]*\btopicStoreRawQueryMetadata\b[^}]*\}/s,
+  },
+  {
+    label: "read model helper re-export",
+    pattern:
+      /export\s+\{[^}]*\btopicStoreReadModel\b[^}]*\}\s+from\s+["']\.\/topic-store-state["']/s,
+  },
+  {
+    label: "local read model helper re-export",
+    pattern: /export\s+\{[^}]*\btopicStoreReadModel\b[^}]*\}/s,
+  },
+  {
+    label: "state helper re-export",
+    pattern:
+      /export\s+\{[^}]*\btopicStoreState\b[^}]*\}\s+from\s+["']\.\/topic-store-state["']/s,
+  },
+  {
+    label: "local state helper re-export",
+    pattern: /export\s+\{[^}]*\btopicStoreState\b[^}]*\}/s,
+  },
+] as const;
 
 for (const path of sourceFiles(engineSourceRoot)) {
   if (isTestFile(path)) {
@@ -78,6 +128,17 @@ for (const path of sourceFiles(engineSourceRoot)) {
   }
 
   const contents = readFileSync(path, "utf8");
+  if (path !== topicStoreStateFile) {
+    for (const restriction of restrictedTopicStoreStateExports) {
+      if (!restriction.pattern.test(contents)) {
+        continue;
+      }
+      topicStoreStateExportViolations.push(
+        `${relative(repoRoot, path)} has a restricted ${restriction.label}`,
+      );
+    }
+  }
+
   for (const helper of restrictedTopicStoreHelpers) {
     if (helper.allowedPaths.has(path) || !helper.pattern.test(contents)) {
       continue;
@@ -92,6 +153,15 @@ if (violations.length > 0) {
       "Production engine modules must not use restricted TopicStore state helpers.",
       "Route query/read-model behavior through TopicStore helper operations instead.",
       ...violations.map((path) => `- ${path}`),
+    ].join("\n"),
+  );
+}
+
+if (topicStoreStateExportViolations.length > 0) {
+  throw new Error(
+    [
+      "Production engine modules must not re-export restricted TopicStore state internals.",
+      ...topicStoreStateExportViolations.map((path) => `- ${path}`),
     ].join("\n"),
   );
 }

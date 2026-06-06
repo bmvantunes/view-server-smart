@@ -59,9 +59,8 @@ import {
   registerTopicStoreSubscription,
   resetTopicStore,
   TopicStore,
-  topicStoreRawQueryMetadata,
-  topicStoreReadModel,
 } from "./topic-store";
+import { topicStoreRawQueryMetadata, topicStoreReadModel } from "./topic-store-state";
 
 const Order = Schema.Struct({
   id: Schema.String,

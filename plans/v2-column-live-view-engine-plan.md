@@ -1313,6 +1313,53 @@ Raw predicate index knobs:
 For decision-quality large-row runs, keep `--no-cache` and use multiple iterations. One-sample runs
 are useful only to verify feasibility and approximate scale.
 
+Current raw live fanout benchmark harness:
+
+```bash
+vp run --no-cache column-live-view-engine#bench:raw-live-fanout
+```
+
+This harness uses Vitest `bench()` against the public `ColumnLiveViewEngine` subscribe/publish path,
+not scanner internals. It seeds one topic, opens many raw live subscriptions, drains initial
+snapshots, publishes a matching row, and waits for every subscriber to receive a delta for the
+publish version. The same-window case also verifies the inserted row appears in every subscriber
+delta. It runs one fanout case per process so large profiles do not hold multiple full engines in
+memory:
+
+- same-query/same-window subscribers
+- same-query/ten-window subscribers
+
+It writes case-specific artifacts under `packages/column-live-view-engine/.artifacts/`, such as
+`raw-live-fanout-same-window-100000rows-50subs.json` and
+`raw-live-fanout-ten-window-1000000rows-250subs.json`. Run each row count in a separate process,
+and run each fanout case separately, so previous profiles do not contaminate GC/RSS/latency or
+overwrite each other:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=same-window VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout
+VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=ten-window VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout
+VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=same-window VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=250 vp run --no-cache column-live-view-engine#bench:raw-live-fanout
+VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=ten-window VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=250 vp run --no-cache column-live-view-engine#bench:raw-live-fanout
+```
+
+For the default case-specific scripts:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout:same-window
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout:ten-window
+```
+
+Raw live fanout knobs:
+
+- `VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE`: `same-window` or `ten-window`.
+- `VIEW_SERVER_ENGINE_BENCH_ROWS`: row count for this benchmark process.
+- `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding.
+- `VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS`: live subscriber count.
+- `VIEW_SERVER_ENGINE_BENCH_ITERATIONS`: benchmark iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: benchmark time budget per case.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: warmup iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: warmup time budget per case.
+
 Each production/runtime benchmark artifact must include:
 
 - row count

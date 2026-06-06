@@ -10,12 +10,8 @@ import {
   releaseRawQueryExecution,
 } from "./active-query";
 import { prepareRawQuery } from "./raw-query-compiler";
-import {
-  publishTopicStoreRow,
-  TopicStore,
-  topicStoreRawQueryMetadata,
-  topicStoreReadModel,
-} from "./topic-store";
+import { publishTopicStoreRow, TopicStore } from "./topic-store";
+import { topicStoreRawQueryMetadata, topicStoreReadModel } from "./topic-store-state";
 
 const invalidRow = (_topic: string, message: string): Error => new Error(message);
 

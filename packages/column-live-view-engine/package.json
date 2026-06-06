@@ -14,6 +14,9 @@
   },
   "scripts": {
     "build": "vp pack",
+    "bench:raw-live-fanout": "vp test bench src/raw-live-fanout.bench.ts --run --testTimeout 0 --outputJson .artifacts/raw-live-fanout-${VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE:-manual}-${VIEW_SERVER_ENGINE_BENCH_ROWS:-default}rows-${VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS:-default}subs.json",
+    "bench:raw-live-fanout:same-window": "VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=same-window vp test bench src/raw-live-fanout.bench.ts --run --testTimeout 0 --outputJson .artifacts/raw-live-fanout-same-window-${VIEW_SERVER_ENGINE_BENCH_ROWS:-default}rows-${VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS:-default}subs.json",
+    "bench:raw-live-fanout:ten-window": "VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=ten-window vp test bench src/raw-live-fanout.bench.ts --run --testTimeout 0 --outputJson .artifacts/raw-live-fanout-ten-window-${VIEW_SERVER_ENGINE_BENCH_ROWS:-default}rows-${VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS:-default}subs.json",
     "bench:raw-predicate-index": "vp test bench src/raw-predicate-index.bench.ts --run --testTimeout 0 --outputJson .artifacts/raw-predicate-index.json",
     "bench:raw-snapshot": "vp test bench src/raw-snapshot.bench.ts --run --testTimeout 0 --outputJson .artifacts/raw-snapshot.json",
     "test": "vp test run --coverage --typecheck"

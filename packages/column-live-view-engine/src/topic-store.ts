@@ -1,6 +1,6 @@
-import { TopicStore, topicStoreRawQueryMetadata, topicStoreReadModel } from "./topic-store-state";
+import { TopicStore } from "./topic-store-state";
 
-export { TopicStore, topicStoreRawQueryMetadata, topicStoreReadModel };
+export { TopicStore };
 export {
   deleteTopicStoreRow,
   patchTopicStoreRow,
