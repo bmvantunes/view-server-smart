@@ -1306,11 +1306,15 @@ Current broad-scan optimization signal:
 - Exact raw scans precompile slot predicates per scan, resolve columns once, use direct numeric
   column comparisons for finite number ranges/orderings, and avoid row-object reads when
   `callbackSkippable` proves column predicates are authoritative.
+- Count-only raw scans (`limit: 0`) now count matching slots without ordering/window materialization.
+  Selective predicate candidates are still used when available; broad predicates fall back to an
+  O(rows) count-only scan without comparator/sort/window work.
 - These are warm/shared-engine benchmark signals: the raw snapshot harness has an existing live
   subscription and shared same-process indexes. They are not cold index-build numbers.
 - 10M raw snapshot `compound filter + top-k sort`: ~1983ms mean -> ~959ms mean.
-- 10M raw snapshot `filtered totalRows via zero-row window`: ~727ms mean -> ~635ms mean. This case
-  was noisy in the current run: median/p75 stayed near ~356ms while one outlier lifted mean/max.
+- 10M raw snapshot `filtered totalRows via zero-row window`: ~727ms mean -> ~635ms mean -> one
+  noisy ~470ms mean run after the count-only branch. This case remains a warm/shared-engine signal
+  and still scans broad predicates.
 - 10M raw snapshot `equality filter + top-k sort`: ~442ms mean -> ~280ms mean.
 - 10M raw snapshot `range filter + top-k sort`: ~224ms mean -> ~52ms mean.
 - 1M raw write sanity, base mode: single append ~0.049ms mean, batch append ~14.7ms mean.

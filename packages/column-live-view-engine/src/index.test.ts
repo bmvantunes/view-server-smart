@@ -5710,6 +5710,31 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(zeroLimitPlan.keys).toStrictEqual([]);
       expect(zeroLimitPlan.totalRows).toBe(2);
 
+      let zeroLimitCompareCount = 0;
+      let zeroLimitMatchCount = 0;
+      const callbackRequiredZeroLimitPlan = readModel.scanRawWindow({
+        predicate: {
+          filters: [{ field: "price", operator: "gte", value: 20 }],
+          callbackRequired: true,
+        },
+        orderBy: [{ field: "price", direction: "desc" }],
+        storageOrderBy: [{ field: "price", direction: "desc" }],
+        matches: (row) => {
+          zeroLimitMatchCount += 1;
+          return fieldValue(row, "id") === "3";
+        },
+        compare: () => {
+          zeroLimitCompareCount += 1;
+          return 0;
+        },
+        offset: 1,
+        limit: 0,
+      });
+      expect(callbackRequiredZeroLimitPlan.keys).toStrictEqual([]);
+      expect(callbackRequiredZeroLimitPlan.totalRows).toBe(1);
+      expect(zeroLimitMatchCount).toBe(2);
+      expect(zeroLimitCompareCount).toBe(0);
+
       const unsafeWindowEndPlan = readModel.scanRawWindow({
         predicate: {
           filters: [],
@@ -5964,6 +5989,30 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(initialPriceMatch.keys).toStrictEqual(["matched"]);
 
+      const initialPriceMatchLargeLimit = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20],
+              valueKeys: new Set(["number:20"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("large-limit scalar candidate predicates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: 2_000,
+      });
+      expect(initialPriceMatchLargeLimit.keys).toStrictEqual(["matched"]);
+      expect(initialPriceMatchLargeLimit.totalRows).toBe(1);
+
       const initialPriceCountOnly = readModel.scanRawWindow({
         predicate: {
           filters: [
@@ -5987,6 +6036,29 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(initialPriceCountOnly.keys).toStrictEqual([]);
       expect(initialPriceCountOnly.totalRows).toBe(1);
+
+      const selectiveCountOnlyWithCallbackFilter = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "in",
+              values: [20, 40],
+              valueKeys: new Set(["number:20", "number:40"]),
+            },
+          ],
+          callbackRequired: true,
+        },
+        orderBy: [],
+        matches: (row) => fieldValue(row, "id") === "noted",
+        compare: () => {
+          throw new Error("selective count-only candidates should not compare rows");
+        },
+        offset: 0,
+        limit: 0,
+      });
+      expect(selectiveCountOnlyWithCallbackFilter.keys).toStrictEqual([]);
+      expect(selectiveCountOnlyWithCallbackFilter.totalRows).toBe(1);
 
       const initialRangeGreaterThan = readModel.scanRawWindow({
         predicate: {
@@ -6153,6 +6225,59 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         limit: undefined,
       });
       expect(rangeCandidateRejectedByIncompatibleSecondFilter.keys).toStrictEqual([]);
+
+      const warmedStatusBucket = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "status",
+              operator: "in",
+              values: ["closed"],
+              valueKeys: new Set(["string:6:closed"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("status bucket warmup should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: undefined,
+      });
+      expect(warmedStatusBucket.keys).toStrictEqual(["cold"]);
+
+      const orderedRangeCandidateRejectedBySecondFilter = readModel.scanRawWindow({
+        predicate: {
+          filters: [
+            {
+              field: "price",
+              operator: "gt",
+              value: 0,
+            },
+            {
+              field: "status",
+              operator: "in",
+              values: ["closed"],
+              valueKeys: new Set(["string:6:closed"]),
+            },
+          ],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => {
+          throw new Error("ordered compound range candidates should not call row callbacks");
+        },
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      });
+      expect(orderedRangeCandidateRejectedBySecondFilter.keys).toStrictEqual(["cold"]);
+      expect(orderedRangeCandidateRejectedBySecondFilter.totalRows).toBe(1);
 
       const partialPriceBuckets = readModel.scanRawWindow({
         predicate: {
@@ -6913,6 +7038,103 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
     expect(emptyRange.keys).toStrictEqual([]);
     expect(emptyRange.totalRows).toBe(0);
+  });
+
+  it("keeps count-only scans candidate-aware for selective scalar predicates", () => {
+    const rows = [
+      order("first", "open", 10, 1),
+      order("second", "closed", 20, 2),
+      order("third", "open", 30, 3),
+      order("fourth", "open", 40, 4),
+    ];
+    const slots = rows.map((row) => ({
+      key: row.id,
+      row,
+    }));
+    const metadata = rawQueryCompilerMetadata(Order);
+    const sourceStatusColumn = createTopicColumnValuesFromArray(
+      "status",
+      metadata,
+      rows.map((row) => row.status),
+    );
+    let statusReadCount = 0;
+    const observedStatusColumn: TopicColumnValues = {
+      kind: "generic",
+      get length() {
+        return sourceStatusColumn.length;
+      },
+      get(slot) {
+        statusReadCount += 1;
+        return columnValue(sourceStatusColumn, slot);
+      },
+    };
+    const state = {
+      columns: new Map<string, TopicColumnValues>([
+        [
+          "id",
+          createTopicColumnValuesFromArray(
+            "id",
+            metadata,
+            rows.map((row) => row.id),
+          ),
+        ],
+        ["status", observedStatusColumn],
+      ]),
+      orderedSlotIndexes: new Map(),
+      rawQueryMetadata: metadata,
+      scalarPredicateIndexes: createScalarPredicateIndexes(),
+      slots,
+    };
+
+    const warmClosedBucket = scanTopicRawWindow(state, {
+      predicate: {
+        filters: [
+          {
+            field: "status",
+            operator: "in",
+            values: ["closed"],
+            valueKeys: new Set(["string:6:closed"]),
+          },
+        ],
+        callbackRequired: false,
+        callbackSkippable: true,
+      },
+      orderBy: [],
+      matches: () => {
+        throw new Error("scalar bucket warmup should not call row callbacks");
+      },
+      compare: (left, right) => left.key.localeCompare(right.key),
+      offset: 0,
+      limit: undefined,
+    });
+    expect(warmClosedBucket.keys).toStrictEqual(["second"]);
+    expect(statusReadCount).toBeGreaterThan(1);
+
+    statusReadCount = 0;
+    const countClosedRows = scanTopicRawWindow(state, {
+      predicate: {
+        filters: [
+          {
+            field: "status",
+            operator: "in",
+            values: ["closed"],
+            valueKeys: new Set(["string:6:closed"]),
+          },
+        ],
+        callbackRequired: true,
+      },
+      orderBy: [],
+      matches: (row) => fieldValue(row, "id") === "second",
+      compare: () => {
+        throw new Error("count-only scalar candidates should not compare rows");
+      },
+      offset: 0,
+      limit: 0,
+    });
+
+    expect(countClosedRows.keys).toStrictEqual([]);
+    expect(countClosedRows.totalRows).toBe(1);
+    expect(statusReadCount).toBe(1);
   });
 
   it("keeps exact candidate scans aligned with bounded and ordered raw windows", () => {

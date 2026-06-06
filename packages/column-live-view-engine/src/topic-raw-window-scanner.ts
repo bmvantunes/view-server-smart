@@ -39,6 +39,10 @@ export const scanTopicRawWindow = (
   plan: TopicRawWindowScanPlan<object>,
 ): TopicRawWindowScanResult<object> => {
   const matchesSlot = rawPredicateMatchesSlot(state, plan);
+  if (plan.limit === 0) {
+    return countRawWindowSlots(state, plan, matchesSlot);
+  }
+
   const orderedWindow = rawWindowOrderedWindow(state, plan);
   if (orderedWindow !== undefined) {
     const orderedSlotCount = orderedRawWindowSlotCount(orderedWindow);
@@ -70,6 +74,43 @@ export const scanTopicRawWindow = (
 };
 
 export { insertSlotIntoRawWindowIndexes };
+
+const countRawWindowSlots = (
+  state: TopicRawWindowScanState,
+  plan: TopicRawWindowScanPlan<object>,
+  matchesSlot: (slot: number) => boolean,
+): TopicRawWindowScanResult<object> => {
+  const candidateSlots = selectedPredicateCandidateSlots(state, plan.predicate.filters, {
+    allowScalarIndexBuild: true,
+    exactRangeCandidates: plan.predicate.callbackSkippable === true,
+    maxSlotCount: Math.min(state.slots.length, materializedPredicateCandidateSlotBudget),
+  });
+  if (candidateSlots !== undefined) {
+    return countRawWindowCandidateSlots(state, matchesSlot, candidateSlots);
+  }
+
+  let totalRows = 0;
+  for (let slot = 0; slot < state.slots.length; slot += 1) {
+    if (matchesSlot(slot)) {
+      totalRows += 1;
+    }
+  }
+  return rawWindowScanResult(state, [], totalRows);
+};
+
+const countRawWindowCandidateSlots = (
+  state: TopicRawWindowScanState,
+  matchesSlot: (slot: number) => boolean,
+  candidateSlots: PredicateCandidateSlots,
+): TopicRawWindowScanResult<object> => {
+  let totalRows = 0;
+  for (const slot of candidateSlots.slots) {
+    if (matchesSlot(slot)) {
+      totalRows += 1;
+    }
+  }
+  return rawWindowScanResult(state, [], totalRows);
+};
 
 const scanRawWindowOrderedSlots = (
   state: TopicRawWindowScanState,
@@ -122,9 +163,7 @@ const scanRawWindowCandidateSlots = (
       continue;
     }
     totalRows += 1;
-    if (plan.limit !== 0) {
-      filteredSlots.push(slot);
-    }
+    filteredSlots.push(slot);
   }
   filteredSlots.sort(compareSlots);
   const windowSlots = filteredSlots.slice(
@@ -152,9 +191,7 @@ const scanRawWindowSlots = (
       continue;
     }
     totalRows += 1;
-    if (plan.limit !== 0) {
-      filteredSlots.push(slot);
-    }
+    filteredSlots.push(slot);
   }
   filteredSlots.sort(compareSlots);
   const windowSlots = filteredSlots.slice(
