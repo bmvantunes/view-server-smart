@@ -19,6 +19,7 @@ type ActiveQueryBaseExecution = {
 
 export type RawQueryExecutionSlot = {
   readonly execution: ActiveQueryBaseExecution;
+  readonly releaseRetainedChanges: () => void;
   readonly windows: Map<string, RawQueryExecutionWindowSlot>;
   refs: number;
 };
@@ -58,6 +59,58 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   return {
     ...scanResult,
     version,
+  };
+};
+
+const updateBaseEvaluationFromInsertOnlyChanges = (
+  store: ActiveQueryStoreState,
+  compiled: CompiledRawQuery<object, object>,
+  evaluation: ActiveQueryBaseEvaluation<object>,
+  queryWindow: RawQueryPlanWindow,
+): ActiveQueryBaseEvaluation<object> | undefined => {
+  const currentVersion = store.version();
+  const batches = store.changesSince(evaluation.version);
+  if (batches === undefined) {
+    return undefined;
+  }
+
+  let totalRows = evaluation.totalRows;
+  const insertedWindowEntries: Array<{ readonly key: string; readonly row: object }> = [];
+  for (const batch of batches) {
+    for (const change of batch.changes) {
+      if (change.previous !== undefined || change.next === undefined) {
+        return undefined;
+      }
+      if (!compiled.plan.predicate.matches(change.next)) {
+        continue;
+      }
+      totalRows += 1;
+      if (queryWindow.limit !== 0) {
+        insertedWindowEntries.push({
+          key: change.key,
+          row: change.next,
+        });
+      }
+    }
+  }
+
+  if (queryWindow.limit === 0) {
+    return {
+      keys: [],
+      totalRows,
+      version: currentVersion,
+      window: [],
+    };
+  }
+
+  const window = [...evaluation.window, ...insertedWindowEntries].sort(compiled.plan.compare);
+  const limitedWindow =
+    queryWindow.limit === undefined ? window : window.slice(0, queryWindow.limit);
+  return {
+    keys: limitedWindow.map((entry) => entry.key),
+    totalRows,
+    version: currentVersion,
+    window: limitedWindow,
   };
 };
 
@@ -197,14 +250,26 @@ const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.raw.ma
       const latest = () => {
         const storeVersion = store.version();
         const nextBaseWindow = baseWindowForActiveWindows(windows);
-        if (
-          snapshot.version !== storeVersion ||
-          nextBaseWindow.offset !== baseWindow.offset ||
-          nextBaseWindow.limit !== baseWindow.limit
-        ) {
+        const windowChanged =
+          nextBaseWindow.offset !== baseWindow.offset || nextBaseWindow.limit !== baseWindow.limit;
+        if (windowChanged) {
           baseWindow = nextBaseWindow;
           snapshot = {
             evaluation: evaluateBaseQuery(store, canonicalCompiled, baseWindow),
+            version: storeVersion,
+          };
+          return snapshot.evaluation;
+        }
+        if (snapshot.version !== storeVersion) {
+          const incrementalEvaluation = updateBaseEvaluationFromInsertOnlyChanges(
+            store,
+            canonicalCompiled,
+            snapshot.evaluation,
+            baseWindow,
+          );
+          snapshot = {
+            evaluation:
+              incrementalEvaluation ?? evaluateBaseQuery(store, canonicalCompiled, baseWindow),
             version: storeVersion,
           };
         }
@@ -234,12 +299,16 @@ export const acquireRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
     const windows = new Map<string, RawQueryExecutionWindowSlot>();
     acquireRawQueryWindow(windows, compiled.plan.window);
     const execution = yield* makeRawQueryExecution(store, compiled, windows);
-    map.set(key, {
-      execution,
-      windows,
-      refs: 1,
+    return yield* Effect.sync(() => {
+      store.retainChanges();
+      map.set(key, {
+        execution,
+        releaseRetainedChanges: () => store.releaseChanges(),
+        windows,
+        refs: 1,
+      });
+      return leaseRawQueryExecution(store, execution, compiled);
     });
-    return leaseRawQueryExecution(store, execution, compiled);
   },
 );
 
@@ -263,6 +332,7 @@ export const releaseRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
         entry.execution.latest();
         return undefined;
       }
+      entry.releaseRetainedChanges();
       map.delete(key);
       return undefined;
     }),
@@ -271,7 +341,11 @@ export const releaseRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQu
 export const clearRawQueryExecutions = Effect.fn("ColumnLiveViewEngine.activeQuery.raw.clearStore")(
   (store: ActiveQueryStoreState) =>
     Effect.sync(() => {
-      getActiveRawQueryMap(store).clear();
+      const map = getActiveRawQueryMap(store);
+      for (const entry of map.values()) {
+        entry.releaseRetainedChanges();
+      }
+      map.clear();
     }),
 );
 

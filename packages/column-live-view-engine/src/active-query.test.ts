@@ -10,7 +10,12 @@ import {
   releaseRawQueryExecution,
 } from "./active-query";
 import { prepareRawQuery } from "./raw-query-compiler";
-import { publishTopicStoreRow, TopicStore } from "./topic-store";
+import {
+  publishTopicStoreRow,
+  publishTopicStoreRows,
+  resetTopicStore,
+  TopicStore,
+} from "./topic-store";
 import { topicStoreRawQueryMetadata, topicStoreReadModel } from "./topic-store-state";
 
 const invalidRow = (_topic: string, message: string): Error => new Error(message);
@@ -389,6 +394,462 @@ describe("column-live-view-engine active query execution", () => {
 
       yield* releaseRawQueryExecution(topicStoreReadModel(store), secondWindow);
     }),
+  );
+
+  it.effect("updates raw active windows from retained insert-only changes without rescanning", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-insert-incremental",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-insert-incremental",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["c", "b"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-insert-incremental",
+        queryId: "query",
+        fromVersion: 3,
+        toVersion: 4,
+        operations: [
+          {
+            type: "remove",
+            key: "b",
+          },
+          {
+            type: "insert",
+            key: "d",
+            row: {
+              id: "d",
+              score: 4,
+            },
+            index: 0,
+          },
+        ],
+        totalRows: 4,
+      });
+      expect(scanLimits).toStrictEqual([2]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+      expect(readModel.changesSince(3)).toBeUndefined();
+    }),
+  );
+
+  it.effect("updates total rows for lower-ranked insert-only raw changes without rescanning", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-insert-incremental-count-only",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-insert-incremental-count-only",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["c", "b"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 0 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-insert-incremental-count-only",
+        queryId: "query",
+        fromVersion: 3,
+        toVersion: 4,
+        operations: [],
+        totalRows: 4,
+      });
+      expect(scanLimits).toStrictEqual([2]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect("releases retained raw changes when a topic reset clears active queries", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-insert-reset-release",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const readModel = topicStoreReadModel(store);
+      const compiled = yield* prepareRawQuery(
+        "raw-insert-reset-release",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      yield* acquireRawQueryExecution(readModel, compiled);
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+      expect(readModel.changesSince(3)).toBeDefined();
+
+      yield* resetTopicStore(store);
+      expect(yield* activeStoreRawQueryExecutionCount(readModel)).toBe(0);
+
+      yield* publishTopicStoreRow(store, { id: "e", status: "open", score: 5 }, invalidRow);
+      expect(readModel.changesSince(0)).toBeUndefined();
+    }),
+  );
+
+  it.effect("falls back to a raw window scan when retained changes replace rows", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-replacement-fallback",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-replacement-fallback",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["c", "b"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 5 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-replacement-fallback",
+        queryId: "query",
+        fromVersion: 3,
+        toVersion: 4,
+        operations: [
+          {
+            type: "move",
+            key: "b",
+            fromIndex: 1,
+            toIndex: 0,
+          },
+          {
+            type: "update",
+            key: "b",
+            row: {
+              id: "b",
+              score: 5,
+            },
+            index: 0,
+          },
+        ],
+        totalRows: 3,
+      });
+      expect(scanLimits).toStrictEqual([2, 2]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect("falls back to a raw window scan when retained raw changes are unavailable", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-unavailable-changes-fallback",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        changesSince: () => undefined,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-unavailable-changes-fallback",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["b", "a"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta).operations).toStrictEqual([
+        {
+          type: "remove",
+          key: "a",
+        },
+        {
+          type: "insert",
+          key: "c",
+          row: {
+            id: "c",
+            score: 3,
+          },
+          index: 0,
+        },
+      ]);
+      expect(scanLimits).toStrictEqual([2, 2]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect("ignores non-matching insert-only raw changes without rescanning", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-mixed-insert-incremental",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-mixed-insert-incremental",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["b", "a"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRows(
+        store,
+        [
+          { id: "closed", status: "closed", score: 10 },
+          { id: "c", status: "open", score: 3 },
+        ],
+        invalidRow,
+      );
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta).operations).toStrictEqual([
+        {
+          type: "remove",
+          key: "a",
+        },
+        {
+          type: "insert",
+          key: "c",
+          row: {
+            id: "c",
+            score: 3,
+          },
+          index: 0,
+        },
+      ]);
+      expect(scanLimits).toStrictEqual([2]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect(
+    "updates zero-limit raw active queries from insert-only changes without rescanning",
+    () =>
+      Effect.gen(function* () {
+        const store = new TopicStore(
+          "raw-zero-limit-incremental",
+          Schema.Struct({
+            id: Schema.String,
+            status: Schema.String,
+            score: Schema.Number,
+          }),
+          "id",
+          () => {},
+        );
+        yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+
+        const scanLimits: Array<number | undefined> = [];
+        const readModel = topicStoreReadModel(store);
+        const observedReadModel = {
+          ...readModel,
+          scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+            scanLimits.push(plan.limit);
+            return readModel.scanRawWindow(plan);
+          },
+        };
+
+        const compiled = yield* prepareRawQuery(
+          "raw-zero-limit-incremental",
+          topicStoreRawQueryMetadata(store),
+          {
+            select: ["id"],
+            where: {
+              status: "open",
+            },
+            limit: 0,
+          },
+        );
+
+        const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+        expect(execution.initial("query").totalRows).toBe(1);
+        const cursor = execution.createCursor();
+
+        yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+
+        const delta = yield* execution.next("query", cursor);
+        expect(Option.getOrThrow(delta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-zero-limit-incremental",
+          queryId: "query",
+          fromVersion: 1,
+          toVersion: 2,
+          operations: [],
+          totalRows: 2,
+        });
+        expect(scanLimits).toStrictEqual([0]);
+
+        yield* releaseRawQueryExecution(observedReadModel, compiled);
+      }),
   );
 
   it.effect("shrinks shared base windows immediately when larger windows release", () =>

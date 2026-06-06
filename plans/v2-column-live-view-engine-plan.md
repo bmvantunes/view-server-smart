@@ -1434,6 +1434,20 @@ VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp 
 VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout:ten-window
 ```
 
+Active raw queries retain the row-change journal while the active query is leased. Insert-only
+change batches can update the shared base window incrementally by merging the previous base window
+with matching inserted rows, sorting that retained candidate window, and preserving `totalRows`.
+For active top-k/windowed queries this keeps the sorted candidate set bounded by the shared base
+window size plus matching inserts. Updates, deletes, unavailable retained changes, and base-window
+shape changes fall back to a full raw window scan. This keeps correctness local while making
+append-heavy live top-k deltas avoid full 10M-row re-evaluation.
+
+Current directional result after the insert-only path:
+
+- 10M raw snapshot `live subscription delta after publish`: ~564ms mean -> ~5.3ms mean.
+- 1M rows / 250 subscribers / same-window fanout: ~49.5ms mean -> ~9.7ms mean.
+- 1M rows / 250 subscribers / ten-window fanout: ~50.7ms mean -> ~10.0ms mean.
+
 Raw live fanout knobs:
 
 - `VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE`: `same-window` or `ten-window`.
