@@ -17,6 +17,7 @@ import {
   selectedPredicateCandidateSlots,
 } from "./topic-predicate-candidate-index";
 import { scanTopicRawWindow, type TopicRawWindowScanState } from "./topic-raw-window-scanner";
+import { createTopicColumnValuesFromArray, type TopicColumnValues } from "./topic-column-vector";
 
 declare const process: {
   readonly env: Record<string, string | undefined>;
@@ -217,6 +218,17 @@ const rowPriceInUpperTail = (row: object): boolean => {
 
 const resetCounter = (counter: RowCallbackCounter): void => {
   counter.count = 0;
+};
+
+const makeColumns = (
+  metadata: ReturnType<typeof rawQueryCompilerMetadata>,
+  entries: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]>,
+): Map<string, TopicColumnValues> => {
+  const columns = new Map<string, TopicColumnValues>();
+  for (const [field, values] of entries) {
+    columns.set(field, createTopicColumnValuesFromArray(field, metadata, values));
+  }
+  return columns;
 };
 
 const orderKeysFromRange = (startInclusive: number, endExclusive: number): ReadonlyArray<string> =>
@@ -519,8 +531,9 @@ beforeAll(() => {
     key: row.id,
     row,
   }));
+  const metadata = rawQueryCompilerMetadata(Order);
   const state: TopicRawWindowScanState = {
-    columns: new Map<string, ReadonlyArray<unknown>>([
+    columns: makeColumns(metadata, [
       ["id", rows.map((row) => row.id)],
       ["customerId", rows.map((row) => row.customerId)],
       ["status", rows.map((row) => row.status)],
@@ -529,7 +542,7 @@ beforeAll(() => {
       ["updatedAt", rows.map((row) => row.updatedAt)],
     ]),
     orderedSlotIndexes: new Map(),
-    rawQueryMetadata: rawQueryCompilerMetadata(Order),
+    rawQueryMetadata: metadata,
     scalarPredicateIndexes: createScalarPredicateIndexes(),
     slots,
   };

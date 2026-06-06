@@ -19,6 +19,7 @@
     "bench:raw-live-fanout:ten-window": "sh -c 'output=.artifacts/raw-live-fanout-ten-window-${VIEW_SERVER_ENGINE_BENCH_ROWS:-100000}rows-${VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS:-50}subs.json; VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=ten-window VIEW_SERVER_ENGINE_BENCH_OUTPUT_JSON=$output vp test bench src/raw-live-fanout.bench.ts --run --testTimeout 0 --outputJson $output'",
     "bench:raw-predicate-index": "sh -c 'output=.artifacts/raw-predicate-index-${VIEW_SERVER_ENGINE_BENCH_ROWS:-100000}rows.json; VIEW_SERVER_ENGINE_BENCH_OUTPUT_JSON=$output vp test bench src/raw-predicate-index.bench.ts --run --testTimeout 0 --outputJson $output'",
     "bench:raw-snapshot": "sh -c 'output=.artifacts/raw-snapshot-${VIEW_SERVER_ENGINE_BENCH_ROWS:-100000}rows.json; VIEW_SERVER_ENGINE_BENCH_OUTPUT_JSON=$output vp test bench src/raw-snapshot.bench.ts --run --testTimeout 0 --outputJson $output'",
+    "bench:raw-write": "sh -c 'output=.artifacts/raw-write-${VIEW_SERVER_ENGINE_BENCH_WRITE_MODE:-indexed}-${VIEW_SERVER_ENGINE_BENCH_ROWS:-100000}rows.json; VIEW_SERVER_ENGINE_BENCH_OUTPUT_JSON=$output vp test bench src/raw-write.bench.ts --run --testTimeout 0 --outputJson $output'",
     "test": "vp test run --coverage --typecheck"
   },
   "dependencies": {

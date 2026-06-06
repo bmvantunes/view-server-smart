@@ -763,6 +763,11 @@ ColumnLiveViewEngine
 
 The first implementation can be TypeScript/Node typed arrays. Prior prototypes showed typed arrays are credible for simplified raw filter/sort/top-k cases without indexes. Rust/native can remain a later acceleration path for projection/count/group-heavy paths if numbers require it.
 
+Schema specialization must measure both sides of the tradeoff. A Topic Column Vector or index can
+make Raw Query reads faster while adding publish/patch/delete maintenance cost. Every storage
+optimization that adds per-field state should have a matching write-path benchmark so read wins do
+not hide write regressions.
+
 ## Engine Subscribe Contract
 
 The engine should expose a direct subscription API independent of WebSockets:
@@ -1336,6 +1341,55 @@ Raw predicate index knobs:
 
 For decision-quality large-row runs, keep `--no-cache` and use multiple iterations. One-sample runs
 are useful only to verify feasibility and approximate scale.
+
+Current raw write benchmark harness:
+
+```bash
+vp run --no-cache column-live-view-engine#bench:raw-write
+```
+
+This harness uses Vitest `bench()` against the public `ColumnLiveViewEngine` mutation path. It seeds a
+single topic, optionally warms read-path indexes, then measures:
+
+- `publishMany` appends
+- single-row `publish` appends
+- `publishMany` replacements of existing rows
+- per-row `patch`
+- append followed by `delete`
+
+The benchmark exists to catch the other side of read optimization work: schema-specialized Topic
+Column Vectors, predicate indexes, ordered window indexes, and materialized state can improve reads
+while adding write maintenance cost. Treat raw-write results as part of the same decision as raw
+snapshot/predicate/fanout results.
+
+Run both modes when evaluating a storage change:
+
+- `base`: decoded engine writes without pre-warmed read-path indexes.
+- `indexed`: pre-warms scalar predicate buckets and one ordered Raw Window Index before timed writes.
+  Single-row appends pay ordered-index insertion cost; batch writes measure scalar predicate index
+  maintenance plus the current ordered-index invalidation/clear behavior.
+
+It writes `raw-write-<mode>-<rows>rows.json` plus a matching `.summary.json` sidecar. Run each mode
+and row count in a separate process:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_WRITE_MODE=base VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-write
+VIEW_SERVER_ENGINE_BENCH_WRITE_MODE=indexed VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-write
+VIEW_SERVER_ENGINE_BENCH_WRITE_MODE=base VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 vp run --no-cache column-live-view-engine#bench:raw-write
+VIEW_SERVER_ENGINE_BENCH_WRITE_MODE=indexed VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 vp run --no-cache column-live-view-engine#bench:raw-write
+VIEW_SERVER_ENGINE_BENCH_WRITE_MODE=base VIEW_SERVER_ENGINE_BENCH_ROWS=10000000 vp run --no-cache column-live-view-engine#bench:raw-write
+VIEW_SERVER_ENGINE_BENCH_WRITE_MODE=indexed VIEW_SERVER_ENGINE_BENCH_ROWS=10000000 vp run --no-cache column-live-view-engine#bench:raw-write
+```
+
+Raw write knobs:
+
+- `VIEW_SERVER_ENGINE_BENCH_WRITE_MODE`: `base` or `indexed`; defaults to `indexed`.
+- `VIEW_SERVER_ENGINE_BENCH_ROWS`: seeded row count for this benchmark process.
+- `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding and timed write batch size.
+- `VIEW_SERVER_ENGINE_BENCH_ITERATIONS`: benchmark iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: benchmark time budget per case.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: must remain `0`; raw-write mutates shared engine state.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: must remain `0`; raw-write mutates shared engine state.
 
 Current raw live fanout benchmark harness:
 

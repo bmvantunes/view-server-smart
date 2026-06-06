@@ -38,6 +38,13 @@ const rawPredicateIndexTask = (rowCount, env = {}) =>
     },
   );
 
+const rawWriteTask = (writeMode, rowCount, env = {}) =>
+  task(`raw write ${writeMode} ${rowCount} rows`, "column-live-view-engine#bench:raw-write", {
+    VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
+    VIEW_SERVER_ENGINE_BENCH_WRITE_MODE: writeMode,
+    ...env,
+  });
+
 const rawLiveFanoutTask = (fanoutCase, rowCount, subscriberCount, env = {}) =>
   task(
     `raw live fanout ${fanoutCase} ${rowCount} rows ${subscriberCount} subscribers`,
@@ -66,6 +73,14 @@ const profiles = new Map([
         ...commonEngineSmokeEnv,
       }),
       rawPredicateIndexTask(1_000, commonEngineSmokeEnv),
+      rawWriteTask("base", 1_000, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "100",
+        ...commonEngineSmokeEnv,
+      }),
+      rawWriteTask("indexed", 1_000, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "100",
+        ...commonEngineSmokeEnv,
+      }),
       rawLiveFanoutTask("same-window", 1_000, 5, {
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
         ...commonEngineSmokeEnv,
@@ -89,6 +104,12 @@ const profiles = new Map([
       rawPredicateIndexTask(100_000),
       rawPredicateIndexTask(1_000_000),
       rawPredicateIndexTask(10_000_000),
+      rawWriteTask("base", 100_000),
+      rawWriteTask("indexed", 100_000),
+      rawWriteTask("base", 1_000_000),
+      rawWriteTask("indexed", 1_000_000),
+      rawWriteTask("base", 10_000_000),
+      rawWriteTask("indexed", 10_000_000),
       rawLiveFanoutTask("same-window", 100_000, 50),
       rawLiveFanoutTask("ten-window", 100_000, 50),
       rawLiveFanoutTask("same-window", 1_000_000, 250),

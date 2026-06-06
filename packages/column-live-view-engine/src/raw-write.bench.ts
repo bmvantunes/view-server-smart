@@ -1,0 +1,396 @@
+// Benchmarks intentionally import Vitest directly: @effect/vitest does not expose `bench`.
+import { afterAll, beforeAll, bench, describe } from "vitest";
+import { defineViewServerConfig } from "@view-server/config";
+import { Effect, Schema } from "effect";
+import { createColumnLiveViewEngine, type ColumnLiveViewEngine } from "./index";
+import {
+  backpressureCountFromEngineHealth,
+  benchmarkOutputJsonPath,
+  cleanupLeakCountFromEngineHealth,
+  failOnBenchmarkCleanupLeaks,
+  memorySnapshot,
+  queuedEventCountFromEngineHealth,
+  writeBenchmarkArtifact,
+  type BenchmarkMemorySnapshot,
+} from "./benchmark-artifact";
+
+declare const process: {
+  readonly env: Record<string, string | undefined>;
+};
+
+const Order = Schema.Struct({
+  id: Schema.String,
+  customerId: Schema.String,
+  status: Schema.Literals(["open", "closed", "cancelled"]),
+  price: Schema.Finite,
+  region: Schema.String,
+  updatedAt: Schema.Number,
+});
+
+const viewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+    },
+  },
+});
+
+type Topics = typeof viewServer.topics;
+type Engine = ColumnLiveViewEngine<Topics>;
+type OrderRow = typeof Order.Type;
+type OrderStatus = OrderRow["status"];
+type WriteMode = "base" | "indexed";
+
+type BenchmarkProfile = {
+  currentRowCount: number;
+  engine: Engine | undefined;
+  memoryAfterSetup: BenchmarkMemorySnapshot | undefined;
+  nextAppendIndex: number;
+  nextDeleteIndex: number;
+  nextPatchGeneration: number;
+  nextReplaceGeneration: number;
+  rowCount: number;
+};
+
+const defaultBatchSize = 1_000;
+const defaultBenchmarkTimeMs = 250;
+const defaultIterations = 5;
+const defaultRowCount = 100_000;
+const defaultWarmupIterations = 0;
+const defaultWarmupTimeMs = 0;
+const defaultWriteMode: WriteMode = "indexed";
+
+const positiveIntegerFromEnv = (name: string, fallback: number): number => {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const trimmed = raw.trim();
+  if (!/^[1-9]\d*$/u.test(trimmed)) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (Number.isSafeInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  throw new Error(`${name} must be a positive integer.`);
+};
+
+const nonNegativeIntegerFromEnv = (name: string, fallback: number): number => {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+  const trimmed = raw.trim();
+  if (!/^(0|[1-9]\d*)$/u.test(trimmed)) {
+    throw new Error(`${name} must be a non-negative integer.`);
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (Number.isSafeInteger(parsed) && parsed >= 0) {
+    return parsed;
+  }
+  throw new Error(`${name} must be a non-negative integer.`);
+};
+
+const rowCountFromEnv = (): number => {
+  const raw = process.env["VIEW_SERVER_ENGINE_BENCH_ROWS"];
+  if (raw === undefined || raw.trim() === "") {
+    return defaultRowCount;
+  }
+  if (raw.includes(",")) {
+    throw new Error("VIEW_SERVER_ENGINE_BENCH_ROWS accepts one row count per benchmark run.");
+  }
+  return positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_ROWS", defaultRowCount);
+};
+
+const writeModeFromEnv = (): WriteMode => {
+  const raw = process.env["VIEW_SERVER_ENGINE_BENCH_WRITE_MODE"];
+  if (raw === undefined || raw.trim() === "") {
+    return defaultWriteMode;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "base" || trimmed === "indexed") {
+    return trimmed;
+  }
+  throw new Error("VIEW_SERVER_ENGINE_BENCH_WRITE_MODE must be base or indexed.");
+};
+
+const benchmarkRowCount = rowCountFromEnv();
+const writeMode = writeModeFromEnv();
+const batchSize = positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE", defaultBatchSize);
+if (batchSize > benchmarkRowCount) {
+  throw new Error("VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE must be less than or equal to row count.");
+}
+const outputJsonPath = benchmarkOutputJsonPath(
+  `raw-write-${writeMode}-${benchmarkRowCount}rows.json`,
+);
+const memoryBefore = memorySnapshot();
+const benchOptions = {
+  iterations: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_ITERATIONS", defaultIterations),
+  time: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_TIME_MS", defaultBenchmarkTimeMs),
+  warmupIterations: nonNegativeIntegerFromEnv(
+    "VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS",
+    defaultWarmupIterations,
+  ),
+  warmupTime: nonNegativeIntegerFromEnv(
+    "VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS",
+    defaultWarmupTimeMs,
+  ),
+};
+if (benchOptions.warmupIterations > 0 || benchOptions.warmupTime > 0) {
+  throw new Error("Raw write benchmark mutates shared engine state; warmup must stay disabled.");
+}
+
+const profile: BenchmarkProfile = {
+  currentRowCount: benchmarkRowCount,
+  engine: undefined,
+  memoryAfterSetup: undefined,
+  nextAppendIndex: benchmarkRowCount,
+  nextDeleteIndex: 0,
+  nextPatchGeneration: 0,
+  nextReplaceGeneration: 0,
+  rowCount: benchmarkRowCount,
+};
+
+const orderStatus = (index: number): OrderStatus => {
+  if (index % 5 === 0) {
+    return "cancelled";
+  }
+  if (index % 3 === 0) {
+    return "closed";
+  }
+  return "open";
+};
+
+const region = (index: number): string => {
+  if (index % 7 === 0) {
+    return "apac";
+  }
+  if (index % 5 === 0) {
+    return "amer";
+  }
+  return "emea";
+};
+
+const benchmarkMutationCount = (): number =>
+  profile.rowCount +
+  (profile.nextAppendIndex - benchmarkRowCount) +
+  profile.nextReplaceGeneration * batchSize +
+  profile.nextPatchGeneration * batchSize +
+  profile.nextDeleteIndex * 2;
+
+const seedOrder = (index: number): OrderRow => ({
+  id: `order-${index}`,
+  customerId: `customer-${index % 100_000}`,
+  status: orderStatus(index),
+  price: index % 1_000_000,
+  region: region(index),
+  updatedAt: index,
+});
+
+const generatedOrder = (prefix: string, index: number, generation: number): OrderRow => ({
+  id: `${prefix}-${index}`,
+  customerId: `customer-${index % 100_000}`,
+  status: orderStatus(index + generation),
+  price: (index + generation) % 1_000_000,
+  region: region(index + generation),
+  updatedAt: 1_000_000_000 + generation + index,
+});
+
+const writeBatch = (
+  prefix: string,
+  startIndex: number,
+  generation: number,
+): ReadonlyArray<OrderRow> =>
+  Array.from({ length: batchSize }, (_value, offset) =>
+    generatedOrder(prefix, startIndex + offset, generation),
+  );
+
+const seedEngine = Effect.fn("ColumnLiveViewEngine.bench.rawWrite.seed")(function* (
+  engine: Engine,
+  rowCount: number,
+) {
+  let next = 0;
+  while (next < rowCount) {
+    const count = Math.min(batchSize, rowCount - next);
+    const rows = Array.from({ length: count }, (_value, offset) => seedOrder(next + offset));
+    yield* engine.publishMany("orders", rows);
+    next += count;
+  }
+});
+
+const warmReadPathState = Effect.fn("ColumnLiveViewEngine.bench.rawWrite.warmReadPathState")(
+  function* (engine: Engine) {
+    const select = ["id", "customerId", "price", "status", "updatedAt"] as const;
+    yield* engine.snapshot("orders", {
+      select,
+      where: {
+        customerId: { eq: "customer-1" },
+      },
+      limit: 50,
+    });
+    yield* engine.snapshot("orders", {
+      select,
+      where: {
+        status: { eq: "open" },
+      },
+      limit: 50,
+    });
+    yield* engine.snapshot("orders", {
+      select,
+      where: {
+        price: { gte: 0 },
+        status: { eq: "open" },
+      },
+      orderBy: [{ field: "price", direction: "asc" }],
+      limit: 50,
+    });
+  },
+);
+
+const prepareWriteMode = Effect.fn("ColumnLiveViewEngine.bench.rawWrite.prepareWriteMode")(
+  function* (engine: Engine, mode: WriteMode) {
+    if (mode === "indexed") {
+      yield* warmReadPathState(engine);
+    }
+  },
+);
+
+const profileEngine = (profile: BenchmarkProfile): Engine => {
+  if (profile.engine === undefined) {
+    throw new Error(`Raw write benchmark profile ${profile.rowCount} rows is not initialized.`);
+  }
+  return profile.engine;
+};
+
+beforeAll(async () => {
+  const engine = Effect.runSync(createColumnLiveViewEngine({ topics: viewServer.topics }));
+  await Effect.runPromise(seedEngine(engine, profile.rowCount));
+  await Effect.runPromise(prepareWriteMode(engine, writeMode));
+  profile.engine = engine;
+  profile.memoryAfterSetup = memorySnapshot();
+}, 0);
+
+afterAll(async () => {
+  const memoryAfterSetup = profile.memoryAfterSetup ?? memoryBefore;
+  let health: unknown = {
+    status: "not-started",
+  };
+  if (profile.engine !== undefined) {
+    health = await Effect.runPromise(profile.engine.health());
+    await Effect.runPromise(profile.engine.close());
+    profile.engine = undefined;
+  }
+  profile.memoryAfterSetup = undefined;
+  const memoryAfterBenchmark = memorySnapshot();
+  const cleanupLeakCount = cleanupLeakCountFromEngineHealth(health);
+  writeBenchmarkArtifact({
+    artifactKind: "engine-benchmark-summary",
+    backpressureCount: backpressureCountFromEngineHealth(health),
+    benchmarkCases: [
+      "publish append single row",
+      "publishMany append batch",
+      "publishMany replace existing batch",
+      "patch existing rows one by one",
+      "append then delete batch",
+    ],
+    benchmarkName: `raw write engine benchmark (${writeMode})`,
+    benchmarkScope: "engine-raw-write",
+    cleanupLeakCount,
+    health,
+    latency: {
+      outputJsonPath,
+      source: "vitest-output-json",
+    },
+    memoryAfterBenchmark,
+    memoryAfterSetup,
+    memoryBefore,
+    mutationCount: benchmarkMutationCount(),
+    notes: [
+      "Latency percentiles are emitted by Vitest in outputJsonPath.",
+      writeMode === "indexed"
+        ? "Indexed write mode pre-warms scalar predicate buckets and one ordered raw window index before timed writes. Single-row appends pay ordered-index insertion cost; batch writes measure scalar maintenance plus the current ordered-index invalidation/clear behavior."
+        : "Base write mode measures decoded engine writes without pre-warmed read-path indexes.",
+      `Seed row count: ${profile.rowCount}. Final tracked row count: ${profile.currentRowCount}.`,
+    ],
+    outputJsonPath,
+    queuedEventCount: queuedEventCountFromEngineHealth(health),
+    rowCount: profile.rowCount,
+    subscriberCount: 0,
+    topics: ["orders"],
+  });
+  failOnBenchmarkCleanupLeaks(cleanupLeakCount);
+}, 0);
+
+describe(`raw write engine benchmark: ${profile.rowCount} rows`, () => {
+  bench(
+    "publish append single row",
+    async () => {
+      const engine = profileEngine(profile);
+      const index = profile.nextAppendIndex;
+      profile.nextAppendIndex += 1;
+      profile.currentRowCount += 1;
+      await Effect.runPromise(
+        engine.publish("orders", generatedOrder("single-append", index, index)),
+      );
+    },
+    benchOptions,
+  );
+
+  bench(
+    "publishMany append batch",
+    async () => {
+      const engine = profileEngine(profile);
+      const rows = writeBatch("append", profile.nextAppendIndex, profile.nextAppendIndex);
+      profile.nextAppendIndex += batchSize;
+      profile.currentRowCount += batchSize;
+      await Effect.runPromise(engine.publishMany("orders", rows));
+    },
+    benchOptions,
+  );
+
+  bench(
+    "publishMany replace existing batch",
+    async () => {
+      const engine = profileEngine(profile);
+      const rows = writeBatch("order", 0, profile.nextReplaceGeneration);
+      profile.nextReplaceGeneration += 1;
+      await Effect.runPromise(engine.publishMany("orders", rows));
+    },
+    benchOptions,
+  );
+
+  bench(
+    "patch existing rows one by one",
+    async () => {
+      const engine = profileEngine(profile);
+      const generation = profile.nextPatchGeneration;
+      profile.nextPatchGeneration += 1;
+      for (let offset = 0; offset < batchSize; offset += 1) {
+        await Effect.runPromise(
+          engine.patch("orders", `order-${offset}`, {
+            price: generation + offset,
+            updatedAt: 2_000_000_000 + generation + offset,
+          }),
+        );
+      }
+    },
+    benchOptions,
+  );
+
+  bench(
+    "append then delete batch",
+    async () => {
+      const engine = profileEngine(profile);
+      const startIndex = profile.nextDeleteIndex;
+      const rows = writeBatch("delete", startIndex, startIndex);
+      profile.nextDeleteIndex += batchSize;
+      await Effect.runPromise(engine.publishMany("orders", rows));
+      for (const row of rows) {
+        await Effect.runPromise(engine.delete("orders", row.id));
+      }
+    },
+    benchOptions,
+  );
+});

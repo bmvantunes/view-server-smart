@@ -10,6 +10,7 @@ import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-win
 import type { OrderedSlotIndex } from "./topic-ordered-window";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
 import { fieldValue } from "./row-values";
+import { createTopicColumnValues, type MutableTopicColumnValues } from "./topic-column-vector";
 import {
   addSlotToScalarPredicateIndexes,
   createScalarPredicateIndexes,
@@ -31,15 +32,13 @@ import {
 
 type RowObject = object;
 
-type ColumnValues = Array<unknown>;
-
 export class ColumnarTopicStore {
   readonly rawQueryMetadata: RawQueryCompilerMetadata;
   readonly readModel: ActiveQueryStoreState;
 
   private readonly slots: Array<TopicRowEntry<object>> = [];
   private readonly keyToSlot = new Map<string, number>();
-  private readonly columns = new Map<string, ColumnValues>();
+  private readonly columns = new Map<string, MutableTopicColumnValues>();
   private readonly orderedSlotIndexes = new Map<string, OrderedSlotIndex>();
   private readonly scalarPredicateIndexes = createScalarPredicateIndexes();
   private readonly rowChangeJournal = new TopicRowChangeJournal<object>();
@@ -67,7 +66,7 @@ export class ColumnarTopicStore {
       topic,
     };
     for (const field of this.rawQueryMetadata.fieldNames) {
-      this.columns.set(field, []);
+      this.columns.set(field, createTopicColumnValues(field, this.rawQueryMetadata));
     }
     this.readModel = {
       activeQueries: createActiveQueryRegistry(),
@@ -102,7 +101,7 @@ export class ColumnarTopicStore {
     this.scalarPredicateIndexes.clear();
     this.rowChangeJournal.clear(this.versionValue);
     for (const column of this.columns.values()) {
-      column.length = 0;
+      column.clear();
     }
     this.versionValue = 0;
   }
@@ -166,7 +165,7 @@ export class ColumnarTopicStore {
       this.slots[slot] = lastEntry;
       this.keyToSlot.set(lastEntry.key, slot);
       for (const column of this.columns.values()) {
-        column[slot] = column[lastSlot];
+        column.copySlot(slot, lastSlot);
       }
       this.addSlotToScalarIndexes(slot);
     }
@@ -237,7 +236,7 @@ export class ColumnarTopicStore {
       row: prepared.row,
     };
     for (const [field, column] of this.columns) {
-      column[slot] = fieldValue(prepared.row, field);
+      column.set(slot, fieldValue(prepared.row, field));
     }
   }
 

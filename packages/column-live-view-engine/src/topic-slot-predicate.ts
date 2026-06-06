@@ -7,15 +7,15 @@ import {
   compareRangeColumnValue,
   isComparableRangeValue,
 } from "./topic-range-value";
+import { columnValue, type TopicColumnValues } from "./topic-column-vector";
 
 type RowObject = object;
-type ColumnValues = ReadonlyArray<unknown>;
 
 export const slotMatchesRawPredicatePlan = <Row extends RowObject>(
   slot: number,
   plan: TopicRawWindowScanPlan<Row>,
   row: Row,
-  columns: ReadonlyMap<string, ColumnValues>,
+  columns: ReadonlyMap<string, TopicColumnValues>,
 ): boolean => {
   const exact = plan.predicate.callbackSkippable === true;
   if (!slotMayMatchFilters(slot, plan.predicate.filters, columns, exact)) {
@@ -27,7 +27,7 @@ export const slotMatchesRawPredicatePlan = <Row extends RowObject>(
 const slotMayMatchFilters = (
   slot: number,
   filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
-  columns: ReadonlyMap<string, ColumnValues>,
+  columns: ReadonlyMap<string, TopicColumnValues>,
   exact: boolean,
 ): boolean => {
   for (const filter of filters) {
@@ -41,14 +41,14 @@ const slotMayMatchFilters = (
 const slotMayMatchFilter = (
   slot: number,
   filter: TopicRawPredicateFilterPlan,
-  columns: ReadonlyMap<string, ColumnValues>,
+  columns: ReadonlyMap<string, TopicColumnValues>,
   exact: boolean,
 ): boolean => {
   const column = columns.get(filter.field);
   if (column === undefined) {
     return true;
   }
-  const value = column[slot];
+  const value = columnValue(column, slot);
 
   if (filter.operator === "eq") {
     return valuesEqual(value, filter.value);

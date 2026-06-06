@@ -15,6 +15,7 @@ export type RawQueryCompilerMetadata = {
   readonly structuredObjectFieldNames: ReadonlySet<string>;
   readonly stringFieldNames: ReadonlySet<string>;
   readonly numericFieldNames: ReadonlySet<string>;
+  readonly numberFieldNames: ReadonlySet<string>;
   readonly bigintFieldNames: ReadonlySet<string>;
   readonly rangeValueKinds: ReadonlyMap<string, ReadonlySet<RangeValueKind>>;
 };
@@ -66,6 +67,16 @@ const rangeValueKindsAst = (ast: SchemaAST.AST): ReadonlySet<RangeValueKind> => 
   return kinds;
 };
 
+const isPureNumberAst = (ast: SchemaAST.AST): boolean => {
+  if (SchemaAST.isNumber(ast)) {
+    return true;
+  }
+  if (SchemaAST.isLiteral(ast)) {
+    return typeof ast.literal === "number";
+  }
+  return SchemaAST.isUnion(ast) && ast.types.length > 0 && ast.types.every(isPureNumberAst);
+};
+
 const schemaFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> =>
   isSchemaWithFields(schema) ? new Set(Object.keys(schema.fields)) : new Set();
 
@@ -91,6 +102,22 @@ const schemaNumericFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<st
   const fields = new Set<string>();
   for (const [field, fieldSchema] of Object.entries(schema.fields)) {
     if (!viewServerSchemaFieldMetadata(fieldSchema).isNumeric) {
+      continue;
+    }
+    fields.add(field);
+  }
+  return fields;
+};
+
+const schemaNumberFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+  if (!isSchemaWithFields(schema)) {
+    return new Set();
+  }
+
+  const fields = new Set<string>();
+  for (const [field, fieldSchema] of Object.entries(schema.fields)) {
+    const ast = schemaAst(fieldSchema);
+    if (ast === undefined || !isPureNumberAst(ast)) {
       continue;
     }
     fields.add(field);
@@ -184,6 +211,7 @@ export const rawQueryCompilerMetadata = (
   structuredObjectFieldNames: schemaStructuredObjectFieldNames(schema),
   stringFieldNames: schemaStringFieldNames(schema),
   numericFieldNames: schemaNumericFieldNames(schema),
+  numberFieldNames: schemaNumberFieldNames(schema),
   bigintFieldNames: schemaBigintFieldNames(schema),
   rangeValueKinds: schemaRangeValueKinds(schema),
 });

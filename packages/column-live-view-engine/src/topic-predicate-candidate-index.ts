@@ -10,8 +10,7 @@ import {
   rangeBoundsAreEmpty,
 } from "./topic-ordered-window";
 import { scalarEqualityKey } from "./row-values";
-
-type ColumnValues = ReadonlyArray<unknown>;
+import { columnValue, type TopicColumnValues } from "./topic-column-vector";
 
 type RangePredicateFilter = TopicRawPredicateFilterPlan & {
   readonly operator: "gt" | "gte" | "lt" | "lte";
@@ -43,7 +42,7 @@ export const createScalarPredicateIndexes = (): ScalarPredicateIndexes => new Ma
 
 export const addSlotToScalarPredicateIndexes = (
   indexes: ScalarPredicateIndexes,
-  columns: ReadonlyMap<string, ColumnValues>,
+  columns: ReadonlyMap<string, TopicColumnValues>,
   slot: number,
 ): void => {
   for (const [field, index] of indexes) {
@@ -53,7 +52,7 @@ export const addSlotToScalarPredicateIndexes = (
 
 export const removeSlotFromScalarPredicateIndexes = (
   indexes: ScalarPredicateIndexes,
-  columns: ReadonlyMap<string, ColumnValues>,
+  columns: ReadonlyMap<string, TopicColumnValues>,
   slot: number,
 ): void => {
   for (const [field, index] of indexes) {
@@ -189,7 +188,7 @@ const scalarPredicateIndexForField = (
 
 const unionScalarPredicateSlots = (
   index: ScalarPredicateFieldIndex,
-  column: ColumnValues,
+  column: TopicColumnValues,
   valueKeys: ReadonlyArray<string>,
   allowBucketBuild: boolean,
   maxSlotCount: number | undefined,
@@ -239,7 +238,7 @@ const unionScalarPredicateSlots = (
     missingBuckets.set(key, new Set());
   }
   for (let slot = 0; slot < column.length; slot += 1) {
-    const key = scalarEqualityKey(column[slot]);
+    const key = scalarEqualityKey(columnValue(column, slot));
     if (key === undefined) {
       continue;
     }
@@ -265,7 +264,7 @@ const unionScalarPredicateSlots = (
 
 const ensureScalarPredicateBucket = (
   index: ScalarPredicateFieldIndex,
-  column: ColumnValues,
+  column: TopicColumnValues,
   valueKey: string,
   allowBucketBuild: boolean,
   maxSlotCount: number | undefined,
@@ -279,7 +278,7 @@ const ensureScalarPredicateBucket = (
 
   const bucket = new Set<number>();
   for (let slot = 0; slot < column.length; slot += 1) {
-    if (scalarEqualityKey(column[slot]) !== valueKey) {
+    if (scalarEqualityKey(columnValue(column, slot)) !== valueKey) {
       continue;
     }
     bucket.add(slot);
@@ -345,10 +344,13 @@ const slotsFromOrderedSpans = (
 
 const addSlotToScalarPredicateIndex = (
   index: ScalarPredicateFieldIndex,
-  column: ColumnValues | undefined,
+  column: TopicColumnValues | undefined,
   slot: number,
 ): void => {
-  const key = scalarEqualityKey(column?.[slot]);
+  if (column === undefined) {
+    return;
+  }
+  const key = scalarEqualityKey(columnValue(column, slot));
   if (key === undefined || !index.indexedKeys.has(key)) {
     return;
   }
@@ -358,10 +360,13 @@ const addSlotToScalarPredicateIndex = (
 
 const removeSlotFromScalarPredicateIndex = (
   index: ScalarPredicateFieldIndex,
-  column: ColumnValues | undefined,
+  column: TopicColumnValues | undefined,
   slot: number,
 ): void => {
-  const key = scalarEqualityKey(column?.[slot]);
+  if (column === undefined) {
+    return;
+  }
+  const key = scalarEqualityKey(columnValue(column, slot));
   if (key === undefined || !index.indexedKeys.has(key)) {
     return;
   }

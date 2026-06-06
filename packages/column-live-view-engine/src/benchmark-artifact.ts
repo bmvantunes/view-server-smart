@@ -47,7 +47,8 @@ export type BenchmarkArtifactInput = {
   readonly benchmarkScope:
     | "engine-raw-snapshot"
     | "engine-raw-predicate-index"
-    | "engine-raw-live-fanout";
+    | "engine-raw-live-fanout"
+    | "engine-raw-write";
   readonly rowCount: number;
   readonly mutationCount: number;
   readonly subscriberCount: number;

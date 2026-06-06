@@ -109,6 +109,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 
 - Avoid O(n^2) hot paths unless benchmarked and justified.
 - Prefer indexed lookup/maps over repeated scans when memory tradeoffs are acceptable.
+- Benchmark write paths when adding read-path indexes, vectors, caches, or materialized state. A faster read path that destroys publish/patch/delete throughput is not a win.
 - Do not clone or materialize per subscriber when work can be shared by topic/query/window/plan.
 - Hot paths should avoid unnecessary allocations, schema decoding, object spreading, and health snapshots.
 - Health counters should update cheaply and publish at a bounded cadence.

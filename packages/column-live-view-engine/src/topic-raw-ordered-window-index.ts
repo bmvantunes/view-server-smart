@@ -2,6 +2,7 @@ import { compareQueryValue } from "./query-value";
 import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
 import type { TopicRawOrderByPlan, TopicRawWindowScanPlan } from "./raw-window-scan";
 import type { TopicRowEntry } from "./row-scan";
+import { columnValue, type TopicColumnValues } from "./topic-column-vector";
 import {
   distinctOrderedEqualityValues,
   equalityValueSatisfiesRangeBounds,
@@ -20,9 +21,8 @@ import {
   type OrderedSlotIndex,
 } from "./topic-ordered-window";
 
-type ColumnValues = ReadonlyArray<unknown>;
 export type RawOrderedWindowIndexState = {
-  readonly columns: ReadonlyMap<string, ColumnValues>;
+  readonly columns: ReadonlyMap<string, TopicColumnValues>;
   readonly orderedSlotIndexes: Map<string, OrderedSlotIndex>;
   readonly rawQueryMetadata: RawQueryCompilerMetadata;
   readonly slots: ReadonlyArray<TopicRowEntry<object>>;
@@ -154,7 +154,7 @@ const compareSlotsByStorageOrder = (
 ): number => {
   for (const order of storageOrderBy) {
     const column = state.columns.get(order.field)!;
-    const comparison = compareQueryValue(column[left], column[right]);
+    const comparison = compareQueryValue(columnValue(column, left), columnValue(column, right));
     if (comparison !== 0) {
       return order.direction === "asc" ? comparison : -comparison;
     }

@@ -45,9 +45,17 @@ import { cloneRecord, cloneRow, fieldValue, rowsEqual, scalarEqualityKey } from 
 import type { TopicRowChangeBatch } from "./row-scan";
 import { scanTopicRawWindow } from "./topic-raw-window-scanner";
 import {
+  addSlotToScalarPredicateIndexes,
   createScalarPredicateIndexes,
+  removeSlotFromScalarPredicateIndexes,
   selectedPredicateCandidateSlots,
 } from "./topic-predicate-candidate-index";
+import {
+  columnValue,
+  createTopicColumnValues,
+  createTopicColumnValuesFromArray,
+  type TopicColumnValues,
+} from "./topic-column-vector";
 import {
   acquireTopicStoreSubscription,
   closeBackpressuredTopicStoreSubscription,
@@ -220,6 +228,78 @@ const rowField = (row: object, field: string): unknown => {
 
 const rowIds = (rows: ReadonlyArray<object>): ReadonlyArray<unknown> =>
   rows.map((row) => rowField(row, "id"));
+
+const makeColumns = (
+  metadata: ReturnType<typeof rawQueryCompilerMetadata>,
+  entries: ReadonlyArray<readonly [string, ReadonlyArray<unknown>]>,
+): Map<string, TopicColumnValues> => {
+  const columns = new Map<string, TopicColumnValues>();
+  for (const [field, values] of entries) {
+    columns.set(field, createTopicColumnValuesFromArray(field, metadata, values));
+  }
+  return columns;
+};
+
+it("derives topic column vectors from schema metadata and preserves slot mutation semantics", () => {
+  const Metric = Schema.Struct({
+    finitePrice: Schema.Finite,
+    id: Schema.String,
+    optionalPrice: Schema.optionalKey(Schema.Number),
+    price: Schema.Number,
+    quantity: Schema.BigInt,
+    status: Schema.String,
+  });
+  const metadata = rawQueryCompilerMetadata(Metric);
+
+  const price = createTopicColumnValues("price", metadata);
+  const finitePrice = createTopicColumnValues("finitePrice", metadata);
+  price.set(20, 42);
+  price.set(21, undefined);
+  price.copySlot(0, 20);
+  price.copySlot(1, 21);
+  price.copySlot(24, 20);
+  price.pop();
+
+  expect(price.kind).toBe("number");
+  expect(finitePrice.kind).toBe("number");
+  expect(price.length).toBe(24);
+  expect(columnValue(price, 0)).toBe(42);
+  expect(columnValue(price, 1)).toBeUndefined();
+  expect(columnValue(price, 23)).toBeUndefined();
+  expect(columnValue(price, 24)).toBeUndefined();
+  expect(columnValue(price, -1)).toBeUndefined();
+
+  price.clear();
+  price.copySlot(2, 99);
+  expect(price.length).toBe(3);
+  expect(columnValue(price, 2)).toBeUndefined();
+
+  price.clear();
+  price.pop();
+  expect(price.length).toBe(0);
+
+  const status = createTopicColumnValues("status", metadata);
+  status.set(0, "open");
+  status.set(1, { structured: true });
+  status.copySlot(0, 1);
+  status.pop();
+
+  expect(status.kind).toBe("generic");
+  expect(status.length).toBe(1);
+  expect(columnValue(status, 0)).toStrictEqual({ structured: true });
+
+  status.clear();
+  expect(status.length).toBe(0);
+
+  const optionalPrice = createTopicColumnValuesFromArray("optionalPrice", metadata, [1, undefined]);
+  const quantity = createTopicColumnValuesFromArray("quantity", metadata, [1n, 2n]);
+
+  expect(optionalPrice.kind).toBe("number");
+  expect(quantity.kind).toBe("generic");
+  expect(columnValue(optionalPrice, 0)).toBe(1);
+  expect(columnValue(optionalPrice, 1)).toBeUndefined();
+  expect(columnValue(quantity, 0)).toBe(1n);
+});
 
 const numericRowField = (row: object, field: string): number => {
   const value = fieldValue(row, field);
@@ -6737,17 +6817,23 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         row: second,
       },
     ];
+    const metadata = rawQueryCompilerMetadata(Order);
     const state = {
-      columns: new Map<string, ReadonlyArray<unknown>>([
+      columns: makeColumns(metadata, [
         ["id", [first.id, second.id]],
         ["price", [first.price, second.price]],
         ["status", [first.status, second.status]],
       ]),
       orderedSlotIndexes: new Map(),
-      rawQueryMetadata: rawQueryCompilerMetadata(Order),
+      rawQueryMetadata: metadata,
       scalarPredicateIndexes: createScalarPredicateIndexes(),
       slots,
     };
+
+    const priceColumn = state.columns.get("price")!;
+    const statusColumn = state.columns.get("status")!;
+    expect(priceColumn.kind).toBe("number");
+    expect(statusColumn.kind).toBe("generic");
 
     const warmRangeIndex = scanTopicRawWindow(state, {
       predicate: {
@@ -6842,17 +6928,21 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       key: row.id,
       row,
     }));
+    const metadata = rawQueryCompilerMetadata(Position);
     const state = {
-      columns: new Map<string, ReadonlyArray<unknown>>([
+      columns: makeColumns(metadata, [
         ["id", rows.map((row) => row.id)],
         ["symbol", rows.map((row) => row.symbol)],
         ["quantity", rows.map((row) => row.quantity)],
       ]),
       orderedSlotIndexes: new Map(),
-      rawQueryMetadata: rawQueryCompilerMetadata(Position),
+      rawQueryMetadata: metadata,
       scalarPredicateIndexes: createScalarPredicateIndexes(),
       slots,
     };
+
+    const quantityColumn = state.columns.get("quantity")!;
+    expect(quantityColumn.kind).toBe("generic");
 
     const boundedReplacement = scanTopicRawWindow(state, {
       predicate: {
@@ -7023,16 +7113,32 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     expect(symbolIndex.buckets.has("string:4:NVDA")).toBe(false);
   });
 
+  it("skips scalar index maintenance when an indexed field is absent from stored columns", () => {
+    const scalarPredicateIndexes = createScalarPredicateIndexes();
+    scalarPredicateIndexes.set("missing", {
+      buckets: new Map([["string:4:open", new Set([0])]]),
+      indexedKeys: new Set(["string:4:open"]),
+    });
+
+    addSlotToScalarPredicateIndexes(scalarPredicateIndexes, new Map(), 0);
+    removeSlotFromScalarPredicateIndexes(scalarPredicateIndexes, new Map(), 0);
+
+    const missingIndex = scalarPredicateIndexes.get("missing")!;
+    const openBucket = missingIndex.buckets.get("string:4:open")!;
+    expect(openBucket.has(0)).toBe(true);
+  });
+
   it("rejects exact candidates that are not smaller than their scan budget", () => {
     const rows = [order("a", "open", 1, 1), order("b", "closed", 2, 2), order("c", "open", 3, 3)];
+    const metadata = rawQueryCompilerMetadata(Order);
     const state = {
-      columns: new Map<string, ReadonlyArray<unknown>>([
+      columns: makeColumns(metadata, [
         ["id", rows.map((row) => row.id)],
         ["price", rows.map((row) => row.price)],
         ["status", [rows[0]!.status, rows[1]!.status, { nonScalar: true }]],
       ]),
       orderedSlotIndexes: new Map(),
-      rawQueryMetadata: rawQueryCompilerMetadata(Order),
+      rawQueryMetadata: metadata,
       scalarPredicateIndexes: createScalarPredicateIndexes(),
       slots: rows.map((row) => ({
         key: row.id,

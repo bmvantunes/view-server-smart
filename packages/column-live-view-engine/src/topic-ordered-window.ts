@@ -6,8 +6,7 @@ import {
   type RawQueryCompilerMetadata,
 } from "./raw-query-compiler";
 import { scalarEqualityKey } from "./row-values";
-
-type ColumnValues = ReadonlyArray<unknown>;
+import { columnValue, type TopicColumnValues } from "./topic-column-vector";
 
 export type OrderedSlotIndex = {
   readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
@@ -223,7 +222,7 @@ export const rangeBoundsAreEmpty = (bounds: OrderedRangeBounds): boolean => {
 
 export const orderedSlotBoundIndex = (
   slots: ReadonlyArray<number>,
-  column: ColumnValues,
+  column: TopicColumnValues,
   value: unknown,
   predicate: (comparison: number) => boolean,
 ): number => {
@@ -231,7 +230,7 @@ export const orderedSlotBoundIndex = (
   let high = slots.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    const comparison = compareOrderedRangeValue(column[slots[middle]!], value);
+    const comparison = compareOrderedRangeValue(columnValue(column, slots[middle]!), value);
     if (predicate(comparison)) {
       high = middle;
     } else {

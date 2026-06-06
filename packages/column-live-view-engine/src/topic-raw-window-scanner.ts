@@ -1,6 +1,7 @@
 import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
 import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-window-scan";
 import type { TopicRowEntry } from "./row-scan";
+import type { TopicColumnValues } from "./topic-column-vector";
 import {
   selectedPredicateCandidateSlots,
   type PredicateCandidateSlotIndexState,
@@ -19,11 +20,10 @@ import {
 } from "./topic-ordered-window";
 import { slotMatchesRawPredicatePlan } from "./topic-slot-predicate";
 
-type ColumnValues = ReadonlyArray<unknown>;
 type RowObject = object;
 
 export type TopicRawWindowScanState = {
-  readonly columns: ReadonlyMap<string, ColumnValues>;
+  readonly columns: ReadonlyMap<string, TopicColumnValues>;
   readonly orderedSlotIndexes: Map<string, OrderedSlotIndex>;
   readonly rawQueryMetadata: RawQueryCompilerMetadata;
   readonly scalarPredicateIndexes: PredicateCandidateSlotIndexState["scalarPredicateIndexes"];

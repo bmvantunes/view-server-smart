@@ -70,6 +70,10 @@ _Avoid_: chDB replacement, database adapter, query helper
 The per-topic storage and mutation unit behind a View Server Topic; it is expected to become column-oriented as performance work deepens.
 _Avoid_: Map wrapper, row array, topic state bag
 
+**Topic Column Vector**:
+The schema-derived per-field storage inside a Columnar Topic Store. A Topic Column Vector may use a specialized representation such as a numeric typed array or a generic object array, but callers interact through the Columnar Topic Store.
+_Avoid_: Public column API, typed-array contract
+
 **Active Query**:
 The engine-side representation of a compiled Live Query that can evaluate snapshots and deltas and may be shared by equivalent subscriptions.
 _Avoid_: Query object, filter function
@@ -180,6 +184,7 @@ _Avoid_: Browser write, send, emit
 - A **Grouped Query** returns group fields plus aggregate aliases.
 - A **Subscription** belongs to one **Live Query** and emits one **Snapshot** followed by zero or more **Deltas** and **Status Events**.
 - A **Column Live View Engine** owns one **Columnar Topic Store** per **View Server Topic**.
+- A **Columnar Topic Store** owns one **Topic Column Vector** per configured Topic Row field.
 - A **Runtime Core** owns one **Column Live View Engine** instance and exposes both a **Runtime Client** and a **Live Client**.
 - A **Raw Query Plan** is compiled once from a **Raw Query** before the **Columnar Topic Store** scans rows.
 - A **Raw Predicate Plan** is part of a **Raw Query Plan** and lets storage narrow scans without replacing the correctness callback unless it is proven exact.
