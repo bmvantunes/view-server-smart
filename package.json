@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "bench:baseline": "node scripts/run-benchmark-baseline.mjs --profile=smoke",
+    "bench:baseline:release": "node scripts/run-benchmark-baseline.mjs --profile=release",
+    "bench:baseline:smoke": "node scripts/run-benchmark-baseline.mjs --profile=smoke",
     "check:effect": "effect-language-service diagnostics --project packages/config/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/protocol/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/client/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/column-live-view-engine/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/runtime-core/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/in-memory/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/server/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/runtime/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/react/tsconfig.json --format text --strict",
     "check:internal-seams": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module preserve --moduleResolution bundler scripts/node-ambient.d.ts scripts/check-internal-seams.ts && node --experimental-strip-types scripts/check-internal-seams.ts",
     "check:package-exports": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module preserve --moduleResolution bundler scripts/check-package-exports.ts && node --experimental-strip-types scripts/check-package-exports.ts",

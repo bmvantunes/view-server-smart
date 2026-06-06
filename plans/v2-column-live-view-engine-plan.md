@@ -1246,6 +1246,28 @@ Minimum benchmark profiles:
 - reconnect/route-change churn
 - slow-client/backpressure
 
+Preferred serial benchmark runner:
+
+```bash
+pnpm run bench:baseline:smoke
+pnpm run bench:baseline
+pnpm run bench:baseline:release
+```
+
+`bench:baseline` and `bench:baseline:smoke` run one small Chromium/browser profile plus small
+engine profiles with one-iteration / 1ms Vitest benchmark smoke settings. Use them as the PR
+sanity check for benchmark wiring. `bench:baseline:release` is the release-quality serial profile
+and runs the documented row counts/browser profiles in separate processes. It intentionally
+executes one benchmark process at a time so GC, RSS, browser state, and artifact files are not
+polluted by competing benchmark suites.
+
+The serial runner is `scripts/run-benchmark-baseline.mjs`. It supports
+`VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|release` or `--profile=smoke|release`; an explicit
+`--profile` argument wins over the environment variable, so the root package scripts always run the
+profile they name. Use the environment variable only when invoking the Node script directly. The
+runner scrubs benchmark-specific environment variables before each child process so stale local
+tuning cannot pollute baseline runs.
+
 Current engine raw benchmark harness:
 
 ```bash
