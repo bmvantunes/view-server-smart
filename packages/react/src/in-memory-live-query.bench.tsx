@@ -5,6 +5,7 @@ import {
   defineViewServerConfig,
   type ViewServerHealth,
   type ViewServerRuntimeClient,
+  type ViewServerRuntimeError,
 } from "@view-server/config";
 import { createInMemoryViewServer, type ViewServerInMemoryInstance } from "@view-server/in-memory";
 import { Effect, Schema } from "effect";
@@ -217,10 +218,12 @@ const deltaOrder = (index: number): OrderRow => ({
   updatedAt: 1_000_000_000 + index,
 });
 
-const publishSeedRows = Effect.fn("ViewServerReact.bench.inMemoryLiveQuery.seed")(function* (
+const publishSeedRows: (
   client: ViewServerRuntimeClient<Topics>,
   count: number,
-) {
+) => Effect.Effect<void, ViewServerRuntimeError> = Effect.fn(
+  "ViewServerReact.bench.inMemoryLiveQuery.seed",
+)(function* (client: ViewServerRuntimeClient<Topics>, count: number) {
   let next = 0;
   while (next < count) {
     const batchCount = Math.min(seedBatchSize, count - next);
@@ -259,18 +262,20 @@ const backpressureCountFromHealth = (health: Health): number => {
   return orders.backpressureEvents;
 };
 
-const waitForCleanupHealth = Effect.fn("ViewServerReact.bench.inMemoryLiveQuery.cleanupHealth")(
-  function* (client: ViewServerRuntimeClient<Topics>) {
-    let attempts = 0;
-    let health = yield* client.health();
-    while (cleanupLeakCountFromHealth(health) > 0 && attempts < 50) {
-      attempts += 1;
-      yield* Effect.sleep("10 millis");
-      health = yield* client.health();
-    }
-    return health;
-  },
-);
+const waitForCleanupHealth: (
+  client: ViewServerRuntimeClient<Topics>,
+) => Effect.Effect<Health, ViewServerRuntimeError> = Effect.fn(
+  "ViewServerReact.bench.inMemoryLiveQuery.cleanupHealth",
+)(function* (client: ViewServerRuntimeClient<Topics>) {
+  let attempts = 0;
+  let health = yield* client.health();
+  while (cleanupLeakCountFromHealth(health) > 0 && attempts < 50) {
+    attempts += 1;
+    yield* Effect.sleep("10 millis");
+    health = yield* client.health();
+  }
+  return health;
+});
 
 const writeBenchmarkArtifact = (input: ReactBrowserBenchmarkArtifact): Promise<void> =>
   commands.writeFile(
