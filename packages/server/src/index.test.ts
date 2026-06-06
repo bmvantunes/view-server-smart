@@ -8,8 +8,8 @@ import {
   type ViewServerHealth,
   type ViewServerRuntimeError,
 } from "@view-server/config";
-import { createInMemoryViewServer } from "@view-server/in-memory";
 import { ViewServerRpcErrorSchema, ViewServerRpcs } from "@view-server/protocol";
+import { createViewServerRuntimeCore } from "@view-server/runtime-core";
 import {
   Context,
   Effect,
@@ -96,6 +96,8 @@ const edgeViewServer = defineViewServerConfig({
   },
 });
 
+const createServerTestRuntime = createViewServerRuntimeCore;
+
 type OrderRow = typeof Order.Type;
 type TradeRow = typeof Trade.Type;
 type QuoteRow = typeof Quote.Type;
@@ -150,10 +152,20 @@ const fetchJson = Effect.fn("ViewServerServer.test.fetchJson")(function* (url: s
 describe("@view-server/server", () => {
   it.live("serves an in-memory runtime through Effect RPC WebSocket", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
+      let openedStreams = 0;
+      let closedStreams = 0;
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
+        transport: {
+          streamOpened: Effect.sync(() => {
+            openedStreams += 1;
+          }),
+          streamClosed: Effect.sync(() => {
+            closedStreams += 1;
+          }),
+        },
       });
       const client = yield* makeViewServerClient(viewServer, { url: server.url });
       const subscription = yield* client.subscribe("orders", {
@@ -226,6 +238,8 @@ describe("@view-server/server", () => {
       expect(afterClose.engine.topics.orders.activeSubscriptions).toBe(0);
 
       yield* client.close;
+      expect(openedStreams).toBe(3);
+      expect(closedStreams).toBe(3);
       yield* server.close;
       yield* inMemory.close;
     }),
@@ -233,7 +247,7 @@ describe("@view-server/server", () => {
 
   it.live("serves GET /health beside the websocket RPC endpoint", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
@@ -252,9 +266,60 @@ describe("@view-server/server", () => {
     }),
   );
 
+  it.live("closes transport stream counters when subscription acquisition fails", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      let openedStreams = 0;
+      let closedStreams = 0;
+      const subscribeError: ViewServerRuntimeError = {
+        _tag: "ViewServerRuntimeError",
+        code: "RuntimeUnavailable",
+        message: "subscription unavailable",
+      };
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: {
+          ...inMemory.liveClient,
+          subscribeRuntime: () => Effect.fail(subscribeError),
+        },
+        runtime: inMemory.client,
+        transport: {
+          streamOpened: Effect.sync(() => {
+            openedStreams += 1;
+          }),
+          streamClosed: Effect.sync(() => {
+            closedStreams += 1;
+          }),
+        },
+      });
+      const client = yield* makeViewServerClient(viewServer, { url: server.url });
+
+      const subscription = yield* client.subscribe("orders", {
+        select: ["id"],
+      });
+      const failedEvents = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(Array.from(failedEvents)).toStrictEqual([
+        {
+          type: "status",
+          topic: "orders",
+          queryId: "remote",
+          status: "error",
+          code: "RuntimeUnavailable",
+          message: "subscription unavailable",
+        },
+      ]);
+      expect(openedStreams).toBe(1);
+      expect(closedStreams).toBe(1);
+      yield* subscription.close();
+      yield* client.close;
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
   it.live("returns 500 when runtime health fails", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const healthError: ViewServerRuntimeError = {
         _tag: "ViewServerRuntimeError",
         code: "RuntimeUnavailable",
@@ -279,7 +344,7 @@ describe("@view-server/server", () => {
 
   it.live("returns 500 when runtime health is semantically invalid", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const baseHealth = yield* inMemory.client.health();
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
@@ -320,7 +385,7 @@ describe("@view-server/server", () => {
 
   it.live("returns 503 for degraded health and serializes bigint fields", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const baseHealth = yield* inMemory.client.health();
       const degradedHealth: ViewServerHealth<typeof viewServer.topics> = {
         ...baseHealth,
@@ -386,7 +451,7 @@ describe("@view-server/server", () => {
 
   it.live("serves fresh runtime health for Kubernetes readiness", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const baseHealth = yield* inMemory.client.health();
       const degradedHealth: ViewServerHealth<typeof viewServer.topics> = {
         ...baseHealth,
@@ -459,7 +524,7 @@ describe("@view-server/server", () => {
 
   it.live("preserves typed server errors for raw RPC clients", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
@@ -641,7 +706,7 @@ describe("@view-server/server", () => {
 
   it.live("rejects malformed live-client rows during server event encoding", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const makeServerForEvent = Effect.fn("ViewServerServer.test.malformedEventServer.make")(
         function* (event: ViewServerLiveEvent<object>) {
           const liveClient = {
@@ -730,7 +795,7 @@ describe("@view-server/server", () => {
 
   it.live("rejects non-json schema encodings during server event encoding", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(edgeViewServer);
+      const inMemory = createServerTestRuntime(edgeViewServer);
       const event: ViewServerLiveEvent<object> = {
         type: "snapshot",
         topic: "badjson",
@@ -771,7 +836,7 @@ describe("@view-server/server", () => {
 
   it.live("round-trips BigInt rows and filters through the RPC NDJSON transport", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
@@ -824,7 +889,7 @@ describe("@view-server/server", () => {
 
   it.live("round-trips BigDecimal rows and filters through the RPC NDJSON transport", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
@@ -884,7 +949,7 @@ describe("@view-server/server", () => {
 
   it.live("encodes snapshot rows, move/remove deltas, and close statuses", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
@@ -950,7 +1015,7 @@ describe("@view-server/server", () => {
 
   it.live("encodes subscription closed status when the runtime closes", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
@@ -986,7 +1051,7 @@ describe("@view-server/server", () => {
 
   it.live("serves health from the runtime instead of stale live-client state", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const baseHealth = yield* inMemory.client.health();
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
@@ -1019,7 +1084,7 @@ describe("@view-server/server", () => {
 
   it.live("rejects semantically invalid runtime health over unary RPC", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const baseHealth = yield* inMemory.client.health();
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
@@ -1058,7 +1123,7 @@ describe("@view-server/server", () => {
 
   it.live("serves custom paths and maps hostile remote inputs", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(
         viewServer,
         {
@@ -1132,7 +1197,7 @@ describe("@view-server/server", () => {
 
   it.live("cleans up engine subscribers when the remote websocket disconnects", () =>
     Effect.gen(function* () {
-      const inMemory = createInMemoryViewServer(viewServer);
+      const inMemory = createServerTestRuntime(viewServer);
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,

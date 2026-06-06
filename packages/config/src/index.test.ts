@@ -38,7 +38,7 @@ import {
   type ViewServerHealthSummary,
   type ViewServerHealthSummaryRow,
   type ViewServerHealthTopicRow,
-  type ViewServerInMemoryRuntime,
+  type ViewServerRuntimeClient,
   type ViewServerRuntimeError,
   type ViewServerTransportError,
 } from "./index";
@@ -1156,7 +1156,7 @@ const assertCompileTimeContracts = () => {
     >["schema"]
   >().toEqualTypeOf<typeof Trade>();
 
-  const assertRuntimeContracts = (runtime: ViewServerInMemoryRuntime<typeof viewServer.topics>) => {
+  const assertRuntimeContracts = (runtime: ViewServerRuntimeClient<typeof viewServer.topics>) => {
     const publishEffect = runtime.publish("orders", {
       id: "order-1",
       customerId: "customer-1",

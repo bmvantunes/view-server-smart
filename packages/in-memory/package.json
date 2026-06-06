@@ -13,13 +13,13 @@
     }
   },
   "scripts": {
-    "build": "vp pack",
-    "test": "vp test run --coverage --typecheck"
+    "build": "vp run -t @view-server/runtime-core#build && vp pack",
+    "test": "vp run -t @view-server/runtime-core#build && vp test run --coverage --typecheck"
   },
   "dependencies": {
     "@view-server/client": "workspace:*",
-    "@view-server/column-live-view-engine": "workspace:*",
     "@view-server/config": "workspace:*",
+    "@view-server/runtime-core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

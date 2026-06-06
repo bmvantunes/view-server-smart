@@ -25,15 +25,22 @@ import {
   viewServerHealthSummaryRowFromHealth,
   viewServerHealthTopicRowsFromHealth,
 } from "@view-server/config";
-import { Cause, Clock, Effect, Queue, Stream } from "effect";
+import { Cause, Clock, Effect, Fiber, Queue, Semaphore, Stream } from "effect";
 import type { AtomRef } from "effect/unstable/reactivity";
-import { readHealth, refreshHealth } from "./health";
+import { readHealth, refreshHealth, type RuntimeCoreTransportHealth } from "./health";
 import { engineErrorToRuntimeError } from "./runtime-error";
 
-export const makeInMemoryLiveClient = Effect.fn("ViewServerInMemory.liveClient.make")(
+const runtimeClosedError: ViewServerRuntimeError = {
+  _tag: "ViewServerRuntimeError",
+  code: "RuntimeUnavailable",
+  message: "Runtime Core is closed.",
+};
+
+export const makeRuntimeCoreLiveClient = Effect.fn("ViewServerRuntimeCore.liveClient.make")(
   <const Topics extends DecodableTopicDefinitions>(
     engine: ColumnLiveViewEngine<Topics>,
     health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
+    transportHealth: RuntimeCoreTransportHealth<Topics>,
   ): Effect.Effect<ViewServerRuntimeLiveClient<Topics>> =>
     Effect.sync<ViewServerRuntimeLiveClient<Topics>>(() => {
       function subscribe<
@@ -63,9 +70,12 @@ export const makeInMemoryLiveClient = Effect.fn("ViewServerInMemory.liveClient.m
         return engine.subscribe<Topic, Query>(topic, query).pipe(
           Effect.map((subscription) => ({
             events: subscription.events,
-            close: () => subscription.close().pipe(Effect.andThen(refreshHealth(engine, health))),
+            close: () =>
+              subscription
+                .close()
+                .pipe(Effect.andThen(refreshHealth(engine, health, transportHealth))),
           })),
-          Effect.tap(() => refreshHealth(engine, health)),
+          Effect.tap(() => refreshHealth(engine, health, transportHealth)),
           Effect.mapError(engineErrorToRuntimeError),
         );
       }
@@ -76,27 +86,41 @@ export const makeInMemoryLiveClient = Effect.fn("ViewServerInMemory.liveClient.m
         engine.subscribeRuntime(topic, query).pipe(
           Effect.map((subscription) => ({
             events: subscription.events,
-            close: () => subscription.close().pipe(Effect.andThen(refreshHealth(engine, health))),
+            close: () =>
+              subscription
+                .close()
+                .pipe(Effect.andThen(refreshHealth(engine, health, transportHealth))),
           })),
-          Effect.tap(() => refreshHealth(engine, health)),
+          Effect.tap(() => refreshHealth(engine, health, transportHealth)),
           Effect.mapError(engineErrorToRuntimeError),
         );
       const activeHealthSubscriptions = new Set<{ close: Effect.Effect<void> }>();
+      const healthSubscriptionLock = Semaphore.makeUnsafe(1);
+      let healthSubscriptionsClosed = false;
       const closeActiveHealthSubscriptions = Effect.suspend(() =>
-        Effect.forEach(
-          Array.from(activeHealthSubscriptions),
-          (subscription) => subscription.close,
-          {
-            discard: true,
-          },
-        ),
+        healthSubscriptionLock
+          .withPermit(
+            Effect.sync(() => {
+              healthSubscriptionsClosed = true;
+              const subscriptions = Array.from(activeHealthSubscriptions);
+              activeHealthSubscriptions.clear();
+              return subscriptions;
+            }),
+          )
+          .pipe(
+            Effect.andThen((subscriptions) =>
+              Effect.forEach(subscriptions, (subscription) => subscription.close, {
+                discard: true,
+              }),
+            ),
+          ),
       ).pipe(Effect.ignore);
       const close = closeActiveHealthSubscriptions.pipe(
         Effect.andThen(engine.close()),
-        Effect.andThen(refreshHealth(engine, health)),
+        Effect.andThen(refreshHealth(engine, health, transportHealth)),
       );
       const readonlyHealth = health.map((value) => value);
-      const makeHealthSubscription = Effect.fn("ViewServerInMemory.health.subscribe")(function* <
+      const makeHealthSubscription = Effect.fn("ViewServerRuntimeCore.health.subscribe")(function* <
         Topic extends typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC | typeof VIEW_SERVER_HEALTH_TOPIC,
         Key extends string,
         Row extends { readonly id: Key },
@@ -106,50 +130,69 @@ export const makeInMemoryLiveClient = Effect.fn("ViewServerInMemory.liveClient.m
           updatedAtNanos: bigint,
         ) => Extract<ViewServerLiveEvent<Row, Topic, Key>, { readonly type: "snapshot" }>,
       ) {
-        const queue = yield* Queue.bounded<ViewServerLiveEvent<Row, Topic, Key>, Cause.Done>(64);
-        const updates = yield* Queue.sliding<ViewServerHealth<Topics>, Cause.Done>(1);
-        const subscription = { close: Effect.void };
-        let closed = false;
-        const offerSnapshot = Effect.fn("ViewServerInMemory.health.snapshot.offer")(function* (
-          nextHealth: ViewServerHealth<Topics>,
-        ) {
-          const updatedAtNanos = yield* Clock.currentTimeNanos;
-          yield* Queue.offer(queue, snapshotFromHealth(nextHealth, updatedAtNanos));
-        });
-        const unsubscribe = health.subscribe((nextHealth) => {
-          Queue.offerUnsafe(updates, nextHealth);
-        });
-        const latestHealth = yield* readHealth(engine, health).pipe(
-          Effect.mapError(engineErrorToRuntimeError),
-        );
-        yield* offerSnapshot(latestHealth);
-        yield* Stream.fromQueue(updates).pipe(
-          Stream.runForEach(offerSnapshot),
-          Effect.forkChild({ startImmediately: true }),
-        );
-        const releaseSubscription = Effect.gen(function* () {
-          const shouldClose = yield* Effect.sync(() => {
-            if (closed) {
-              return false;
+        return yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const queue = yield* Queue.bounded<ViewServerLiveEvent<Row, Topic, Key>, Cause.Done>(
+              64,
+            );
+            const updates = yield* Queue.sliding<ViewServerHealth<Topics>, Cause.Done>(1);
+            const subscription = { close: Effect.void };
+            let subscriptionClosed = false;
+            const offerSnapshot = Effect.fn("ViewServerRuntimeCore.health.snapshot.offer")(
+              function* (nextHealth: ViewServerHealth<Topics>) {
+                const updatedAtNanos = yield* Clock.currentTimeNanos;
+                yield* Queue.offer(queue, snapshotFromHealth(nextHealth, updatedAtNanos));
+              },
+            );
+            const pumpFiber = yield* Stream.fromQueue(updates).pipe(
+              Stream.runForEach(offerSnapshot),
+              Effect.forkDetach({ startImmediately: true }),
+            );
+            const unsubscribe = health.subscribe((nextHealth) => {
+              Queue.offerUnsafe(updates, nextHealth);
+            });
+            const releaseSubscription = Effect.gen(function* () {
+              const shouldClose = yield* healthSubscriptionLock.withPermit(
+                Effect.sync(() => {
+                  if (subscriptionClosed) {
+                    return false;
+                  }
+                  subscriptionClosed = true;
+                  unsubscribe();
+                  activeHealthSubscriptions.delete(subscription);
+                  return true;
+                }),
+              );
+              if (shouldClose) {
+                yield* Queue.end(updates).pipe(Effect.ignore);
+                yield* Fiber.interrupt(pumpFiber).pipe(Effect.ignore);
+                yield* Queue.end(queue);
+              }
+            });
+            const registered = yield* healthSubscriptionLock.withPermit(
+              Effect.sync(() => {
+                subscription.close = releaseSubscription;
+                if (healthSubscriptionsClosed) {
+                  return false;
+                }
+                activeHealthSubscriptions.add(subscription);
+                return true;
+              }),
+            );
+            if (!registered) {
+              yield* releaseSubscription;
+              return yield* Effect.fail(runtimeClosedError);
             }
-            closed = true;
-            unsubscribe();
-            activeHealthSubscriptions.delete(subscription);
-            return true;
-          });
-          if (shouldClose) {
-            yield* Queue.end(updates).pipe(Effect.ignore);
-            yield* Queue.end(queue);
-          }
-        });
-        yield* Effect.sync(() => {
-          subscription.close = releaseSubscription;
-          activeHealthSubscriptions.add(subscription);
-        });
-        return {
-          events: Stream.fromQueue(queue).pipe(Stream.ensuring(subscription.close)),
-          close: () => subscription.close,
-        };
+            const latestHealth = yield* readHealth(engine, health, transportHealth).pipe(
+              Effect.mapError(engineErrorToRuntimeError),
+            );
+            yield* offerSnapshot(latestHealth);
+            return {
+              events: Stream.fromQueue(queue).pipe(Stream.ensuring(subscription.close)),
+              close: () => subscription.close,
+            };
+          }),
+        );
       });
       return {
         subscribe,

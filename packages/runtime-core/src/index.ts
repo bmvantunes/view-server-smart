@@ -1,0 +1,89 @@
+import {
+  createColumnLiveViewEngine,
+  type DecodableTopicDefinitions,
+} from "@view-server/column-live-view-engine";
+import type { ViewServerRuntimeLiveClient } from "@view-server/client";
+import type {
+  ViewServerConfig,
+  ViewServerHealth,
+  ViewServerRuntimeClient,
+} from "@view-server/config";
+import { Effect } from "effect";
+import { AtomRef } from "effect/unstable/reactivity";
+import {
+  defaultRuntimeCoreTransportHealth,
+  healthFromEngine,
+  type RuntimeCoreTransportHealth,
+} from "./health";
+import type * as Duration from "effect/Duration";
+import { makeRuntimeCoreLiveClient } from "./live-client";
+import { makeRuntimeCoreClient } from "./runtime-client";
+
+export type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";
+export type { RuntimeCoreTransportHealth } from "./health";
+
+export type ViewServerRuntimeCoreInstance<Topics extends DecodableTopicDefinitions> = {
+  readonly client: ViewServerRuntimeClient<Topics>;
+  readonly liveClient: ViewServerRuntimeLiveClient<Topics>;
+  readonly close: Effect.Effect<void>;
+};
+
+export type ViewServerRuntimeCoreOptions = {
+  readonly subscriptionQueueCapacity?: number;
+  readonly transportHealth?: RuntimeCoreTransportHealth<DecodableTopicDefinitions>;
+  readonly healthRefreshCadence?: Duration.Input;
+};
+
+export type ViewServerRuntimeCoreOptionsFor<Topics extends DecodableTopicDefinitions> = {
+  readonly subscriptionQueueCapacity?: number;
+  readonly transportHealth?: RuntimeCoreTransportHealth<Topics>;
+  readonly healthRefreshCadence?: Duration.Input;
+};
+
+export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  input: ViewServerRuntimeCoreOptionsFor<Topics>,
+) => Effect.Effect<ViewServerRuntimeCoreInstance<Topics>> = Effect.fn("ViewServerRuntimeCore.make")(
+  function* <const Topics extends DecodableTopicDefinitions>(
+    config: ViewServerConfig<Topics>,
+    input: ViewServerRuntimeCoreOptionsFor<Topics>,
+  ) {
+    const transportHealth = input.transportHealth ?? defaultRuntimeCoreTransportHealth;
+    const engineConfig =
+      input.subscriptionQueueCapacity === undefined
+        ? { topics: config.topics }
+        : {
+            topics: config.topics,
+            subscriptionQueueCapacity: input.subscriptionQueueCapacity,
+          };
+    const engine = yield* createColumnLiveViewEngine<Topics>(engineConfig);
+    const engineHealth = yield* engine.health();
+    const health: AtomRef.AtomRef<ViewServerHealth<Topics>> = AtomRef.make(
+      healthFromEngine(engineHealth, transportHealth),
+    );
+    const runtimeClient = yield* makeRuntimeCoreClient<Topics>(
+      engine,
+      health,
+      transportHealth,
+      input.healthRefreshCadence,
+    );
+    const liveClient = yield* makeRuntimeCoreLiveClient<Topics>(engine, health, transportHealth);
+    const close = Effect.uninterruptible(
+      runtimeClient.close.pipe(Effect.andThen(liveClient.close)),
+    );
+    return {
+      client: runtimeClient.client,
+      liveClient: {
+        ...liveClient,
+        close,
+      },
+      close,
+    };
+  },
+);
+
+export const createViewServerRuntimeCore = <const Topics extends DecodableTopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  options: ViewServerRuntimeCoreOptionsFor<Topics> = {},
+): ViewServerRuntimeCoreInstance<Topics> =>
+  Effect.runSync(makeViewServerRuntimeCore(config, options));

@@ -83,8 +83,6 @@ export type ViewServerRuntimeClient<Topics extends object> = {
   readonly reset: () => Effect.Effect<void, ViewServerRuntimeError>;
 };
 
-export type ViewServerInMemoryRuntime<Topics extends object> = ViewServerRuntimeClient<Topics>;
-
 export type RuntimeEnvironmentConfig = {
   readonly websocketPort: Config.Config<number>;
   readonly tcpPublishPort: Config.Config<number>;

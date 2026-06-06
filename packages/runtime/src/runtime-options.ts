@@ -1,16 +1,16 @@
-import type { ViewServerInMemoryOptions } from "@view-server/in-memory";
+import type { ViewServerRuntimeCoreOptions } from "@view-server/runtime-core";
 import type { ViewServerWebSocketServerOptions } from "@view-server/server";
 import type { ViewServerRuntimeOptions } from "./runtime-types";
 
 export type ResolvedViewServerRuntimeOptions = {
-  readonly inMemoryOptions: ViewServerInMemoryOptions;
+  readonly runtimeCoreOptions: ViewServerRuntimeCoreOptions;
   readonly serverOptions: ViewServerWebSocketServerOptions;
 };
 
 export const resolveViewServerRuntimeOptions = (
   options: ViewServerRuntimeOptions,
 ): ResolvedViewServerRuntimeOptions => {
-  const inMemoryOptions =
+  const runtimeCoreOptions =
     options.subscriptionQueueCapacity === undefined
       ? {}
       : { subscriptionQueueCapacity: options.subscriptionQueueCapacity };
@@ -21,7 +21,7 @@ export const resolveViewServerRuntimeOptions = (
     ...(options.healthPath === undefined ? {} : { healthPath: options.healthPath }),
   };
   return {
-    inMemoryOptions,
+    runtimeCoreOptions,
     serverOptions,
   };
 };

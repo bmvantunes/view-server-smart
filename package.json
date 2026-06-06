@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check:effect": "effect-language-service diagnostics --project packages/config/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/protocol/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/client/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/column-live-view-engine/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/in-memory/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/server/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/runtime/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/react/tsconfig.json --format text --strict",
+    "check:effect": "effect-language-service diagnostics --project packages/config/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/protocol/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/client/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/column-live-view-engine/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/runtime-core/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/in-memory/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/server/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/runtime/tsconfig.json --format text --strict && effect-language-service diagnostics --project packages/react/tsconfig.json --format text --strict",
     "check:internal-seams": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module preserve --moduleResolution bundler scripts/node-ambient.d.ts scripts/check-internal-seams.ts && node --experimental-strip-types scripts/check-internal-seams.ts",
     "check:package-exports": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module preserve --moduleResolution bundler scripts/check-package-exports.ts && node --experimental-strip-types scripts/check-package-exports.ts",
     "ready": "vp run -r build && pnpm run check:package-exports && pnpm run check:internal-seams && vp check && pnpm run check:effect && vp run -r test",
@@ -19,6 +19,7 @@
     "@view-server/protocol": "workspace:*",
     "@view-server/react": "workspace:*",
     "@view-server/runtime": "workspace:*",
+    "@view-server/runtime-core": "workspace:*",
     "@view-server/server": "workspace:*",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

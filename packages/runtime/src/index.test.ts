@@ -1,11 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
+import type { ColumnLiveViewEngineHealth } from "@view-server/column-live-view-engine";
 import { makeViewServerClient } from "@view-server/client/remote";
 import { defineViewServerConfig } from "@view-server/config";
-import { makeInMemoryViewServer } from "@view-server/in-memory";
+import { makeViewServerRuntimeCore } from "@view-server/runtime-core";
 import { Effect, Exit, Fiber, Schema, Stream } from "effect";
 import type { ViewServerRuntimeDependencies } from "./internal";
 import { makeViewServerRuntimeWithDependencies } from "./internal";
 import { makeViewServerRuntime } from "./index";
+import { makeViewServerRuntimeTransportHealth } from "./transport-health";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -58,7 +60,7 @@ const fetchHealth = Effect.fn("ViewServerRuntime.test.health.fetch")(function* (
 });
 
 describe("@view-server/runtime", () => {
-  it.live("starts a websocket runtime with health endpoint and in-memory mutation client", () =>
+  it.live("starts a websocket runtime with health endpoint and runtime-core mutation client", () =>
     Effect.gen(function* () {
       const runtime = yield* makeViewServerRuntime(viewServer, {
         host: "127.0.0.1",
@@ -77,6 +79,7 @@ describe("@view-server/runtime", () => {
         Effect.forkChild,
       );
       yield* Effect.sleep("10 millis");
+      expect(runtime.liveClient.health.value.transport.activeStreams).toBe(1);
 
       yield* runtime.client.publish("orders", order("a", 10));
 
@@ -108,6 +111,8 @@ describe("@view-server/runtime", () => {
 
       yield* subscription.close();
       yield* remoteClient.close;
+      yield* Effect.sleep("10 millis");
+      expect(runtime.liveClient.health.value.transport.activeStreams).toBe(0);
       yield* runtime.close;
     }),
   );
@@ -117,6 +122,7 @@ describe("@view-server/runtime", () => {
       const defaultRuntime = yield* makeViewServerRuntime(viewServer);
       expect(defaultRuntime.url.endsWith("/rpc")).toBe(true);
       expect(defaultRuntime.healthUrl.endsWith("/health")).toBe(true);
+      expect("subscribeRuntime" in defaultRuntime.liveClient).toBe(false);
       yield* defaultRuntime.close;
 
       const configuredRuntime = yield* makeViewServerRuntime(viewServer, {
@@ -129,17 +135,75 @@ describe("@view-server/runtime", () => {
     }),
   );
 
-  it.live("forwards runtime options to the in-memory runtime and websocket server", () =>
+  it.effect("tracks runtime transport stream health", () =>
+    Effect.gen(function* () {
+      const transport = makeViewServerRuntimeTransportHealth<typeof viewServer.topics>();
+      const engineHealth = {
+        status: "ready",
+        version: 1,
+        topics: {
+          orders: {
+            status: "ready",
+            rowCount: 10,
+            liveRowCount: 10,
+            deletedRowCount: 0,
+            version: 3,
+            lastMutationAt: 1,
+            mutationsPerSecond: 2,
+            rowsPerSecond: 2,
+            pendingMutationBatches: 0,
+            activeViews: 1,
+            activeSubscriptions: 4,
+            queuedEvents: 5,
+            maxQueueDepth: 6,
+            backpressureEvents: 7,
+            memoryBytes: 8,
+            tombstoneCount: 0,
+            compactionPending: false,
+          },
+        },
+        activeSubscriptions: 4,
+        queuedEvents: 5,
+        maxQueueDepth: 6,
+        backpressureEvents: 7,
+      } satisfies ColumnLiveViewEngineHealth<typeof viewServer.topics>;
+
+      expect(transport.transportHealth(engineHealth).activeStreams).toBe(0);
+      yield* transport.streamOpened;
+      yield* transport.streamOpened;
+      expect(transport.transportHealth(engineHealth)).toStrictEqual({
+        activeClients: 0,
+        activeStreams: 2,
+        activeSubscriptions: 4,
+        messagesPerSecond: 0,
+        bytesPerSecond: 0,
+        queuedMessages: 5,
+        queuedBytes: 0,
+        droppedClients: 0,
+        backpressureEvents: 7,
+        reconnects: 0,
+        lastError: null,
+      });
+      yield* transport.streamClosed;
+      yield* transport.streamClosed;
+      yield* transport.streamClosed;
+      expect(transport.transportHealth(engineHealth).activeStreams).toBe(0);
+    }),
+  );
+
+  it.live("forwards runtime options to the runtime core and websocket server", () =>
     Effect.gen(function* () {
       type RuntimeDependencies = ViewServerRuntimeDependencies<typeof viewServer.topics>;
-      let inMemoryOptions: Parameters<RuntimeDependencies["makeInMemory"]>[1] | undefined;
+      let runtimeCoreOptions: Parameters<RuntimeDependencies["makeRuntimeCore"]>[1] | undefined;
+      let serverInput: Parameters<RuntimeDependencies["makeServer"]>[1] | undefined;
       let serverOptions: Parameters<RuntimeDependencies["makeServer"]>[2] | undefined;
       const dependencies: RuntimeDependencies = {
-        makeInMemory: (config, options) => {
-          inMemoryOptions = options;
-          return makeInMemoryViewServer(config, options);
+        makeRuntimeCore: (config, options) => {
+          runtimeCoreOptions = options;
+          return makeViewServerRuntimeCore(config, options);
         },
-        makeServer: (_config, _input, options) => {
+        makeServer: (_config, input, options) => {
+          serverInput = input;
           serverOptions = options;
           return Effect.succeed({
             url: "ws://127.0.0.1:0/custom-rpc",
@@ -157,7 +221,10 @@ describe("@view-server/runtime", () => {
         subscriptionQueueCapacity: 7,
       });
 
-      expect(inMemoryOptions).toStrictEqual({ subscriptionQueueCapacity: 7 });
+      expect(runtimeCoreOptions?.subscriptionQueueCapacity).toBe(7);
+      expect(runtimeCoreOptions?.transportHealth).toBeTypeOf("function");
+      expect(serverInput?.transport?.streamOpened).toBeDefined();
+      expect(serverInput?.transport?.streamClosed).toBeDefined();
       expect(serverOptions).toStrictEqual({
         host: "0.0.0.0",
         port: 1234,
@@ -168,34 +235,56 @@ describe("@view-server/runtime", () => {
     }),
   );
 
-  it.live(
-    "releases the in-memory runtime when server startup fails before returning a runtime",
-    () =>
-      Effect.gen(function* () {
-        let closed = false;
-        const dependencies: ViewServerRuntimeDependencies<typeof viewServer.topics> = {
-          makeInMemory: (config, options) =>
-            makeInMemoryViewServer(config, options).pipe(
-              Effect.map((inMemory) => ({
-                ...inMemory,
-                close: inMemory.close.pipe(
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      closed = true;
-                    }),
-                  ),
+  it.live("public live client close closes the websocket server and runtime core", () =>
+    Effect.gen(function* () {
+      let serverCloseCount = 0;
+      const dependencies: ViewServerRuntimeDependencies<typeof viewServer.topics> = {
+        makeRuntimeCore: makeViewServerRuntimeCore,
+        makeServer: () =>
+          Effect.succeed({
+            url: "ws://127.0.0.1:0/rpc",
+            healthUrl: "http://127.0.0.1:0/health",
+            close: Effect.sync(() => {
+              serverCloseCount += 1;
+            }),
+          }),
+      };
+
+      const runtime = yield* makeViewServerRuntimeWithDependencies(dependencies, viewServer);
+      yield* runtime.liveClient.close;
+      const health = yield* runtime.client.health();
+
+      expect(serverCloseCount).toBe(1);
+      expect(health.status).toBe("stopping");
+    }),
+  );
+
+  it.live("releases the runtime core when server startup fails before returning a runtime", () =>
+    Effect.gen(function* () {
+      let closed = false;
+      const dependencies: ViewServerRuntimeDependencies<typeof viewServer.topics> = {
+        makeRuntimeCore: (config, options) =>
+          makeViewServerRuntimeCore(config, options).pipe(
+            Effect.map((runtimeCore) => ({
+              ...runtimeCore,
+              close: runtimeCore.close.pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    closed = true;
+                  }),
                 ),
-              })),
-            ),
-          makeServer: () => Effect.die(new Error("server startup failed")),
-        };
+              ),
+            })),
+          ),
+        makeServer: () => Effect.die(new Error("server startup failed")),
+      };
 
-        const startupExit = yield* Effect.exit(
-          makeViewServerRuntimeWithDependencies(dependencies, viewServer),
-        );
+      const startupExit = yield* Effect.exit(
+        makeViewServerRuntimeWithDependencies(dependencies, viewServer),
+      );
 
-        expect(Exit.isFailure(startupExit)).toBe(true);
-        expect(closed).toBe(true);
-      }),
+      expect(Exit.isFailure(startupExit)).toBe(true);
+      expect(closed).toBe(true);
+    }),
   );
 });

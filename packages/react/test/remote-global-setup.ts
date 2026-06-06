@@ -1,5 +1,5 @@
 import { defineViewServerConfig } from "@view-server/config";
-import { createInMemoryViewServer } from "@view-server/in-memory";
+import { createViewServerRuntimeCore } from "@view-server/runtime-core";
 import { makeViewServerWebSocketServer } from "@view-server/server";
 import { Effect, Schema } from "effect";
 
@@ -38,16 +38,16 @@ const viewServer = defineViewServerConfig({
 });
 
 export const setup = async (project: Project) => {
-  const inMemory = createInMemoryViewServer(viewServer);
+  const runtimeCore = createViewServerRuntimeCore(viewServer);
   const server = await Effect.runPromise(
     makeViewServerWebSocketServer(viewServer, {
-      liveClient: inMemory.liveClient,
-      runtime: inMemory.client,
+      liveClient: runtimeCore.liveClient,
+      runtime: runtimeCore.client,
     }),
   );
   project.provide("viewServerRemoteUrl", server.url);
 
   return async () => {
-    await Effect.runPromise(server.close.pipe(Effect.andThen(inMemory.close)));
+    await Effect.runPromise(server.close.pipe(Effect.andThen(runtimeCore.close)));
   };
 };

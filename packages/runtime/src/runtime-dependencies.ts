@@ -1,9 +1,9 @@
 import type { ViewServerConfig } from "@view-server/config";
 import {
-  makeInMemoryViewServer,
-  type ViewServerInMemoryInstance,
-  type ViewServerInMemoryOptions,
-} from "@view-server/in-memory";
+  makeViewServerRuntimeCore,
+  type ViewServerRuntimeCoreInstance,
+  type ViewServerRuntimeCoreOptionsFor,
+} from "@view-server/runtime-core";
 import {
   makeViewServerWebSocketServer,
   type ViewServerWebSocketServer,
@@ -15,10 +15,10 @@ import type { HttpServerError } from "effect/unstable/http";
 import type { ViewServerRuntimeTopicDefinitions } from "./runtime-types";
 
 export type ViewServerRuntimeDependencies<Topics extends ViewServerRuntimeTopicDefinitions> = {
-  readonly makeInMemory: (
+  readonly makeRuntimeCore: (
     config: ViewServerConfig<Topics>,
-    options: ViewServerInMemoryOptions,
-  ) => Effect.Effect<ViewServerInMemoryInstance<Topics>>;
+    options: ViewServerRuntimeCoreOptionsFor<Topics>,
+  ) => Effect.Effect<ViewServerRuntimeCoreInstance<Topics>>;
   readonly makeServer: (
     config: ViewServerConfig<Topics>,
     input: ViewServerWebSocketServerInput<Topics>,
@@ -29,6 +29,6 @@ export type ViewServerRuntimeDependencies<Topics extends ViewServerRuntimeTopicD
 export const makeDefaultRuntimeDependencies = <
   const Topics extends ViewServerRuntimeTopicDefinitions,
 >(): ViewServerRuntimeDependencies<Topics> => ({
-  makeInMemory: makeInMemoryViewServer,
+  makeRuntimeCore: makeViewServerRuntimeCore,
   makeServer: makeViewServerWebSocketServer,
 });

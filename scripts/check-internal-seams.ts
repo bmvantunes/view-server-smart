@@ -3,6 +3,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const packageSourceRoot = (name: string): string => join(repoRoot, "packages", name, "src");
 const engineSourceRoot = join(repoRoot, "packages", "column-live-view-engine", "src");
 const topicStoreFile = join(engineSourceRoot, "topic-store.ts");
 const topicStoreHealthFile = join(engineSourceRoot, "topic-store-health.ts");
@@ -91,6 +92,45 @@ if (violations.length > 0) {
       "Production engine modules must not use restricted TopicStore state helpers.",
       "Route query/read-model behavior through TopicStore helper operations instead.",
       ...violations.map((path) => `- ${path}`),
+    ].join("\n"),
+  );
+}
+
+const restrictedPackageImports = [
+  {
+    packageName: "runtime",
+    pattern: /from\s+["']@view-server\/in-memory["']/,
+    message: "Production runtime must compose runtime-core directly, not the in-memory Adapter.",
+  },
+  {
+    packageName: "in-memory",
+    pattern: /from\s+["']@view-server\/column-live-view-engine["']/,
+    message:
+      "The in-memory Adapter must use runtime-core instead of reaching into the engine package.",
+  },
+] as const;
+
+const packageImportViolations: Array<string> = [];
+
+for (const restriction of restrictedPackageImports) {
+  for (const path of sourceFiles(packageSourceRoot(restriction.packageName))) {
+    if (isTestFile(path)) {
+      continue;
+    }
+    const contents = readFileSync(path, "utf8");
+    if (restriction.pattern.test(contents)) {
+      packageImportViolations.push(
+        `${relative(repoRoot, path)}: ${restriction.message}`,
+      );
+    }
+  }
+}
+
+if (packageImportViolations.length > 0) {
+  throw new Error(
+    [
+      "Package architecture seam violations found.",
+      ...packageImportViolations.map((path) => `- ${path}`),
     ].join("\n"),
   );
 }

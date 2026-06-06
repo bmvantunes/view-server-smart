@@ -1,3 +1,4 @@
+import type { ViewServerLiveClient, ViewServerRuntimeLiveClient } from "@view-server/client";
 import type { ViewServerConfig } from "@view-server/config";
 import { Effect, Exit } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
@@ -11,6 +12,7 @@ import type {
   ViewServerRuntimeOptions,
   ViewServerRuntimeTopicDefinitions,
 } from "./runtime-types";
+import { makeViewServerRuntimeTransportHealth } from "./transport-health";
 
 export { makeDefaultRuntimeDependencies };
 export type {
@@ -19,6 +21,17 @@ export type {
   ViewServerRuntimeOptions,
   ViewServerRuntimeTopicDefinitions,
 };
+
+const toPublicLiveClient = <const Topics extends ViewServerRuntimeTopicDefinitions>(
+  liveClient: ViewServerRuntimeLiveClient<Topics>,
+  close: Effect.Effect<void>,
+): ViewServerLiveClient<Topics> => ({
+  close,
+  health: liveClient.health,
+  subscribe: liveClient.subscribe,
+  subscribeHealth: liveClient.subscribeHealth,
+  subscribeHealthSummary: liveClient.subscribeHealthSummary,
+});
 
 export const makeViewServerRuntimeWithDependencies: <
   const Topics extends ViewServerRuntimeTopicDefinitions,
@@ -33,24 +46,35 @@ export const makeViewServerRuntimeWithDependencies: <
   config: ViewServerConfig<Topics>,
   options: ViewServerRuntimeOptions = {},
 ) {
-  const { inMemoryOptions, serverOptions } = resolveViewServerRuntimeOptions(options);
-  const inMemory = yield* dependencies.makeInMemory(config, inMemoryOptions);
+  const { runtimeCoreOptions, serverOptions } = resolveViewServerRuntimeOptions(options);
+  const transportHealth = makeViewServerRuntimeTransportHealth<Topics>();
+  const runtimeCore = yield* dependencies.makeRuntimeCore(config, {
+    ...runtimeCoreOptions,
+    transportHealth: transportHealth.transportHealth,
+  });
+  const refreshTransportHealth = runtimeCore.client.health().pipe(Effect.ignore);
   const server = yield* dependencies
     .makeServer(
       config,
       {
-        liveClient: inMemory.liveClient,
-        runtime: inMemory.client,
+        liveClient: runtimeCore.liveClient,
+        runtime: runtimeCore.client,
+        transport: {
+          streamOpened: transportHealth.streamOpened.pipe(Effect.andThen(refreshTransportHealth)),
+          streamClosed: transportHealth.streamClosed.pipe(Effect.andThen(refreshTransportHealth)),
+        },
       },
       serverOptions,
     )
-    .pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? inMemory.close : Effect.void)));
+    .pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? runtimeCore.close : Effect.void)));
+  const close = server.close.pipe(Effect.ensuring(runtimeCore.close));
+  const publicLiveClient = toPublicLiveClient(runtimeCore.liveClient, close);
   return {
     url: server.url,
     healthUrl: server.healthUrl,
-    client: inMemory.client,
-    liveClient: inMemory.liveClient,
-    health: inMemory.client.health,
-    close: server.close.pipe(Effect.ensuring(inMemory.close)),
+    client: runtimeCore.client,
+    liveClient: publicLiveClient,
+    health: runtimeCore.client.health,
+    close,
   };
 });

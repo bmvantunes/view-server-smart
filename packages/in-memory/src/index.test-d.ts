@@ -20,6 +20,22 @@ const viewServer = defineViewServerConfig({
 });
 
 const inMemory = createInMemoryViewServer(viewServer);
+const invalidTransportHealthOption = createInMemoryViewServer(viewServer, {
+  // @ts-expect-error in-memory does not expose Runtime Core transport adapter hooks.
+  transportHealth: () => ({
+    activeClients: 0,
+    activeStreams: 0,
+    activeSubscriptions: 0,
+    messagesPerSecond: 0,
+    bytesPerSecond: 0,
+    queuedMessages: 0,
+    queuedBytes: 0,
+    droppedClients: 0,
+    backpressureEvents: 0,
+    reconnects: 0,
+    lastError: null,
+  }),
+});
 
 describe("in-memory type contracts", () => {
   it("preserves runtime and live client topic types", () => {
@@ -42,6 +58,8 @@ describe("in-memory type contracts", () => {
         readonly id: string;
       }>
     >();
+    expectTypeOf(inMemory.liveClient).not.toHaveProperty("subscribeRuntime");
     expectTypeOf(invalidPatch).not.toBeAny();
+    expectTypeOf(invalidTransportHealthOption).not.toBeAny();
   });
 });

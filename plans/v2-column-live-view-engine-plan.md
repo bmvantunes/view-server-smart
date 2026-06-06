@@ -231,10 +231,11 @@ The hook must be fully type-safe from `defineViewServerConfig` without requiring
 `ViewServerProvider` and `ViewServerInMemoryProvider` must expose the same hook behavior. The only difference is the provider adapter behind the shared React client seam:
 
 - `ViewServerProvider` connects to a real server through the configured URL.
-- `ViewServerInMemoryProvider` creates a real in-memory `ColumnLiveViewEngine` inside the browser/test process.
+- `ViewServerInMemoryProvider` creates the shared runtime core with a real in-memory `ColumnLiveViewEngine` inside the browser/test process.
 - `useLiveQuery` and `useViewServerHealth` must depend only on the internal transport-neutral React client contract.
-- The in-memory provider supplies that client from the in-memory engine.
-- The real provider supplies that client from the WebSocket/Effect RPC transport.
+- The in-memory provider supplies that client through the in-process adapter.
+- The real provider supplies that client through the WebSocket/Effect RPC transport adapter.
+- Both providers must exercise the same runtime core, query compiler, store, snapshot/delta, health, and lifecycle implementation. Only transport/ingress adapters differ.
 
 No mock query engine should exist. Browser tests should exercise the same query compiler, columnar store, snapshot logic, delta logic, and grouped accumulator as production.
 
@@ -1014,6 +1015,7 @@ Recommended packages:
 ```txt
 packages/config
 packages/column-live-view-engine
+packages/runtime-core
 packages/client
 packages/protocol
 packages/in-memory
@@ -1027,11 +1029,12 @@ Responsibilities:
 
 - `packages/config`: `defineViewServerConfig`, query DSL types, schema/topic typing, shared public types.
 - `packages/column-live-view-engine`: in-memory columnar store, snapshot, subscribe, deltas, grouped aggregates, health core.
+- `packages/runtime-core`: shared engine-backed runtime Module; owns the `ColumnLiveViewEngine`, runtime client, live client, pushed health streams, and lifecycle.
 - `packages/client`: transport-neutral live client contracts, query state, and remote client entrypoints.
 - `packages/protocol`: Effect RPC WebSocket wire schema and encode/decode boundary.
-- `packages/in-memory`: in-process runtime client backed by the engine.
+- `packages/in-memory`: in-process adapter over `runtime-core`; no alternate query engine, fake hook, fake health model, or duplicate runtime logic.
 - `packages/server`: Effect RPC WebSocket server and same-server HTTP health endpoint.
-- `packages/runtime`: production composition of in-memory runtime, server, health URL, lifecycle, and future Kafka/TCP/gRPC ingestion adapters.
+- `packages/runtime`: production composition of `runtime-core`, server, health URL, lifecycle, and future Kafka/TCP/gRPC ingress adapters.
 - `packages/react`: production React provider/hooks plus a separate testing entrypoint for the in-memory provider.
 - `apps/examples`: minimal real app proving browser usage and runtime URL injection.
 

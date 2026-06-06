@@ -82,7 +82,6 @@ export {
 export type { ViewServerSystemTopicName } from "./health-contract";
 export type {
   ViewServerBackpressureError,
-  ViewServerInMemoryRuntime,
   RuntimeEnvironmentConfig,
   ViewServerRuntimeClient,
   ViewServerRuntimeError,

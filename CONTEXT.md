@@ -15,7 +15,7 @@ A deployed View Server runtime that serves browser clients over Effect RPC WebSo
 _Avoid_: Production provider, remote mock, websocket provider
 
 **In-Memory View Server**:
-A View Server runtime created inside the current process for tests, demos, Storybook, and browser benchmarks.
+A View Server runtime created inside the current process for tests, demos, Storybook, and browser benchmarks. It uses the same Runtime Core as the Real View Server and swaps only the transport Adapter.
 _Avoid_: Mock server, fake client, test hook
 
 **View Server Topic**:
@@ -93,6 +93,10 @@ _Avoid_: Grouped query object, aggregate config, groupBy helper
 **Health Ledger**:
 The owner of counters and sampled health state for mutations, subscriptions, queues, backpressure, ingestion, and transport pressure.
 _Avoid_: Health object builder, metrics dump
+
+**Runtime Core**:
+The shared engine-backed runtime Module that owns the Column Live View Engine instance, Runtime Client, Live Client, pushed health streams, and lifecycle. Real and in-memory View Servers use the same Runtime Core; only transport and ingress Adapters differ.
+_Avoid_: In-memory implementation, test runtime, WebSocket server
 
 ### Client And Transport Concepts
 
@@ -176,6 +180,7 @@ _Avoid_: Browser write, send, emit
 - A **Grouped Query** returns group fields plus aggregate aliases.
 - A **Subscription** belongs to one **Live Query** and emits one **Snapshot** followed by zero or more **Deltas** and **Status Events**.
 - A **Column Live View Engine** owns one **Columnar Topic Store** per **View Server Topic**.
+- A **Runtime Core** owns one **Column Live View Engine** instance and exposes both a **Runtime Client** and a **Live Client**.
 - A **Raw Query Plan** is compiled once from a **Raw Query** before the **Columnar Topic Store** scans rows.
 - A **Raw Predicate Plan** is part of a **Raw Query Plan** and lets storage narrow scans without replacing the correctness callback unless it is proven exact.
 - A **Columnar Topic Store** may maintain **Raw Ordered Window Indexes** to accelerate bounded **Raw Query** windows.
@@ -193,6 +198,7 @@ _Avoid_: Browser write, send, emit
 - A **Health Payload Codec** protects full runtime health payloads from missing or unknown configured topics.
 - A **View Server Provider** supplies a **Live Client** to React hooks.
 - A **View Server In-Memory Provider** supplies the same hook behavior through an **In-Memory View Server**.
+- A **Real View Server** and **In-Memory View Server** differ only by transport and ingress **Adapters**, not by query, storage, health, or subscription logic.
 - A **Source Topic** is mapped into a **View Server Topic** through a **Mapping**.
 - **Health Ledger** state feeds engine health, runtime health, transport health, and React health.
 
