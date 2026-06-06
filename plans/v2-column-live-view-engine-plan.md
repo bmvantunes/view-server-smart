@@ -1261,7 +1261,7 @@ VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 vp run --no-cache column-live-view-engine#
 VIEW_SERVER_ENGINE_BENCH_ROWS=10000000 vp run --no-cache column-live-view-engine#bench:raw-snapshot
 ```
 
-Supported knobs:
+Raw snapshot knobs:
 
 - `VIEW_SERVER_ENGINE_BENCH_ROWS`: row count for this benchmark process.
 - `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding.
@@ -1270,10 +1270,47 @@ Supported knobs:
 - `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: warmup iterations per case.
 - `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: warmup time budget per case.
 
+Current raw predicate candidate index benchmark harness:
+
+```bash
+vp run --no-cache column-live-view-engine#bench:raw-predicate-index
+```
+
+This harness uses Vitest `bench()`, scanner-level callback counters, and returned-key assertions to
+prove exact predicate candidate indexes reduce steady-state row callback work without breaking window
+ordering. It pre-warms the ordered range index before timed samples; it is not a cold index-build
+benchmark. It compares:
+
+- full-scan callback baseline for selective customer filters
+- exact scalar candidate for selective `eq`
+- exact scalar candidate with no row callback when the predicate is callback-skippable
+- exact multi-key `in` candidate using authoritative value keys
+- exact range candidate over an existing ordered index
+- ordered equality seek over storage order
+- failed broad scalar candidate build plus full scan
+
+It writes `packages/column-live-view-engine/.artifacts/raw-predicate-index.json`. Run each row count
+in a separate process. The benchmark rejects row counts below 101 because several cases assert exact
+50/100-row windows and the range-candidate case must stay narrower than the whole table.
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-predicate-index
+VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 vp run --no-cache column-live-view-engine#bench:raw-predicate-index
+VIEW_SERVER_ENGINE_BENCH_ROWS=10000000 vp run --no-cache column-live-view-engine#bench:raw-predicate-index
+```
+
+Raw predicate index knobs:
+
+- `VIEW_SERVER_ENGINE_BENCH_ROWS`: row count for this benchmark process.
+- `VIEW_SERVER_ENGINE_BENCH_ITERATIONS`: benchmark iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: benchmark time budget per case.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: warmup iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: warmup time budget per case.
+
 For decision-quality large-row runs, keep `--no-cache` and use multiple iterations. One-sample runs
 are useful only to verify feasibility and approximate scale.
 
-Each benchmark artifact must include:
+Each production/runtime benchmark artifact must include:
 
 - row count
 - mutation count

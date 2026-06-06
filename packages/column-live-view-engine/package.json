@@ -14,6 +14,7 @@
   },
   "scripts": {
     "build": "vp pack",
+    "bench:raw-predicate-index": "vp test bench src/raw-predicate-index.bench.ts --run --testTimeout 0 --outputJson .artifacts/raw-predicate-index.json",
     "bench:raw-snapshot": "vp test bench src/raw-snapshot.bench.ts --run --testTimeout 0 --outputJson .artifacts/raw-snapshot.json",
     "test": "vp test run --coverage --typecheck"
   },
