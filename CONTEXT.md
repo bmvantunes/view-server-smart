@@ -116,6 +116,14 @@ _Avoid_: Raw WebSocket protocol, HTTP stream, SSE, MessagePack protocol
 The Wire Protocol module that encodes and decodes schema-aware JSON-safe Raw Query filter values, including operator filters and structured-value fallback.
 _Avoid_: Filter helper, JSON helper, where encoder
 
+**Raw Query Codec**:
+The Wire Protocol module that validates, encodes, and decodes Raw Query wire payloads while preserving configured Topic Row field semantics.
+_Avoid_: Raw query helper, select validator, query parser
+
+**Grouped Query Codec**:
+The Wire Protocol module that validates, encodes, and decodes Grouped Query wire payloads, including aggregate alias safety, grouped ordering, and numeric aggregate rules.
+_Avoid_: Aggregate helper, groupBy validator, grouped query parser
+
 **View Server Provider**:
 The React provider that supplies a Live Client to hooks.
 _Avoid_: Runtime provider, in-memory provider when discussing the generic provider
@@ -161,6 +169,8 @@ _Avoid_: Browser write, send, emit
 - A **Runtime Client** can publish mutations but is not exposed to browsers by the Real View Server.
 - A **Remote Browser Client** is a **Live Client** adapter for the **Wire Protocol**.
 - A **Field Filter Codec** protects the **Wire Protocol** from unsafe or incorrectly typed filter values.
+- A **Raw Query Codec** protects Raw Query wire payloads from unknown fields, unsafe filters, and invalid windows.
+- A **Grouped Query Codec** protects Grouped Query wire payloads from invalid group fields, aggregate aliases, aggregate fields, grouped ordering, and invalid windows.
 - A **View Server Provider** supplies a **Live Client** to React hooks.
 - A **View Server In-Memory Provider** supplies the same hook behavior through an **In-Memory View Server**.
 - A **Source Topic** is mapped into a **View Server Topic** through a **Mapping**.
