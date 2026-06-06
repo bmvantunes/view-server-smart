@@ -676,7 +676,7 @@ describe("public type surface", () => {
       ViewServerHealthTopicRow<"orders" | "trades" | "positions"> | undefined
     >();
     expectTypeOf<ViewServerHealthDetails<"orders">["status"]>().toEqualTypeOf<
-      "ready" | "degraded" | "starting" | "stopping" | "connecting" | "connected" | "disconnected"
+      "ready" | "degraded" | "starting" | "stopping" | "connecting" | "disconnected"
     >();
   });
 

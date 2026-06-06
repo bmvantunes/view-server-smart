@@ -5,7 +5,7 @@ import type {
 } from "@view-server/config";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { Schema } from "effect";
-import { ViewServerWireEventSchema } from "./protocol-event-schema";
+import { ViewServerTrustedWireEventSchema } from "./protocol-event-schema";
 import { ViewServerHealthSchema } from "./protocol-health-schema";
 import { ViewServerSubscribePayloadSchema } from "./protocol-query-schema";
 
@@ -58,7 +58,7 @@ export const ViewServerRpcs = RpcGroup.make(
   }),
   Rpc.make("ViewServer.Subscribe", {
     payload: ViewServerSubscribePayloadSchema,
-    success: ViewServerWireEventSchema,
+    success: ViewServerTrustedWireEventSchema,
     error: ViewServerRpcErrorSchema,
     stream: true,
   }),

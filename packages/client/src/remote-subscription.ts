@@ -1,24 +1,32 @@
 import { Cause, Effect, Exit, Queue, Scope, Stream } from "effect";
 import { constant } from "effect/Function";
-import type { StatusEvent } from "@view-server/config";
-import type { ViewServerLiveEvent, ViewServerLiveSubscription } from "./live-client";
+import type {
+  ViewServerLiveEvent,
+  ViewServerLiveSubscription,
+  ViewServerStatusEvent,
+} from "./live-client";
 
 export type RemoteSubscriptionLifecycle = {
   readonly onOpen: Effect.Effect<void>;
   readonly onClose: Effect.Effect<void>;
 };
 
-export type RemoteSubscriptionOptions<Row, Error> = {
+export type RemoteSubscriptionOptions<
+  Row,
+  Error,
+  Topic extends string = string,
+  Key extends string = string,
+> = {
   readonly clientScope: Scope.Scope;
-  readonly failureStatus: (topic: string, error: Error) => StatusEvent;
+  readonly failureStatus: (topic: Topic, error: Error) => ViewServerStatusEvent<Topic>;
   readonly lifecycle?: RemoteSubscriptionLifecycle;
-  readonly source: Stream.Stream<ViewServerLiveEvent<Row>, Error>;
+  readonly source: Stream.Stream<ViewServerLiveEvent<Row, Topic, Key>, Error>;
   readonly subscriptionBufferSize: number;
-  readonly topic: string;
+  readonly topic: Topic;
 };
 
 export const makeRemoteSubscription = Effect.fn("ViewServerClient.remote.subscription.make")(
-  function* <Row, Error>({
+  function* <Row, Error, Topic extends string = string, Key extends string = string>({
     clientScope,
     failureStatus,
     lifecycle = {
@@ -28,7 +36,7 @@ export const makeRemoteSubscription = Effect.fn("ViewServerClient.remote.subscri
     source,
     subscriptionBufferSize,
     topic,
-  }: RemoteSubscriptionOptions<Row, Error>) {
+  }: RemoteSubscriptionOptions<Row, Error, Topic, Key>) {
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const scope = yield* Scope.fork(clientScope, "parallel");
@@ -38,7 +46,7 @@ export const makeRemoteSubscription = Effect.fn("ViewServerClient.remote.subscri
             const stream = source.pipe(
               Stream.catch((error) => Stream.make(failureStatus(topic, error))),
             );
-            const queue = yield* Queue.bounded<ViewServerLiveEvent<Row>, Cause.Done>(
+            const queue = yield* Queue.bounded<ViewServerLiveEvent<Row, Topic, Key>, Cause.Done>(
               subscriptionBufferSize,
             );
             yield* Scope.addFinalizer(scope, lifecycle.onClose.pipe(Effect.ignore));
@@ -50,7 +58,7 @@ export const makeRemoteSubscription = Effect.fn("ViewServerClient.remote.subscri
             const subscription = {
               events: Stream.fromQueue(queue).pipe(Stream.ensuring(closeSubscription)),
               close: () => closeSubscription,
-            } satisfies ViewServerLiveSubscription<Row>;
+            } satisfies ViewServerLiveSubscription<Row, Topic, Key>;
             return subscription;
           }),
         ).pipe(Effect.onInterrupt(constant(closeSubscription)));

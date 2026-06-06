@@ -2,6 +2,7 @@ import { VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC } from "@vie
 import type { TopicDefinitions, ViewServerConfig } from "@view-server/config";
 import {
   ViewServerRpcs,
+  viewServerDecodeHealth,
   viewServerDecodeHealthQuery,
   viewServerDecodeLiveQuery,
   viewServerDecodeTopic,
@@ -17,7 +18,11 @@ export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>
   input: ViewServerWebSocketServerInput<Topics>,
 ) => {
   return ViewServerRpcs.of({
-    "ViewServer.Health": () => input.runtime.health(),
+    "ViewServer.Health": () =>
+      Effect.gen(function* () {
+        const health = yield* input.runtime.health();
+        return yield* viewServerDecodeHealth(config, health);
+      }),
     "ViewServer.Subscribe": (payload) =>
       Stream.unwrap(
         Effect.gen(function* () {
@@ -25,7 +30,9 @@ export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>
             yield* viewServerDecodeHealthQuery(payload.topic, payload.query);
             const subscription = yield* input.liveClient.subscribeHealthSummary();
             return subscription.events.pipe(
-              Stream.mapEffect(viewServerEncodeHealthSummaryEvent),
+              Stream.mapEffect((event) =>
+                viewServerEncodeHealthSummaryEvent<Topics>(config, event),
+              ),
               Stream.ensuring(subscription.close().pipe(Effect.ignore)),
             );
           }
@@ -33,7 +40,7 @@ export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>
             yield* viewServerDecodeHealthQuery(payload.topic, payload.query);
             const subscription = yield* input.liveClient.subscribeHealth();
             return subscription.events.pipe(
-              Stream.mapEffect(viewServerEncodeHealthTopicEvent),
+              Stream.mapEffect((event) => viewServerEncodeHealthTopicEvent<Topics>(config, event)),
               Stream.ensuring(subscription.close().pipe(Effect.ignore)),
             );
           }

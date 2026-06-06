@@ -23,9 +23,11 @@ import type * as Duration from "effect/Duration";
 import * as Http from "node:http";
 import {
   ViewServerRpcs,
+  ViewServerTrustedWireEventSchema,
   ViewServerWireRowSchema,
   viewServerDecodeHealth,
   type ViewServerRpcError,
+  type ViewServerTrustedWireEvent,
   type ViewServerWireEvent,
   type ViewServerWireHealth,
 } from "@view-server/protocol";
@@ -178,11 +180,22 @@ const snapshotEvent = (
   totalRows: rows.length,
 });
 
+const invalidTrustedEvent = (error: { readonly message: string }): ViewServerRpcError => ({
+  _tag: "ViewServerRuntimeError",
+  code: "InvalidRow",
+  message: error.message,
+});
+
+const trustedEvent = (event: ViewServerWireEvent) =>
+  Schema.decodeUnknownEffect(ViewServerTrustedWireEventSchema)(event).pipe(
+    Effect.mapError(invalidTrustedEvent),
+  );
+
 const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(function* () {
   const path = "/rpc";
-  const events = yield* Queue.unbounded<ViewServerWireEvent>();
-  const healthSummaryEvents = yield* Queue.unbounded<ViewServerWireEvent>();
-  const healthTopicEvents = yield* Queue.unbounded<ViewServerWireEvent>();
+  const events = yield* Queue.unbounded<ViewServerTrustedWireEvent>();
+  const healthSummaryEvents = yield* Queue.unbounded<ViewServerTrustedWireEvent>();
+  const healthTopicEvents = yield* Queue.unbounded<ViewServerTrustedWireEvent>();
   let lastSubscribeQuery: unknown = undefined;
   let rows: ReadonlyArray<typeof ViewServerWireRowSchema.Type> = [];
   let activeSubscriptions = 0;
@@ -205,7 +218,9 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
             yield* Effect.sleep(healthDelay);
             return healthOverride ?? health(rows.length, activeSubscriptions);
           }),
-        "ViewServer.Subscribe": (payload) => {
+        "ViewServer.Subscribe": (
+          payload,
+        ): Stream.Stream<ViewServerTrustedWireEvent, ViewServerRpcError> => {
           lastSubscribeQuery = payload.query;
           if (payload.topic === VIEW_SERVER_HEALTH_SUMMARY_TOPIC) {
             if (healthSummaryError !== undefined) {
@@ -214,7 +229,9 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
             return Stream.unwrap(
               Effect.sync(() => {
                 activeSubscriptions += 1;
-                return Stream.succeed(snapshotEvent(payload.topic, healthSummaryRows)).pipe(
+                return Stream.fromEffect(
+                  trustedEvent(snapshotEvent(payload.topic, healthSummaryRows)),
+                ).pipe(
                   Stream.concat(Stream.fromQueue(healthSummaryEvents)),
                   Stream.ensuring(
                     Effect.sync(() => {
@@ -232,7 +249,9 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
             return Stream.unwrap(
               Effect.sync(() => {
                 activeSubscriptions += 1;
-                return Stream.succeed(snapshotEvent(payload.topic, healthTopicRows)).pipe(
+                return Stream.fromEffect(
+                  trustedEvent(snapshotEvent(payload.topic, healthTopicRows)),
+                ).pipe(
                   Stream.concat(Stream.fromQueue(healthTopicEvents)),
                   Stream.ensuring(
                     Effect.sync(() => {
@@ -292,7 +311,7 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
           return Stream.unwrap(
             Effect.sync(() => {
               activeSubscriptions += 1;
-              return Stream.succeed(snapshotEvent(payload.topic, rows)).pipe(
+              return Stream.fromEffect(trustedEvent(snapshotEvent(payload.topic, rows))).pipe(
                 Stream.concat(Stream.fromQueue(events)),
                 Stream.ensuring(
                   Effect.sync(() => {
@@ -331,16 +350,19 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
   return {
     activeSubscriptions: () => activeSubscriptions,
     close: runtime.disposeEffect,
-    emit: (event: ViewServerWireEvent) => Queue.offer(events, event),
-    emitHealthSummary: (event: ViewServerWireEvent) => Queue.offer(healthSummaryEvents, event),
-    emitHealthTopic: (event: ViewServerWireEvent) => Queue.offer(healthTopicEvents, event),
+    emit: (event: ViewServerWireEvent) =>
+      Effect.flatMap(trustedEvent(event), (trusted) => Queue.offer(events, trusted)),
+    emitHealthSummary: (event: ViewServerWireEvent) =>
+      Effect.flatMap(trustedEvent(event), (trusted) => Queue.offer(healthSummaryEvents, trusted)),
+    emitHealthTopic: (event: ViewServerWireEvent) =>
+      Effect.flatMap(trustedEvent(event), (trusted) => Queue.offer(healthTopicEvents, trusted)),
     emitInsert: (topic: string, row: typeof ViewServerWireRowSchema.Type) =>
       Effect.gen(function* () {
         rows = [...rows, row];
         const id = row["id"];
         const encodedKey = typeof id === "string" ? id : JSON.stringify(id);
         const key = encodedKey === undefined ? "undefined" : encodedKey;
-        yield* Queue.offer(events, {
+        const event = yield* trustedEvent({
           type: "delta",
           topic,
           queryId: "query-remote",
@@ -356,6 +378,7 @@ const makeTestRpcServer = Effect.fn("ViewServerClient.remote.testServer.make")(f
           ],
           totalRows: rows.length,
         });
+        yield* Queue.offer(events, event);
       }),
     healthRequests: () => healthRequests,
     lastSubscribeQuery: () => lastSubscribeQuery,

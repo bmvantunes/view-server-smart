@@ -32,13 +32,19 @@ export {
 } from "./protocol-query-codec";
 
 export {
+  ViewServerTrustedWireEventSchema,
   ViewServerWireRowSchema,
   type ViewServerWireRow,
   ViewServerWireEventSchema,
+  type ViewServerTrustedWireEvent,
   type ViewServerWireEvent,
 } from "./protocol-event-schema";
 
-export { viewServerEncodeLiveEvent, viewServerDecodeLiveEvent } from "./protocol-event-codec";
+export {
+  viewServerEncodeLiveEvent,
+  viewServerDecodeLiveEvent,
+  viewServerDecodeTrustedLiveEvent,
+} from "./protocol-event-codec";
 
 export {
   ViewServerHealthSchema,

@@ -97,16 +97,16 @@ export const makeInMemoryLiveClient = Effect.fn("ViewServerInMemory.liveClient.m
       );
       const readonlyHealth = health.map((value) => value);
       const makeHealthSubscription = Effect.fn("ViewServerInMemory.health.subscribe")(function* <
-        Row extends { readonly id: string },
+        Topic extends typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC | typeof VIEW_SERVER_HEALTH_TOPIC,
+        Key extends string,
+        Row extends { readonly id: Key },
       >(
-        topic: typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC | typeof VIEW_SERVER_HEALTH_TOPIC,
-        queryId: string,
-        rowsFromHealth: (
+        snapshotFromHealth: (
           nextHealth: ViewServerHealth<Topics>,
           updatedAtNanos: bigint,
-        ) => ReadonlyArray<Row>,
+        ) => Extract<ViewServerLiveEvent<Row, Topic, Key>, { readonly type: "snapshot" }>,
       ) {
-        const queue = yield* Queue.bounded<ViewServerLiveEvent<Row>, Cause.Done>(64);
+        const queue = yield* Queue.bounded<ViewServerLiveEvent<Row, Topic, Key>, Cause.Done>(64);
         const updates = yield* Queue.sliding<ViewServerHealth<Topics>, Cause.Done>(1);
         const subscription = { close: Effect.void };
         let closed = false;
@@ -114,16 +114,7 @@ export const makeInMemoryLiveClient = Effect.fn("ViewServerInMemory.liveClient.m
           nextHealth: ViewServerHealth<Topics>,
         ) {
           const updatedAtNanos = yield* Clock.currentTimeNanos;
-          const rows = rowsFromHealth(nextHealth, updatedAtNanos);
-          yield* Queue.offer(queue, {
-            type: "snapshot",
-            topic,
-            queryId,
-            version: nextHealth.version,
-            keys: rows.map((row) => row.id),
-            rows,
-            totalRows: rows.length,
-          });
+          yield* Queue.offer(queue, snapshotFromHealth(nextHealth, updatedAtNanos));
         });
         const unsubscribe = health.subscribe((nextHealth) => {
           Queue.offerUnsafe(updates, nextHealth);
@@ -164,19 +155,36 @@ export const makeInMemoryLiveClient = Effect.fn("ViewServerInMemory.liveClient.m
         subscribe,
         subscribeRuntime,
         subscribeHealthSummary: () =>
-          makeHealthSubscription<ViewServerHealthSummaryRow<Topics>>(
-            VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
-            "health-summary",
-            (nextHealth, updatedAtNanos) => [
-              viewServerHealthSummaryRowFromHealth(nextHealth, updatedAtNanos),
-            ],
-          ),
+          makeHealthSubscription<
+            typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+            "summary",
+            ViewServerHealthSummaryRow<Topics>
+          >((nextHealth, updatedAtNanos) => ({
+            type: "snapshot",
+            topic: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+            queryId: "health-summary",
+            version: nextHealth.version,
+            keys: ["summary"],
+            rows: [viewServerHealthSummaryRowFromHealth(nextHealth, updatedAtNanos)],
+            totalRows: 1,
+          })),
         subscribeHealth: () =>
-          makeHealthSubscription<ViewServerHealthTopicRow<Extract<keyof Topics, string>>>(
-            VIEW_SERVER_HEALTH_TOPIC,
-            "health",
-            viewServerHealthTopicRowsFromHealth,
-          ),
+          makeHealthSubscription<
+            typeof VIEW_SERVER_HEALTH_TOPIC,
+            Extract<keyof Topics, string>,
+            ViewServerHealthTopicRow<Extract<keyof Topics, string>>
+          >((nextHealth, updatedAtNanos) => {
+            const rows = viewServerHealthTopicRowsFromHealth(nextHealth, updatedAtNanos);
+            return {
+              type: "snapshot",
+              topic: VIEW_SERVER_HEALTH_TOPIC,
+              queryId: "health",
+              version: nextHealth.version,
+              keys: rows.map((row) => row.id),
+              rows,
+              totalRows: rows.length,
+            };
+          }),
         health: readonlyHealth,
         close,
       };

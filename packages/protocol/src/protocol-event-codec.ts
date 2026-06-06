@@ -6,7 +6,12 @@ import type {
   ViewServerRuntimeError,
 } from "@view-server/config";
 import { Effect, Schema } from "effect";
-import { type ViewServerWireEvent } from "./protocol-event-schema";
+import {
+  ViewServerTrustedWireEventSchema,
+  type ViewServerTrustedWireEvent,
+  ViewServerWireEventSchema,
+  type ViewServerWireEvent,
+} from "./protocol-event-schema";
 import type { ViewServerEventQuery } from "./protocol-query-schema";
 import {
   decodeGroupedRow,
@@ -18,8 +23,16 @@ import {
   isViewServerEventGroupedQuery,
 } from "./protocol-row-codec";
 
-export { ViewServerWireEventSchema, ViewServerWireRowSchema } from "./protocol-event-schema";
-export type { ViewServerWireEvent, ViewServerWireRow } from "./protocol-event-schema";
+export {
+  ViewServerTrustedWireEventSchema,
+  ViewServerWireEventSchema,
+  ViewServerWireRowSchema,
+} from "./protocol-event-schema";
+export type {
+  ViewServerTrustedWireEvent,
+  ViewServerWireEvent,
+  ViewServerWireRow,
+} from "./protocol-event-schema";
 
 export type ViewServerProtocolEvent<Row> = SnapshotEvent<Row> | DeltaEvent<Row> | StatusEvent;
 
@@ -30,7 +43,24 @@ const invalidRow = (topic: string, message: string): ViewServerRuntimeError => (
   topic,
 });
 
-const encodeStatusEvent = (event: StatusEvent): ViewServerWireEvent => event;
+const validateTrustedWireEvent = Effect.fn("ViewServerProtocol.event.trusted.validate")(function* (
+  topic: string,
+  event: ViewServerWireEvent,
+) {
+  return yield* Schema.decodeUnknownEffect(ViewServerTrustedWireEventSchema)(event).pipe(
+    Effect.mapError((error) => invalidRow(topic, `Invalid event: ${error.message}`)),
+  );
+});
+
+const encodeStatusEvent = Effect.fn("ViewServerProtocol.event.status.encode")(function* (
+  topic: string,
+  event: StatusEvent,
+) {
+  const wireEvent = yield* Schema.decodeUnknownEffect(ViewServerWireEventSchema)(event).pipe(
+    Effect.mapError((error) => invalidRow(topic, `Invalid event: ${error.message}`)),
+  );
+  return yield* validateTrustedWireEvent(topic, wireEvent);
+});
 
 export const viewServerEncodeLiveEvent = Effect.fn("ViewServerProtocol.event.encode")(function* <
   const Topics extends TopicDefinitions,
@@ -49,7 +79,7 @@ export const viewServerEncodeLiveEvent = Effect.fn("ViewServerProtocol.event.enc
     );
   }
   if (event.type === "status") {
-    return encodeStatusEvent(event);
+    return yield* encodeStatusEvent(expectedTopic, event);
   }
   if (event.type === "snapshot") {
     const rows = yield* Effect.forEach(event.rows, (row) => {
@@ -58,10 +88,11 @@ export const viewServerEncodeLiveEvent = Effect.fn("ViewServerProtocol.event.enc
       }
       return encodeProjectedRow(config, expectedTopic, new Set<string>(query.select), row);
     });
-    return {
+    const wireEvent = {
       ...event,
       rows,
     };
+    return yield* validateTrustedWireEvent(expectedTopic, wireEvent);
   }
   type WireDeltaOperation = Extract<
     ViewServerWireEvent,
@@ -81,10 +112,11 @@ export const viewServerEncodeLiveEvent = Effect.fn("ViewServerProtocol.event.enc
       operations.push(operation);
     }
   }
-  return {
+  const wireEvent = {
     ...event,
     operations,
   };
+  return yield* validateTrustedWireEvent(expectedTopic, wireEvent);
 });
 
 function typedLiveEvent<Row>(
@@ -96,7 +128,7 @@ function typedLiveEvent(
   return event;
 }
 
-export const viewServerDecodeLiveEvent = Effect.fn("ViewServerProtocol.event.decode")(function* <
+const decodeValidatedLiveEvent = Effect.fn("ViewServerProtocol.event.decodeValidated")(function* <
   const Topics extends TopicDefinitions,
   Topic extends Extract<keyof Topics, string>,
   Row,
@@ -104,28 +136,28 @@ export const viewServerDecodeLiveEvent = Effect.fn("ViewServerProtocol.event.dec
   config: { readonly topics: Topics },
   expectedTopic: Topic,
   query: ViewServerEventQuery,
-  event: ViewServerWireEvent,
+  wireEvent: ViewServerWireEvent,
 ) {
-  if (event.topic !== expectedTopic) {
+  if (wireEvent.topic !== expectedTopic) {
     return yield* Effect.fail(
       invalidRow(
         expectedTopic,
-        `Received event for ${event.topic} while subscribed to ${expectedTopic}`,
+        `Received event for ${wireEvent.topic} while subscribed to ${expectedTopic}`,
       ),
     );
   }
-  if (event.type === "status") {
-    return typedLiveEvent<Row>(event);
+  if (wireEvent.type === "status") {
+    return typedLiveEvent<Row>(wireEvent);
   }
-  if (event.type === "snapshot") {
-    const rows = yield* Effect.forEach(event.rows, (row) => {
+  if (wireEvent.type === "snapshot") {
+    const rows = yield* Effect.forEach(wireEvent.rows, (row) => {
       if (isViewServerEventGroupedQuery(query)) {
         return decodeGroupedRow(config, expectedTopic, query, row);
       }
       return decodeProjectedRow(config, expectedTopic, new Set<string>(query.select), row);
     });
     return typedLiveEvent<Row>({
-      ...event,
+      ...wireEvent,
       rows,
     });
   }
@@ -134,7 +166,7 @@ export const viewServerDecodeLiveEvent = Effect.fn("ViewServerProtocol.event.dec
     { readonly type: "delta" }
   >["operations"][number];
   const operations: Array<DecodedDeltaOperation> = [];
-  for (const operation of event.operations) {
+  for (const operation of wireEvent.operations) {
     if (operation.type === "insert" || operation.type === "update") {
       const row = yield* isViewServerEventGroupedQuery(query)
         ? decodeGroupedRow(config, expectedTopic, query, operation.row)
@@ -148,10 +180,46 @@ export const viewServerDecodeLiveEvent = Effect.fn("ViewServerProtocol.event.dec
     }
   }
   return typedLiveEvent<Row>({
-    ...event,
+    ...wireEvent,
     operations,
   });
 });
+
+export const viewServerDecodeLiveEvent = Effect.fn("ViewServerProtocol.event.decode")(function* <
+  const Topics extends TopicDefinitions,
+  Topic extends Extract<keyof Topics, string>,
+  Row,
+>(
+  config: { readonly topics: Topics },
+  expectedTopic: Topic,
+  query: ViewServerEventQuery,
+  event: ViewServerWireEvent,
+) {
+  const wireEvent = yield* Schema.decodeUnknownEffect(ViewServerWireEventSchema)(event).pipe(
+    Effect.mapError((error) => invalidRow(expectedTopic, `Invalid event: ${error.message}`)),
+  );
+  return yield* decodeValidatedLiveEvent<Topics, Topic, Row>(
+    config,
+    expectedTopic,
+    query,
+    wireEvent,
+  );
+});
+
+export const viewServerDecodeTrustedLiveEvent = Effect.fn("ViewServerProtocol.event.decodeTrusted")(
+  function* <
+    const Topics extends TopicDefinitions,
+    Topic extends Extract<keyof Topics, string>,
+    Row,
+  >(
+    config: { readonly topics: Topics },
+    expectedTopic: Topic,
+    query: ViewServerEventQuery,
+    event: ViewServerTrustedWireEvent,
+  ) {
+    return yield* decodeValidatedLiveEvent<Topics, Topic, Row>(config, expectedTopic, query, event);
+  },
+);
 
 export const encodeSystemLiveEvent = Effect.fn("ViewServerProtocol.system.event.encode")(function* <
   Row,
@@ -169,16 +237,17 @@ export const encodeSystemLiveEvent = Effect.fn("ViewServerProtocol.system.event.
     );
   }
   if (event.type === "status") {
-    return encodeStatusEvent(event);
+    return yield* encodeStatusEvent(expectedTopic, event);
   }
   if (event.type === "snapshot") {
     const rows = yield* Effect.forEach(event.rows, (row) =>
       encodeSystemRow(expectedTopic, schema, row),
     );
-    return {
+    const wireEvent = {
       ...event,
       rows,
     };
+    return yield* validateTrustedWireEvent(expectedTopic, wireEvent);
   }
   type WireDeltaOperation = Extract<
     ViewServerWireEvent,
@@ -196,10 +265,11 @@ export const encodeSystemLiveEvent = Effect.fn("ViewServerProtocol.system.event.
       operations.push(operation);
     }
   }
-  return {
+  const wireEvent = {
     ...event,
     operations,
   };
+  return yield* validateTrustedWireEvent(expectedTopic, wireEvent);
 });
 
 export const decodeSystemLiveEvent = Effect.fn("ViewServerProtocol.system.event.decode")(function* <

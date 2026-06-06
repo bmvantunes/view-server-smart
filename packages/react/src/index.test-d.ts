@@ -246,7 +246,7 @@ describe("React type contracts", () => {
     expectTypeOf(health.rows[0]?.rowCount).toEqualTypeOf<number | undefined>();
     expectTypeOf(health.rows[0]?.id).toEqualTypeOf<"orders" | undefined>();
     expectTypeOf(healthSummary.status).toEqualTypeOf<
-      "ready" | "degraded" | "starting" | "stopping" | "connecting" | "connected" | "disconnected"
+      "ready" | "degraded" | "starting" | "stopping" | "connecting" | "disconnected"
     >();
     expectTypeOf(provider).toEqualTypeOf<ReactNode>();
     expectTypeOf(clientProvider).toEqualTypeOf<ReactNode>();

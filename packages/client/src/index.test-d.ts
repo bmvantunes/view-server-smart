@@ -1,5 +1,9 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
-import { defineViewServerConfig } from "@view-server/config";
+import {
+  defineViewServerConfig,
+  VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+  VIEW_SERVER_HEALTH_TOPIC,
+} from "@view-server/config";
 import type {
   ViewServerHealth,
   ViewServerHealthSummaryRow,
@@ -8,6 +12,7 @@ import type {
   ViewServerTransportError,
 } from "@view-server/config";
 import type { Effect } from "effect";
+import type { Stream } from "effect";
 import { Schema } from "effect";
 import type { ViewServerLiveClient, ViewServerLiveSubscription } from "./index";
 
@@ -70,16 +75,55 @@ describe("client type contracts", () => {
     const details = client.subscribeHealth();
 
     expectTypeOf<Effect.Success<typeof summary>>().toEqualTypeOf<
-      ViewServerLiveSubscription<ViewServerHealthSummaryRow<typeof viewServer.topics>>
+      ViewServerLiveSubscription<
+        ViewServerHealthSummaryRow<typeof viewServer.topics>,
+        typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+        "summary"
+      >
     >();
     expectTypeOf<Effect.Error<typeof summary>>().toEqualTypeOf<
       ViewServerRuntimeError | ViewServerTransportError
     >();
     expectTypeOf<Effect.Success<typeof details>>().toEqualTypeOf<
-      ViewServerLiveSubscription<ViewServerHealthTopicRow<"orders">>
+      ViewServerLiveSubscription<
+        ViewServerHealthTopicRow<"orders">,
+        typeof VIEW_SERVER_HEALTH_TOPIC,
+        "orders"
+      >
     >();
     expectTypeOf<Effect.Error<typeof details>>().toEqualTypeOf<
       ViewServerRuntimeError | ViewServerTransportError
     >();
+
+    type SummaryEvent = Stream.Success<Effect.Success<typeof summary>["events"]>;
+    type SummarySnapshot = Extract<SummaryEvent, { readonly type: "snapshot" }>;
+    type SummaryDeltaOperation = Extract<
+      SummaryEvent,
+      { readonly type: "delta" }
+    >["operations"][number];
+    expectTypeOf<SummarySnapshot["keys"]>().toEqualTypeOf<readonly ["summary"]>();
+    expectTypeOf<SummarySnapshot["rows"][0]["id"]>().toEqualTypeOf<"summary">();
+    expectTypeOf<SummarySnapshot["totalRows"]>().toEqualTypeOf<1>();
+    expectTypeOf<
+      Extract<SummaryDeltaOperation, { readonly type: "insert" }>
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<SummaryDeltaOperation, { readonly type: "remove" }>
+    >().toEqualTypeOf<never>();
+
+    type DetailEvent = Stream.Success<Effect.Success<typeof details>["events"]>;
+    type DetailSnapshot = Extract<DetailEvent, { readonly type: "snapshot" }>;
+    type DetailDeltaOperation = Extract<
+      DetailEvent,
+      { readonly type: "delta" }
+    >["operations"][number];
+    expectTypeOf<DetailSnapshot["keys"][number]>().toEqualTypeOf<"orders">();
+    expectTypeOf<DetailSnapshot["rows"][number]["id"]>().toEqualTypeOf<"orders">();
+    expectTypeOf<
+      Extract<DetailDeltaOperation, { readonly type: "insert" }>
+    >().toEqualTypeOf<never>();
+    expectTypeOf<
+      Extract<DetailDeltaOperation, { readonly type: "remove" }>
+    >().toEqualTypeOf<never>();
   });
 });

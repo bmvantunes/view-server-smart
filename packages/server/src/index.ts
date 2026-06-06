@@ -38,7 +38,7 @@ export const makeViewServerWebSocketServer: <const Topics extends TopicDefinitio
   const healthPath = options.healthPath ?? "/health";
   const protocol = RpcServer.layerProtocolWebsocket({ path }).pipe(Layer.provide(HttpRouter.layer));
   const handlers = ViewServerRpcs.toLayer(makeViewServerRpcHandlers(config, input));
-  const healthRoute = makeViewServerHealthRoute(input, healthPath);
+  const healthRoute = makeViewServerHealthRoute(config, input, healthPath);
   const httpApp = Layer.merge(protocol, healthRoute);
   const rpcLayer = RpcServer.layer(ViewServerRpcs, {
     disableFatalDefects: true,

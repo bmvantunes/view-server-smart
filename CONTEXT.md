@@ -128,6 +128,18 @@ _Avoid_: Aggregate helper, groupBy validator, grouped query parser
 The Wire Protocol module that encodes and decodes grouped aggregate row values without precision loss, including bigint and BigDecimal aggregate envelopes.
 _Avoid_: Number helper, aggregate JSON helper, sum formatter
 
+**Health Summary Codec**:
+The Wire Protocol module that validates, encodes, and decodes the compact pushed health summary stream.
+_Avoid_: Health helper, summary JSON helper, status formatter
+
+**Health Topic Codec**:
+The Wire Protocol module that validates, encodes, and decodes the pushed per-topic health stream.
+_Avoid_: Topic health helper, health row parser, metrics formatter
+
+**Health Payload Codec**:
+The Wire Protocol module that validates full runtime health payloads against configured View Server Topics.
+_Avoid_: Health object checker, runtime health helper, admin health parser
+
 **View Server Provider**:
 The React provider that supplies a Live Client to hooks.
 _Avoid_: Runtime provider, in-memory provider when discussing the generic provider
@@ -176,6 +188,9 @@ _Avoid_: Browser write, send, emit
 - A **Raw Query Codec** protects Raw Query wire payloads from unknown fields, unsafe filters, and invalid windows.
 - A **Grouped Query Codec** protects Grouped Query wire payloads from invalid group fields, aggregate aliases, aggregate fields, grouped ordering, and invalid windows.
 - An **Aggregate Row Codec** protects grouped aggregate row values from JSON precision loss over the **Wire Protocol**.
+- A **Health Summary Codec** protects the compact health summary stream from impossible status combinations and unknown unhealthy topic names.
+- A **Health Topic Codec** protects the per-topic health stream from missing, duplicate, unknown, or mismatched topic rows.
+- A **Health Payload Codec** protects full runtime health payloads from missing or unknown configured topics.
 - A **View Server Provider** supplies a **Live Client** to React hooks.
 - A **View Server In-Memory Provider** supplies the same hook behavior through an **In-Memory View Server**.
 - A **Source Topic** is mapped into a **View Server Topic** through a **Mapping**.

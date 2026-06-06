@@ -277,6 +277,47 @@ describe("@view-server/server", () => {
     }),
   );
 
+  it.live("returns 500 when runtime health is semantically invalid", () =>
+    Effect.gen(function* () {
+      const inMemory = createInMemoryViewServer(viewServer);
+      const baseHealth = yield* inMemory.client.health();
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: {
+          ...inMemory.client,
+          health: () =>
+            Effect.succeed({
+              ...baseHealth,
+              kafka: {
+                regions: {},
+                topics: {
+                  source_orders: {
+                    status: "ready",
+                    sourceTopic: "source_orders",
+                    viewServerTopic: "missing",
+                    regions: {},
+                  },
+                },
+              },
+            }),
+        },
+      });
+
+      const health = yield* fetchJson(server.healthUrl);
+
+      expect(health.response.status).toBe(500);
+      expect(health.value).toStrictEqual({
+        _tag: "ViewServerRuntimeError",
+        code: "InvalidRow",
+        message: "Health payload references unknown topic: missing",
+        topic: "missing",
+      });
+
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
   it.live("returns 503 for degraded health and serializes bigint fields", () =>
     Effect.gen(function* () {
       const inMemory = createInMemoryViewServer(viewServer);
@@ -971,6 +1012,45 @@ describe("@view-server/server", () => {
       expect(client.health.value.engine.topics.orders.rowCount).toBe(123);
 
       yield* client.close;
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("rejects semantically invalid runtime health over unary RPC", () =>
+    Effect.gen(function* () {
+      const inMemory = createInMemoryViewServer(viewServer);
+      const baseHealth = yield* inMemory.client.health();
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: {
+          ...inMemory.client,
+          health: () =>
+            Effect.succeed({
+              ...baseHealth,
+              kafka: {
+                regions: {},
+                topics: {
+                  source_orders: {
+                    status: "ready",
+                    sourceTopic: "source_orders",
+                    viewServerTopic: "missing",
+                    regions: {},
+                  },
+                },
+              },
+            }),
+        },
+      });
+      const raw = yield* makeRawRpcClient(server.url);
+
+      const invalidHealth = yield* Effect.flip(raw.rpc["ViewServer.Health"]()).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(ViewServerRpcErrorSchema)),
+      );
+      expect(invalidHealth.code).toBe("InvalidRow");
+      expect(invalidHealth.message).toBe("Health payload references unknown topic: missing");
+
+      yield* raw.close;
       yield* server.close;
       yield* inMemory.close;
     }),

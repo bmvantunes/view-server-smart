@@ -104,3 +104,9 @@ export const ViewServerWireEventSchema = Schema.Union([
 ]);
 
 export type ViewServerWireEvent = typeof ViewServerWireEventSchema.Type;
+
+export const ViewServerTrustedWireEventSchema = ViewServerWireEventSchema.pipe(
+  Schema.brand("ViewServerTrustedWireEvent"),
+);
+
+export type ViewServerTrustedWireEvent = typeof ViewServerTrustedWireEventSchema.Type;

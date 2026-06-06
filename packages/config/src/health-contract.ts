@@ -5,7 +5,9 @@ export type TopicHealthStatus = "ready" | "degraded" | "starting";
 export type KafkaRegionStatus = "connected" | "disconnected" | "degraded" | "starting";
 export type KafkaTopicStatus = "ready" | "degraded" | "starting" | "stalled";
 export type ViewServerHealthConnectionStatus = "connecting" | "connected" | "disconnected";
-export type ViewServerHealthStatus = RuntimeStatus | ViewServerHealthConnectionStatus;
+export type ViewServerHealthStatus =
+  | RuntimeStatus
+  | Exclude<ViewServerHealthConnectionStatus, "connected">;
 
 export const VIEW_SERVER_HEALTH_SUMMARY_TOPIC = "__view_server_health_summary";
 export const VIEW_SERVER_HEALTH_TOPIC = "__view_server_health";

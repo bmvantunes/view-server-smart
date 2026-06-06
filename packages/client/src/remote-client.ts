@@ -8,7 +8,6 @@ import type {
   LiveQueryRow,
   PickRawFields,
   RawQuery,
-  StatusEvent,
   TopicDefinitions,
   TopicRow,
   ValidateLiveQuery,
@@ -25,10 +24,10 @@ import {
   viewServerDecodeHealthQuery,
   viewServerDecodeHealthSummaryEvent,
   viewServerDecodeHealthTopicEvent,
-  viewServerDecodeLiveEvent,
+  viewServerDecodeTrustedLiveEvent,
   viewServerEncodeLiveQuery,
   type ViewServerRpcError,
-  type ViewServerWireEvent,
+  type ViewServerTrustedWireEvent,
   type ViewServerWireHealth,
   type ViewServerWireLiveQuery,
 } from "@view-server/protocol";
@@ -39,6 +38,7 @@ import type {
   ViewServerLiveClient,
   ViewServerLiveEvent,
   ViewServerLiveSubscription,
+  ViewServerStatusEvent,
 } from "./live-client";
 import { makeRemoteHealthState } from "./remote-health";
 import { makeRemoteSubscription } from "./remote-subscription";
@@ -78,10 +78,10 @@ export const mapViewServerRemoteError = (
   return error;
 };
 
-const subscriptionFailureStatus = (
-  topic: string,
+const subscriptionFailureStatus = <Topic extends string>(
+  topic: Topic,
   error: ViewServerRemoteClientError,
-): StatusEvent => {
+): ViewServerStatusEvent<Topic> => {
   if (error.code === "BackpressureExceeded" || error.code === "SubscriptionClosed") {
     return {
       type: "status",
@@ -133,13 +133,13 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   const healthRpc = (): Effect.Effect<ViewServerWireHealth, ViewServerRemoteClientError> =>
     rpc["ViewServer.Health"](undefined).pipe(Effect.mapError(mapViewServerRemoteError));
 
-  const subscribeRpc = <Row>(
-    topic: string,
+  const subscribeRpc = <Row, Topic extends string = string, Key extends string = string>(
+    topic: Topic,
     query: ViewServerWireLiveQuery,
     decodeEvent: (
-      event: ViewServerWireEvent,
-    ) => Effect.Effect<ViewServerLiveEvent<Row>, ViewServerRuntimeError>,
-  ): Stream.Stream<ViewServerLiveEvent<Row>, ViewServerRemoteClientError> =>
+      event: ViewServerTrustedWireEvent,
+    ) => Effect.Effect<ViewServerLiveEvent<Row, Topic, Key>, ViewServerRuntimeError>,
+  ): Stream.Stream<ViewServerLiveEvent<Row, Topic, Key>, ViewServerRemoteClientError> =>
     rpc["ViewServer.Subscribe"](
       {
         topic,
@@ -162,9 +162,9 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     Effect.andThen(remoteHealth.markStopping),
   );
 
-  const streamToSubscription = <Row>(
-    topic: string,
-    source: Stream.Stream<ViewServerLiveEvent<Row>, ViewServerRemoteClientError>,
+  const streamToSubscription = <Row, Topic extends string = string, Key extends string = string>(
+    topic: Topic,
+    source: Stream.Stream<ViewServerLiveEvent<Row, Topic, Key>, ViewServerRemoteClientError>,
     lifecycle: {
       readonly onOpen: Effect.Effect<void>;
       readonly onClose: Effect.Effect<void>;
@@ -173,7 +173,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
       onClose: Effect.void,
     },
   ) =>
-    makeRemoteSubscription({
+    makeRemoteSubscription<Row, ViewServerRemoteClientError, Topic, Key>({
       clientScope,
       failureStatus: subscriptionFailureStatus,
       lifecycle,
@@ -189,7 +189,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     type Row = LiveQueryRow<TopicRow<Topics, Topic>, Query>;
     const wireQuery = yield* viewServerEncodeLiveQuery(config, topic, query);
     const stream = subscribeRpc<Row>(topic, wireQuery, (event) =>
-      viewServerDecodeLiveEvent<Topics, Topic, Row>(config, topic, wireQuery, event),
+      viewServerDecodeTrustedLiveEvent<Topics, Topic, Row>(config, topic, wireQuery, event),
     );
     return yield* streamToSubscription(topic, stream, {
       onOpen: remoteHealth.updateSubscriptionCount(topic, 1),
@@ -240,12 +240,16 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     function* () {
       type Row = ViewServerHealthSummaryRow<Topics>;
       yield* viewServerDecodeHealthQuery(VIEW_SERVER_HEALTH_SUMMARY_TOPIC, { select: ["id"] });
-      const stream = subscribeRpc<Row>(
+      const stream = subscribeRpc<Row, typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC, "summary">(
         VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
         { select: ["id"] },
-        (event) => viewServerDecodeHealthSummaryEvent(config, event),
+        (event) => viewServerDecodeHealthSummaryEvent<Topics>(config, event),
       );
-      const subscription = yield* streamToSubscription(VIEW_SERVER_HEALTH_SUMMARY_TOPIC, stream);
+      const subscription = yield* streamToSubscription<
+        Row,
+        typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+        "summary"
+      >(VIEW_SERVER_HEALTH_SUMMARY_TOPIC, stream);
       const events = subscription.events.pipe(Stream.tap(remoteHealth.updateHealthSummaryRef));
       return {
         events,
@@ -257,10 +261,18 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   const subscribeHealth = Effect.fn("ViewServerClient.remote.health.subscribe")(function* () {
     type Row = ViewServerHealthTopicRow<Extract<keyof Topics, string>>;
     yield* viewServerDecodeHealthQuery(VIEW_SERVER_HEALTH_TOPIC, { select: ["id"] });
-    const stream = subscribeRpc<Row>(VIEW_SERVER_HEALTH_TOPIC, { select: ["id"] }, (event) =>
-      viewServerDecodeHealthTopicEvent(config, event),
+    const stream = subscribeRpc<
+      Row,
+      typeof VIEW_SERVER_HEALTH_TOPIC,
+      Extract<keyof Topics, string>
+    >(VIEW_SERVER_HEALTH_TOPIC, { select: ["id"] }, (event) =>
+      viewServerDecodeHealthTopicEvent<Topics>(config, event),
     );
-    const subscription = yield* streamToSubscription(VIEW_SERVER_HEALTH_TOPIC, stream);
+    const subscription = yield* streamToSubscription<
+      Row,
+      typeof VIEW_SERVER_HEALTH_TOPIC,
+      Extract<keyof Topics, string>
+    >(VIEW_SERVER_HEALTH_TOPIC, stream);
     const events = subscription.events.pipe(Stream.tap(remoteHealth.updateHealthTopicRef));
     return {
       events,

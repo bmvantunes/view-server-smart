@@ -109,7 +109,6 @@ export const ViewServerHealthSummaryRowSchema: Schema.Codec<
     "starting",
     "stopping",
     "connecting",
-    "connected",
     "disconnected",
   ]),
   runtimeStatus: Schema.Literals(["ready", "degraded", "starting", "stopping"]),
