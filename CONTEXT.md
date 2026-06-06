@@ -112,6 +112,10 @@ _Avoid_: Runtime client, publishing client
 The Effect RPC WebSocket protocol using NDJSON serialization and schema-aware JSON-safe encoding for configured topic rows and query values.
 _Avoid_: Raw WebSocket protocol, HTTP stream, SSE, MessagePack protocol
 
+**Field Filter Codec**:
+The Wire Protocol module that encodes and decodes schema-aware JSON-safe Raw Query filter values, including operator filters and structured-value fallback.
+_Avoid_: Filter helper, JSON helper, where encoder
+
 **View Server Provider**:
 The React provider that supplies a Live Client to hooks.
 _Avoid_: Runtime provider, in-memory provider when discussing the generic provider
@@ -156,6 +160,7 @@ _Avoid_: Browser write, send, emit
 - A **Live Client** can subscribe to **Live Queries** but cannot publish mutations.
 - A **Runtime Client** can publish mutations but is not exposed to browsers by the Real View Server.
 - A **Remote Browser Client** is a **Live Client** adapter for the **Wire Protocol**.
+- A **Field Filter Codec** protects the **Wire Protocol** from unsafe or incorrectly typed filter values.
 - A **View Server Provider** supplies a **Live Client** to React hooks.
 - A **View Server In-Memory Provider** supplies the same hook behavior through an **In-Memory View Server**.
 - A **Source Topic** is mapped into a **View Server Topic** through a **Mapping**.
