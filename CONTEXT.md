@@ -124,6 +124,10 @@ _Avoid_: Raw query helper, select validator, query parser
 The Wire Protocol module that validates, encodes, and decodes Grouped Query wire payloads, including aggregate alias safety, grouped ordering, and numeric aggregate rules.
 _Avoid_: Aggregate helper, groupBy validator, grouped query parser
 
+**Aggregate Row Codec**:
+The Wire Protocol module that encodes and decodes grouped aggregate row values without precision loss, including bigint and BigDecimal aggregate envelopes.
+_Avoid_: Number helper, aggregate JSON helper, sum formatter
+
 **View Server Provider**:
 The React provider that supplies a Live Client to hooks.
 _Avoid_: Runtime provider, in-memory provider when discussing the generic provider
@@ -171,6 +175,7 @@ _Avoid_: Browser write, send, emit
 - A **Field Filter Codec** protects the **Wire Protocol** from unsafe or incorrectly typed filter values.
 - A **Raw Query Codec** protects Raw Query wire payloads from unknown fields, unsafe filters, and invalid windows.
 - A **Grouped Query Codec** protects Grouped Query wire payloads from invalid group fields, aggregate aliases, aggregate fields, grouped ordering, and invalid windows.
+- An **Aggregate Row Codec** protects grouped aggregate row values from JSON precision loss over the **Wire Protocol**.
 - A **View Server Provider** supplies a **Live Client** to React hooks.
 - A **View Server In-Memory Provider** supplies the same hook behavior through an **In-Memory View Server**.
 - A **Source Topic** is mapped into a **View Server Topic** through a **Mapping**.

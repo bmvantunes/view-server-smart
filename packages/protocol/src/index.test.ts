@@ -1771,6 +1771,49 @@ describe("@view-server/protocol", () => {
       );
       expect(nonJsonRow.message).toMatch(/Field id is not JSON-safe/);
 
+      const BadJsonAggregateRow = Schema.Struct({
+        id: Schema.String,
+        value: BadJsonField,
+      });
+      const badJsonAggregateViewServer = defineViewServerConfig({
+        topics: {
+          badAggregate: {
+            schema: BadJsonAggregateRow,
+            key: "id",
+          },
+        },
+      });
+      const badJsonAggregateQuery = yield* viewServerEncodeGroupedQuery(
+        badJsonAggregateViewServer,
+        "badAggregate",
+        {
+          groupBy: ["id"],
+          aggregates: {
+            badValue: { aggFunc: "min", field: "value" },
+          },
+        },
+      );
+      const nonJsonAggregate = yield* Effect.flip(
+        viewServerEncodeLiveEvent(
+          badJsonAggregateViewServer,
+          "badAggregate",
+          badJsonAggregateQuery,
+          {
+            type: "snapshot",
+            topic: "badAggregate",
+            queryId: "grouped-bad-aggregate",
+            version: 1,
+            keys: ["a"],
+            rows: [{ id: "a", badValue: "not-json-safe" }],
+            totalRows: 1,
+          },
+        ),
+      );
+      expect(nonJsonAggregate.code).toBe("InvalidRow");
+      expect(nonJsonAggregate.message).toBe(
+        "Field badValue is not JSON-safe: Expected JSON value, got Symbol(not-json)",
+      );
+
       const groupedQuery = yield* viewServerEncodeGroupedQuery(viewServer, "orders", {
         groupBy: ["id"],
         aggregates: {
@@ -2053,6 +2096,32 @@ describe("@view-server/protocol", () => {
         "Aggregate rowCount must be a View Server aggregate envelope.",
       );
 
+      const numericBigIntEnvelope = yield* Effect.flip(
+        viewServerDecodeLiveEvent<typeof viewServer.topics, "orders", object>(
+          viewServer,
+          "orders",
+          groupedQuery,
+          {
+            type: "snapshot",
+            topic: "orders",
+            queryId: "grouped-0",
+            version: 1,
+            keys: ["a"],
+            rows: [
+              {
+                id: "a",
+                rowCount: { _viewServerAggregate: "bigint", value: 1 },
+                averagePrice: { _viewServerAggregate: "bigdecimal", value: "1.5" },
+              },
+            ],
+            totalRows: 1,
+          },
+        ),
+      );
+      expect(numericBigIntEnvelope.message).toBe(
+        "Aggregate rowCount must be a View Server aggregate envelope.",
+      );
+
       const invalidGroupedBigInt = yield* Effect.flip(
         viewServerDecodeLiveEvent<typeof viewServer.topics, "orders", object>(
           viewServer,
@@ -2100,6 +2169,32 @@ describe("@view-server/protocol", () => {
         ),
       );
       expect(invalidGroupedBigDecimal.message).toMatch(/Invalid aggregate averagePrice/);
+
+      const numericBigDecimalEnvelope = yield* Effect.flip(
+        viewServerDecodeLiveEvent<typeof viewServer.topics, "orders", object>(
+          viewServer,
+          "orders",
+          groupedQuery,
+          {
+            type: "snapshot",
+            topic: "orders",
+            queryId: "grouped-0",
+            version: 1,
+            keys: ["a"],
+            rows: [
+              {
+                id: "a",
+                rowCount: { _viewServerAggregate: "bigint", value: "1" },
+                averagePrice: { _viewServerAggregate: "bigdecimal", value: 1 },
+              },
+            ],
+            totalRows: 1,
+          },
+        ),
+      );
+      expect(numericBigDecimalEnvelope.message).toBe(
+        "Aggregate averagePrice must be a View Server aggregate envelope.",
+      );
 
       const wrongGroupedBigDecimalEnvelope = yield* Effect.flip(
         viewServerDecodeLiveEvent<typeof viewServer.topics, "orders", object>(
