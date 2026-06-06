@@ -1457,13 +1457,15 @@ VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp 
 VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout:ten-window
 ```
 
-Active raw queries retain the row-change journal while the active query is leased. Insert-only
-change batches can update the shared base window incrementally by merging the previous base window
-with matching inserted rows, sorting that retained candidate window, and preserving `totalRows`.
-For active top-k/windowed queries this keeps the sorted candidate set bounded by the shared base
-window size plus matching inserts. Updates, deletes, unavailable retained changes, and base-window
-shape changes fall back to a full raw window scan. This keeps correctness local while making
-append-heavy live top-k deltas avoid full 10M-row re-evaluation.
+Active raw queries retain the row-change journal while the active query is leased. Retained insert
+batches can update the shared base window incrementally by merging the previous base window with
+matching inserted rows, sorting that retained candidate window, and preserving `totalRows`. Retained
+updates/deletes that provably do not match the predicate are ignored without rescanning. For
+`limit: 0` count-only subscriptions, retained inserts, updates, and deletes adjust `totalRows`
+directly because there is no visible window to refill. Visible updates/deletes, unavailable retained
+changes, and base-window shape changes still fall back to a full raw window scan. This keeps
+correctness local while making append-heavy live top-k deltas and count-only retained changes avoid
+full 10M-row re-evaluation.
 
 Current directional result after the insert-only path:
 

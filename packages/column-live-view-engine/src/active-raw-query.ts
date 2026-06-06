@@ -62,7 +62,7 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   };
 };
 
-const updateBaseEvaluationFromInsertOnlyChanges = (
+const updateBaseEvaluationFromRetainedChanges = (
   store: ActiveQueryStoreState,
   compiled: CompiledRawQuery<object, object>,
   evaluation: ActiveQueryBaseEvaluation<object>,
@@ -78,14 +78,27 @@ const updateBaseEvaluationFromInsertOnlyChanges = (
   const insertedWindowEntries: Array<{ readonly key: string; readonly row: object }> = [];
   for (const batch of batches) {
     for (const change of batch.changes) {
-      if (change.previous !== undefined || change.next === undefined) {
-        return undefined;
-      }
-      if (!compiled.plan.predicate.matches(change.next)) {
+      const previousMatches =
+        change.previous !== undefined && compiled.plan.predicate.matches(change.previous);
+      const nextMatches = change.next !== undefined && compiled.plan.predicate.matches(change.next);
+
+      if (queryWindow.limit === 0) {
+        if (previousMatches && !nextMatches) {
+          totalRows -= 1;
+        } else if (!previousMatches && nextMatches) {
+          totalRows += 1;
+        }
         continue;
       }
-      totalRows += 1;
-      if (queryWindow.limit !== 0) {
+
+      if (change.previous !== undefined) {
+        if (previousMatches || nextMatches) {
+          return undefined;
+        }
+        continue;
+      }
+      if (change.next !== undefined && nextMatches) {
+        totalRows += 1;
         insertedWindowEntries.push({
           key: change.key,
           row: change.next,
@@ -100,6 +113,13 @@ const updateBaseEvaluationFromInsertOnlyChanges = (
       totalRows,
       version: currentVersion,
       window: [],
+    };
+  }
+
+  if (insertedWindowEntries.length === 0) {
+    return {
+      ...evaluation,
+      version: currentVersion,
     };
   }
 
@@ -261,7 +281,7 @@ const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.raw.ma
           return snapshot.evaluation;
         }
         if (snapshot.version !== storeVersion) {
-          const incrementalEvaluation = updateBaseEvaluationFromInsertOnlyChanges(
+          const incrementalEvaluation = updateBaseEvaluationFromRetainedChanges(
             store,
             canonicalCompiled,
             snapshot.evaluation,
