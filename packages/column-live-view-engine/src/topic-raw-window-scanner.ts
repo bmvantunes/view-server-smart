@@ -1,30 +1,19 @@
-import { compareQueryValue, type RawQueryCompilerMetadata } from "./raw-query-compiler";
-import type {
-  TopicRawOrderByPlan,
-  TopicRawWindowScanPlan,
-  TopicRawWindowScanResult,
-} from "./raw-window-scan";
+import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
+import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-window-scan";
 import type { TopicRowEntry } from "./row-scan";
 import {
   selectedPredicateCandidateFilter,
   type PredicateCandidateFilter,
 } from "./topic-predicate-candidate-filter";
 import {
-  distinctOrderedEqualityValues,
-  equalityValueSatisfiesRangeBounds,
-  noOrderedRangeBounds,
-  orderedEqualityValuesForField,
-  orderedRangeBoundsForField,
+  insertSlotIntoRawWindowIndexes,
+  rawWindowOrderedWindow,
+  rawWindowSlotComparator,
+} from "./topic-raw-ordered-window-index";
+import {
   orderedRawWindowSlotCount,
-  orderedSlotBoundIndex,
   orderedSlotIndexInsertionPoint,
-  orderedSlotIndexKey,
-  orderedWindowSpansInIndexOrder,
-  predicateFiltersAreOrderedIndexAdmissible,
-  rangeBoundsAreEmpty,
-  type OrderedRangeBounds,
   type OrderedRawWindow,
-  type OrderedRawWindowSpan,
   type OrderedSlotIndex,
 } from "./topic-ordered-window";
 import { slotMatchesRawPredicatePlan } from "./topic-slot-predicate";
@@ -66,17 +55,7 @@ export const scanTopicRawWindow = (
   return scanRawWindowSlots(state, plan, compareSlots);
 };
 
-export const insertSlotIntoRawWindowIndexes = (
-  state: TopicRawWindowScanState,
-  slot: number,
-): void => {
-  for (const index of state.orderedSlotIndexes.values()) {
-    const insertAt = orderedSlotIndexInsertionPoint(index.slots, slot, (left, right) =>
-      compareSlotsByStorageOrder(state, left, right, index.orderBy),
-    );
-    index.slots.splice(insertAt, 0, slot);
-  }
-};
+export { insertSlotIntoRawWindowIndexes };
 
 const scanRawWindowOrderedSlots = (
   state: TopicRawWindowScanState,
@@ -175,220 +154,6 @@ const scanRawWindowBoundedSlots = (
     }
   }
   return rawWindowScanResult(state, windowSlots.slice(plan.offset), totalRows);
-};
-
-const rawWindowOrderedWindow = (
-  state: TopicRawWindowScanState,
-  plan: TopicRawWindowScanPlan<object>,
-): OrderedRawWindow | undefined => {
-  const storageOrderBy = plan.storageOrderBy;
-  if (
-    plan.limit === undefined ||
-    !Number.isSafeInteger(plan.limit) ||
-    plan.limit <= 0 ||
-    storageOrderBy === undefined ||
-    storageOrderBy.length !== 1
-  ) {
-    return undefined;
-  }
-  const orderField = storageOrderBy[0]!.field;
-  if (plan.predicate.callbackSkippable !== true) {
-    return undefined;
-  }
-  if (!predicateFiltersAreOrderedIndexAdmissible(plan.predicate.filters, orderField)) {
-    return undefined;
-  }
-  if (!storageOrderByFieldsExist(state, storageOrderBy)) {
-    return undefined;
-  }
-
-  const rangeBounds = orderedRangeBoundsForField(
-    plan.predicate.filters,
-    orderField,
-    state.rawQueryMetadata,
-  );
-  if (rangeBounds !== undefined && rangeBoundsAreEmpty(rangeBounds)) {
-    return {
-      candidateExcludedField: orderField,
-      limit: plan.limit,
-      slots: [],
-      spans: [],
-    };
-  }
-  const seekBounds = rangeBounds ?? noOrderedRangeBounds;
-  const equalityValues = orderedEqualityValuesForField(
-    plan.predicate.filters,
-    orderField,
-    state.rawQueryMetadata,
-  );
-  const indexKey = orderedSlotIndexKey(storageOrderBy);
-  const existing = state.orderedSlotIndexes.get(indexKey);
-  if (existing !== undefined) {
-    return {
-      candidateExcludedField: orderField,
-      limit: plan.limit,
-      slots: existing.slots,
-      spans: orderedSlotIndexSpans(state, existing, seekBounds, equalityValues),
-    };
-  }
-
-  const slots = Array.from({ length: state.slots.length }, (_value, slot) => slot);
-  slots.sort((left, right) => compareSlotsByStorageOrder(state, left, right, storageOrderBy));
-  state.orderedSlotIndexes.set(indexKey, {
-    orderBy: storageOrderBy,
-    slots,
-  });
-  return {
-    candidateExcludedField: orderField,
-    limit: plan.limit,
-    slots,
-    spans: orderedSlotIndexSpans(
-      state,
-      {
-        orderBy: storageOrderBy,
-        slots,
-      },
-      seekBounds,
-      equalityValues,
-    ),
-  };
-};
-
-const rawWindowSlotComparator = (
-  state: TopicRawWindowScanState,
-  plan: TopicRawWindowScanPlan<object>,
-): ((left: number, right: number) => number) | undefined => {
-  const storageOrderBy = plan.storageOrderBy;
-  if (storageOrderBy === undefined) {
-    return undefined;
-  }
-  if (!storageOrderByFieldsExist(state, storageOrderBy)) {
-    return undefined;
-  }
-
-  return (left, right) => {
-    return compareSlotsByStorageOrder(state, left, right, storageOrderBy);
-  };
-};
-
-const compareSlotsByStorageOrder = (
-  state: TopicRawWindowScanState,
-  left: number,
-  right: number,
-  storageOrderBy: ReadonlyArray<TopicRawOrderByPlan>,
-): number => {
-  for (const order of storageOrderBy) {
-    const column = state.columns.get(order.field)!;
-    const comparison = compareQueryValue(column[left], column[right]);
-    if (comparison !== 0) {
-      return order.direction === "asc" ? comparison : -comparison;
-    }
-  }
-  const leftKey = state.slots[left]!.key;
-  const rightKey = state.slots[right]!.key;
-  return Number(leftKey > rightKey) - Number(leftKey < rightKey);
-};
-
-const storageOrderByFieldsExist = (
-  state: TopicRawWindowScanState,
-  storageOrderBy: ReadonlyArray<TopicRawOrderByPlan>,
-): boolean => {
-  for (const order of storageOrderBy) {
-    if (!state.columns.has(order.field)) {
-      return false;
-    }
-  }
-  return true;
-};
-
-const orderedSlotIndexSpans = (
-  state: TopicRawWindowScanState,
-  index: OrderedSlotIndex,
-  rangeBounds: OrderedRangeBounds,
-  equalityValues: ReadonlyArray<unknown> | undefined,
-): ReadonlyArray<OrderedRawWindowSpan> => {
-  if (equalityValues === undefined) {
-    return [orderedSlotIndexBounds(state, index, rangeBounds)];
-  }
-  const seekValues = distinctOrderedEqualityValues(equalityValues).filter((value) =>
-    equalityValueSatisfiesRangeBounds(value, rangeBounds),
-  );
-  const spans = seekValues.map((value) =>
-    orderedSlotIndexBounds(state, index, {
-      lower: {
-        exclusive: false,
-        value,
-      },
-      upper: {
-        exclusive: false,
-        value,
-      },
-    }),
-  );
-  return orderedWindowSpansInIndexOrder(spans);
-};
-
-const orderedSlotIndexBounds = (
-  state: TopicRawWindowScanState,
-  index: OrderedSlotIndex,
-  rangeBounds: OrderedRangeBounds,
-): OrderedRawWindowSpan => {
-  const order = index.orderBy[0]!;
-  const column = state.columns.get(order.field)!;
-  if (order.direction === "asc") {
-    const startIndex =
-      rangeBounds.lower === undefined
-        ? 0
-        : orderedSlotBoundIndex(
-            index.slots,
-            column,
-            rangeBounds.lower.value,
-            rangeBounds.lower.exclusive
-              ? (comparison) => comparison > 0
-              : (comparison) => comparison >= 0,
-          );
-    const endIndex =
-      rangeBounds.upper === undefined
-        ? index.slots.length
-        : orderedSlotBoundIndex(
-            index.slots,
-            column,
-            rangeBounds.upper.value,
-            rangeBounds.upper.exclusive
-              ? (comparison) => comparison >= 0
-              : (comparison) => comparison > 0,
-          );
-    return {
-      endIndex: Math.max(startIndex, endIndex),
-      startIndex,
-    };
-  }
-  const startIndex =
-    rangeBounds.upper === undefined
-      ? 0
-      : orderedSlotBoundIndex(
-          index.slots,
-          column,
-          rangeBounds.upper.value,
-          rangeBounds.upper.exclusive
-            ? (comparison) => comparison < 0
-            : (comparison) => comparison <= 0,
-        );
-  const endIndex =
-    rangeBounds.lower === undefined
-      ? index.slots.length
-      : orderedSlotBoundIndex(
-          index.slots,
-          column,
-          rangeBounds.lower.value,
-          rangeBounds.lower.exclusive
-            ? (comparison) => comparison <= 0
-            : (comparison) => comparison < 0,
-        );
-  return {
-    endIndex: Math.max(startIndex, endIndex),
-    startIndex,
-  };
 };
 
 const rawWindowScanResult = (

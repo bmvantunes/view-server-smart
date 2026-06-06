@@ -82,6 +82,10 @@ _Avoid_: Query object, filter callback, storage scan object
 The storage-admissible predicate hint set compiled from a Raw Query, including exact scalar filters and whether row callback evaluation is still required.
 _Avoid_: Filter helper, where object, matcher callback
 
+**Raw Ordered Window Index**:
+The per-topic ordered slot index used to seek bounded Raw Query windows by storage order and predicate range/equality hints.
+_Avoid_: Sort cache, ordered array helper, top-k shortcut
+
 **Grouped Query Plan**:
 The compiled internal representation of a Grouped Query, including group key calculation, aggregate definitions, ordering, window settings, and cache keys.
 _Avoid_: Grouped query object, aggregate config, groupBy helper
@@ -146,6 +150,7 @@ _Avoid_: Browser write, send, emit
 - A **Column Live View Engine** owns one **Columnar Topic Store** per **View Server Topic**.
 - A **Raw Query Plan** is compiled once from a **Raw Query** before the **Columnar Topic Store** scans rows.
 - A **Raw Predicate Plan** is part of a **Raw Query Plan** and lets storage narrow scans without replacing the correctness callback unless it is proven exact.
+- A **Columnar Topic Store** may maintain **Raw Ordered Window Indexes** to accelerate bounded **Raw Query** windows.
 - A **Grouped Query Plan** is compiled once from a **Grouped Query** before grouped full-scan or incremental execution.
 - An **Active Query** may serve many equivalent **Subscriptions**.
 - A **Live Client** can subscribe to **Live Queries** but cannot publish mutations.
