@@ -8,6 +8,16 @@ import {
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
 } from "./index";
+import {
+  backpressureCountFromEngineHealth,
+  benchmarkOutputJsonPath,
+  cleanupLeakCountFromEngineHealth,
+  failOnBenchmarkCleanupLeaks,
+  memorySnapshot,
+  queuedEventCountFromEngineHealth,
+  writeBenchmarkArtifact,
+  type BenchmarkMemorySnapshot,
+} from "./benchmark-artifact";
 
 declare const process: {
   readonly env: Record<string, string | undefined>;
@@ -45,6 +55,7 @@ type BenchmarkProfile = {
   readonly rowCount: number;
   engine: Engine | undefined;
   eventReader: OrderEventReader | undefined;
+  memoryAfterSetup: BenchmarkMemorySnapshot | undefined;
   scope: Scope.Closeable | undefined;
   subscription: OrderSubscription | undefined;
   nextDeltaIndex: number;
@@ -110,6 +121,8 @@ const rowCountFromEnv = (): number => {
 
 const benchmarkRowCount = rowCountFromEnv();
 const batchSize = positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE", defaultBatchSize);
+const outputJsonPath = benchmarkOutputJsonPath(`raw-snapshot-${benchmarkRowCount}rows.json`);
+const memoryBefore = memorySnapshot();
 const benchOptions = {
   iterations: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_ITERATIONS", defaultIterations),
   time: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_TIME_MS", defaultBenchmarkTimeMs),
@@ -127,6 +140,7 @@ const profile: BenchmarkProfile = {
   rowCount: benchmarkRowCount,
   engine: undefined,
   eventReader: undefined,
+  memoryAfterSetup: undefined,
   scope: undefined,
   subscription: undefined,
   nextDeltaIndex: benchmarkRowCount,
@@ -235,23 +249,71 @@ beforeAll(async () => {
   await Effect.runPromise(eventReader(1));
   profile.engine = engine;
   profile.eventReader = eventReader;
+  profile.memoryAfterSetup = memorySnapshot();
   profile.scope = scope;
   profile.subscription = subscription;
 }, 0);
 
 afterAll(async () => {
-  const scope = profile.scope;
-  if (scope !== undefined) {
-    await Effect.runPromise(Scope.close(scope, Exit.void));
+  const memoryAfterSetup = profile.memoryAfterSetup ?? memoryBefore;
+  const mutationCount = profile.nextDeltaIndex;
+  if (profile.subscription !== undefined) {
+    await Effect.runPromise(profile.subscription.close());
+    profile.subscription = undefined;
   }
-  const subscription = profile.subscription;
-  if (subscription !== undefined) {
-    await Effect.runPromise(subscription.close());
+  if (profile.scope !== undefined) {
+    await Effect.runPromise(Scope.close(profile.scope, Exit.void));
+    profile.scope = undefined;
   }
-  const engine = profile.engine;
-  if (engine !== undefined) {
-    await Effect.runPromise(engine.close());
+  let health: unknown = {
+    status: "not-started",
+  };
+  if (profile.engine !== undefined) {
+    health = await Effect.runPromise(profile.engine.health());
+    await Effect.runPromise(profile.engine.close());
+    profile.engine = undefined;
   }
+  profile.eventReader = undefined;
+  profile.memoryAfterSetup = undefined;
+  const memoryAfterBenchmark = memorySnapshot();
+  const cleanupLeakCount = cleanupLeakCountFromEngineHealth(health);
+  writeBenchmarkArtifact({
+    artifactKind: "engine-benchmark-summary",
+    backpressureCount: backpressureCountFromEngineHealth(health),
+    benchmarkCases: [
+      "equality filter + top-k sort",
+      "selective equality filter + fallback top-k sort",
+      "ordered equality filter + indexed seek",
+      "ordered in filter + indexed seek",
+      "range filter + top-k sort",
+      "selective range filter + fallback top-k sort",
+      "compound filter + top-k sort",
+      "filtered totalRows via zero-row window",
+      "live subscription delta after publish",
+    ],
+    benchmarkName: "raw snapshot and delta engine benchmark",
+    benchmarkScope: "engine-raw-snapshot",
+    cleanupLeakCount,
+    health,
+    latency: {
+      outputJsonPath,
+      source: "vitest-output-json",
+    },
+    memoryAfterBenchmark,
+    memoryAfterSetup,
+    memoryBefore,
+    mutationCount,
+    notes: [
+      "Latency percentiles are emitted by Vitest in outputJsonPath.",
+      "mutationCount includes setup seed rows plus live delta publish benchmark iterations.",
+    ],
+    outputJsonPath,
+    queuedEventCount: queuedEventCountFromEngineHealth(health),
+    rowCount: profile.rowCount,
+    subscriberCount: 1,
+    topics: ["orders"],
+  });
+  failOnBenchmarkCleanupLeaks(cleanupLeakCount);
 }, 0);
 
 describe(`raw snapshot and delta engine benchmark: ${profile.rowCount} rows`, () => {

@@ -1252,11 +1252,12 @@ Current engine raw benchmark harness:
 vp run --no-cache column-live-view-engine#bench:raw-snapshot
 ```
 
-Use `--no-cache` because benchmark row counts and timing are environment-driven. This harness is
-currently a timing-focused raw engine benchmark; the full production benchmark artifact fields below
-still need to be added to the broader benchmark suite. It defaults to a 100k-row smoke profile and
-writes `packages/column-live-view-engine/.artifacts/raw-snapshot.json`. Run each row count in a
-separate process so previous profiles do not contaminate GC/RSS/latency. For example:
+Use `--no-cache` because benchmark row counts and timing are environment-driven. It defaults to a
+100k-row smoke profile and writes both Vitest timing JSON and a View Server summary sidecar under
+`packages/column-live-view-engine/.artifacts/`, for example
+`raw-snapshot-100000rows.json` and `raw-snapshot-100000rows.summary.json`. Run each row count in a
+separate process so previous profiles do not contaminate GC/RSS/latency or overwrite artifacts. For
+example:
 
 ```bash
 VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-snapshot
@@ -1292,9 +1293,10 @@ benchmark. It compares:
 - ordered equality seek over storage order
 - failed broad scalar candidate build plus full scan
 
-It writes `packages/column-live-view-engine/.artifacts/raw-predicate-index.json`. Run each row count
-in a separate process. The benchmark rejects row counts below 101 because several cases assert exact
-50/100-row windows and the range-candidate case must stay narrower than the whole table.
+It writes profile-specific Vitest timing JSON plus a View Server summary sidecar, for example
+`raw-predicate-index-100000rows.json` and `raw-predicate-index-100000rows.summary.json`. Run each row
+count in a separate process. The benchmark rejects row counts below 101 because several cases assert
+exact 50/100-row windows and the range-candidate case must stay narrower than the whole table.
 
 ```bash
 VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-predicate-index
@@ -1331,9 +1333,9 @@ memory:
 
 It writes case-specific artifacts under `packages/column-live-view-engine/.artifacts/`, such as
 `raw-live-fanout-same-window-100000rows-50subs.json` and
-`raw-live-fanout-ten-window-1000000rows-250subs.json`. Run each row count in a separate process,
-and run each fanout case separately, so previous profiles do not contaminate GC/RSS/latency or
-overwrite each other:
+`raw-live-fanout-ten-window-1000000rows-250subs.json`, plus matching `.summary.json` sidecars. Run
+each row count in a separate process, and run each fanout case separately, so previous profiles do
+not contaminate GC/RSS/latency or overwrite each other:
 
 ```bash
 VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE=same-window VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout
@@ -1360,18 +1362,18 @@ Raw live fanout knobs:
 - `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: warmup iterations per case.
 - `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: warmup time budget per case.
 
-Each production/runtime benchmark artifact must include:
+Each production/runtime benchmark sidecar must include:
 
 - row count
 - mutation count
 - subscribers
 - topics
-- p50/p95/p99/max latency
-- memory/RSS/heap
-- queued events/bytes
+- latency source pointing at the Vitest timing JSON containing p50/p95/p99/max samples
+- memory/RSS/heap before setup, after setup, and after clearing retained benchmark fixture references
+- top-level queued event count
 - backpressure count
-- cleanup leak count
-- health snapshot after cleanup
+- cleanup leak count, with non-zero engine cleanup leaks failing the benchmark after the sidecar is written
+- health snapshot after explicit subscription cleanup and before force-closing the engine
 
 ### Documentation
 

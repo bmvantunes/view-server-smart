@@ -1,6 +1,12 @@
 // Benchmarks intentionally import Vitest directly: @effect/vitest does not expose `bench`.
-import { beforeAll, bench, describe, expect } from "vitest";
+import { afterAll, beforeAll, bench, describe, expect } from "vitest";
 import { Schema } from "effect";
+import {
+  benchmarkOutputJsonPath,
+  memorySnapshot,
+  writeBenchmarkArtifact,
+  type BenchmarkMemorySnapshot,
+} from "./benchmark-artifact";
 import { compareQueryValue } from "./query-value";
 import { rawQueryCompilerMetadata } from "./raw-query-compiler";
 import { fieldValue, scalarEqualityKey } from "./row-values";
@@ -105,6 +111,9 @@ const rowCountFromEnv = (): number => {
 };
 
 const rowCount = rowCountFromEnv();
+const outputJsonPath = benchmarkOutputJsonPath(`raw-predicate-index-${rowCount}rows.json`);
+const memoryBefore = memorySnapshot();
+let memoryAfterSetup: BenchmarkMemorySnapshot = memoryBefore;
 const benchOptions = {
   iterations: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_ITERATIONS", defaultIterations),
   time: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_TIME_MS", defaultBenchmarkTimeMs),
@@ -573,7 +582,43 @@ beforeAll(() => {
   for (const benchmarkCase of benchmarkCases()) {
     runBenchmarkCase(benchmarkCase);
   }
+  memoryAfterSetup = memorySnapshot();
 }, 0);
+
+afterAll(() => {
+  const benchmarkCaseNames = benchmarkCases().map((benchmarkCase) => benchmarkCase.name);
+  profile = undefined;
+  const memoryAfterBenchmark = memorySnapshot();
+  writeBenchmarkArtifact({
+    artifactKind: "engine-benchmark-summary",
+    backpressureCount: 0,
+    benchmarkCases: benchmarkCaseNames,
+    benchmarkName: "raw predicate candidate index benchmark",
+    benchmarkScope: "engine-raw-predicate-index",
+    cleanupLeakCount: 0,
+    health: {
+      rowCount,
+      status: "scanner-level",
+    },
+    latency: {
+      outputJsonPath,
+      source: "vitest-output-json",
+    },
+    memoryAfterBenchmark,
+    memoryAfterSetup,
+    memoryBefore,
+    mutationCount: 0,
+    notes: [
+      "Latency percentiles are emitted by Vitest in outputJsonPath.",
+      "This scanner-level benchmark has no subscriptions, backpressure, engine health, or engine cleanup leak assertion.",
+    ],
+    outputJsonPath,
+    queuedEventCount: 0,
+    rowCount,
+    subscriberCount: 0,
+    topics: ["orders"],
+  });
+});
 
 describe(`raw predicate candidate index benchmark: ${rowCount} rows`, () => {
   for (const benchmarkCase of benchmarkCases()) {

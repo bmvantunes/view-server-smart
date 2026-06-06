@@ -8,6 +8,16 @@ import {
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
 } from "./index";
+import {
+  backpressureCountFromEngineHealth,
+  benchmarkOutputJsonPath,
+  cleanupLeakCountFromEngineHealth,
+  failOnBenchmarkCleanupLeaks,
+  memorySnapshot,
+  queuedEventCountFromEngineHealth,
+  writeBenchmarkArtifact,
+  type BenchmarkMemorySnapshot,
+} from "./benchmark-artifact";
 
 declare const process: {
   readonly env: Record<string, string | undefined>;
@@ -60,6 +70,7 @@ type BenchmarkProfile = {
   readonly subscriberCount: number;
   readonly fanoutCaseName: FanoutCaseName;
   fanoutCase: FanoutCaseProfile;
+  memoryAfterSetup: BenchmarkMemorySnapshot | undefined;
 };
 
 const defaultRowCount = 100_000;
@@ -133,6 +144,10 @@ const subscriberCount = positiveIntegerFromEnv(
   "VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS",
   defaultSubscriberCount,
 );
+const outputJsonPath = benchmarkOutputJsonPath(
+  `raw-live-fanout-${fanoutCaseName}-${benchmarkRowCount}rows-${subscriberCount}subs.json`,
+);
+const memoryBefore = memorySnapshot();
 const benchOptions = {
   iterations: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_ITERATIONS", defaultIterations),
   time: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_TIME_MS", defaultBenchmarkTimeMs),
@@ -160,6 +175,7 @@ const profile: BenchmarkProfile = {
   subscriberCount,
   fanoutCaseName,
   fanoutCase: emptyFanoutCaseProfile(),
+  memoryAfterSetup: undefined,
 };
 
 const orderStatus = (index: number): OrderStatus => {
@@ -302,15 +318,6 @@ const closeSubscriptions = Effect.fn("ColumnLiveViewEngine.bench.rawLiveFanout.c
   },
 );
 
-const closeFanoutCase = Effect.fn("ColumnLiveViewEngine.bench.rawLiveFanout.case.close")(function* (
-  fanoutCase: FanoutCaseProfile,
-) {
-  yield* closeSubscriptions(fanoutCase.subscriptions, fanoutCase.scope);
-  if (fanoutCase.engine !== undefined) {
-    yield* fanoutCase.engine.close();
-  }
-});
-
 const publishAndRead = Effect.fn("ColumnLiveViewEngine.bench.rawLiveFanout.publishAndRead")(
   function* (benchmarkProfile: BenchmarkProfile, fanoutCase: FanoutCaseProfile) {
     const engine = fanoutCaseEngine(benchmarkProfile, fanoutCase);
@@ -378,10 +385,55 @@ beforeAll(async () => {
   await Effect.runPromise(
     makeFanoutCase(profile, profile.fanoutCase, fanoutCaseWindowOffset(profile.fanoutCaseName)),
   );
+  profile.memoryAfterSetup = memorySnapshot();
 }, 0);
 
 afterAll(async () => {
-  await Effect.runPromise(closeFanoutCase(profile.fanoutCase));
+  const memoryAfterSetup = profile.memoryAfterSetup ?? memoryBefore;
+  const mutationCount = profile.fanoutCase.nextDeltaIndex;
+  await Effect.runPromise(
+    closeSubscriptions(profile.fanoutCase.subscriptions, profile.fanoutCase.scope),
+  );
+  const health =
+    profile.fanoutCase.engine === undefined
+      ? {
+          status: "not-started",
+        }
+      : await Effect.runPromise(profile.fanoutCase.engine.health());
+  const cleanupLeakCount = cleanupLeakCountFromEngineHealth(health);
+  if (profile.fanoutCase.engine !== undefined) {
+    await Effect.runPromise(profile.fanoutCase.engine.close());
+  }
+  profile.fanoutCase = emptyFanoutCaseProfile();
+  profile.memoryAfterSetup = undefined;
+  const memoryAfterBenchmark = memorySnapshot();
+  writeBenchmarkArtifact({
+    artifactKind: "engine-benchmark-summary",
+    backpressureCount: backpressureCountFromEngineHealth(health),
+    benchmarkCases: [`${profile.fanoutCaseName} subscribers publish + delta fanout`],
+    benchmarkName: "raw live fanout benchmark",
+    benchmarkScope: "engine-raw-live-fanout",
+    cleanupLeakCount,
+    health,
+    latency: {
+      outputJsonPath,
+      source: "vitest-output-json",
+    },
+    memoryAfterBenchmark,
+    memoryAfterSetup,
+    memoryBefore,
+    mutationCount,
+    notes: [
+      "Latency percentiles are emitted by Vitest in outputJsonPath.",
+      "mutationCount includes setup seed rows plus live fanout publish benchmark iterations.",
+    ],
+    outputJsonPath,
+    queuedEventCount: queuedEventCountFromEngineHealth(health),
+    rowCount: profile.rowCount,
+    subscriberCount: profile.subscriberCount,
+    topics: ["orders"],
+  });
+  failOnBenchmarkCleanupLeaks(cleanupLeakCount);
 }, 0);
 
 describe(`raw live fanout benchmark: ${profile.rowCount} rows, ${profile.subscriberCount} subscribers, ${profile.fanoutCaseName}`, () => {
