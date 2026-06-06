@@ -60,6 +60,8 @@ export const makeViewServerRuntimeWithDependencies: <
         liveClient: runtimeCore.liveClient,
         runtime: runtimeCore.client,
         transport: {
+          clientOpened: transportHealth.clientOpened.pipe(Effect.andThen(refreshTransportHealth)),
+          clientClosed: transportHealth.clientClosed.pipe(Effect.andThen(refreshTransportHealth)),
           streamOpened: transportHealth.streamOpened.pipe(Effect.andThen(refreshTransportHealth)),
           streamClosed: transportHealth.streamClosed.pipe(Effect.andThen(refreshTransportHealth)),
         },

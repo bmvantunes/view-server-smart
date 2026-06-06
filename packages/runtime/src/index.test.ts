@@ -1,9 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { ColumnLiveViewEngineHealth } from "@view-server/column-live-view-engine";
 import { makeViewServerClient } from "@view-server/client/remote";
-import { defineViewServerConfig } from "@view-server/config";
+import { defineViewServerConfig, type TransportHealth } from "@view-server/config";
 import { makeViewServerRuntimeCore } from "@view-server/runtime-core";
-import { Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schedule, Schema, Stream } from "effect";
 import type { ViewServerRuntimeDependencies } from "./internal";
 import {
   makeViewServerRuntimeWithDependencies,
@@ -62,6 +62,24 @@ const fetchHealth = Effect.fn("ViewServerRuntime.test.health.fetch")(function* (
   return { response, health };
 });
 
+const waitForTransportHealth = Effect.fn("ViewServerRuntime.test.transportHealth.wait")(function* (
+  health: () => Effect.Effect<{ readonly transport: TransportHealth }, unknown>,
+  expected: {
+    readonly activeClients: number;
+    readonly activeStreams: number;
+  },
+) {
+  return yield* health().pipe(
+    Effect.map((value) => value.transport),
+    Effect.repeat({
+      schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+      until: (transport) =>
+        transport.activeClients === expected.activeClients &&
+        transport.activeStreams === expected.activeStreams,
+    }),
+  );
+});
+
 describe("@view-server/runtime", () => {
   it.live("starts a websocket runtime with health endpoint and runtime-core mutation client", () =>
     Effect.gen(function* () {
@@ -81,8 +99,13 @@ describe("@view-server/runtime", () => {
         Stream.runCollect,
         Effect.forkChild,
       );
-      yield* Effect.sleep("10 millis");
+      const connectedTransport = yield* waitForTransportHealth(runtime.client.health, {
+        activeClients: 1,
+        activeStreams: 1,
+      });
       expect(runtime.liveClient.health.value.transport.activeStreams).toBe(1);
+      expect(connectedTransport.activeClients).toBe(1);
+      expect(connectedTransport.activeStreams).toBe(1);
 
       yield* runtime.client.publish("orders", order("a", 10));
 
@@ -114,8 +137,12 @@ describe("@view-server/runtime", () => {
 
       yield* subscription.close();
       yield* remoteClient.close;
-      yield* Effect.sleep("10 millis");
-      expect(runtime.liveClient.health.value.transport.activeStreams).toBe(0);
+      const disconnectedTransport = yield* waitForTransportHealth(runtime.client.health, {
+        activeClients: 0,
+        activeStreams: 0,
+      });
+      expect(disconnectedTransport.activeClients).toBe(0);
+      expect(disconnectedTransport.activeStreams).toBe(0);
       yield* runtime.close;
     }),
   );
@@ -172,10 +199,12 @@ describe("@view-server/runtime", () => {
       } satisfies ColumnLiveViewEngineHealth<typeof viewServer.topics>;
 
       expect(transport.transportHealth(engineHealth).activeStreams).toBe(0);
+      expect(transport.transportHealth(engineHealth).activeClients).toBe(0);
+      yield* transport.clientOpened;
       yield* transport.streamOpened;
       yield* transport.streamOpened;
       expect(transport.transportHealth(engineHealth)).toStrictEqual({
-        activeClients: 0,
+        activeClients: 1,
         activeStreams: 2,
         activeSubscriptions: 4,
         messagesPerSecond: 0,
@@ -191,6 +220,10 @@ describe("@view-server/runtime", () => {
       yield* transport.streamClosed;
       yield* transport.streamClosed;
       expect(transport.transportHealth(engineHealth).activeStreams).toBe(0);
+      expect(transport.transportHealth(engineHealth).activeClients).toBe(1);
+      yield* transport.clientClosed;
+      yield* transport.clientClosed;
+      expect(transport.transportHealth(engineHealth).activeClients).toBe(0);
     }),
   );
 
@@ -226,6 +259,8 @@ describe("@view-server/runtime", () => {
 
       expect(runtimeCoreOptions?.subscriptionQueueCapacity).toBe(7);
       expect(runtimeCoreOptions?.transportHealth).toBeTypeOf("function");
+      expect(serverInput?.transport?.clientOpened).toBeDefined();
+      expect(serverInput?.transport?.clientClosed).toBeDefined();
       expect(serverInput?.transport?.streamOpened).toBeDefined();
       expect(serverInput?.transport?.streamClosed).toBeDefined();
       expect(serverOptions).toStrictEqual({

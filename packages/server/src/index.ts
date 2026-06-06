@@ -2,8 +2,9 @@ import { NodeHttpServer } from "@effect/platform-node";
 import type { TopicDefinitions, ViewServerConfig } from "@view-server/config";
 import { ViewServerRpcs } from "@view-server/protocol";
 import { Context, Effect, Layer, ManagedRuntime } from "effect";
-import { HttpRouter, HttpServer, HttpServerError } from "effect/unstable/http";
+import { HttpRouter, HttpServer, HttpServerError, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import * as Socket from "effect/unstable/socket/Socket";
 import * as Http from "node:http";
 import { makeViewServerHealthRoute } from "./health-route";
 import { makeViewServerRpcHandlers } from "./rpc-handlers";
@@ -14,6 +15,79 @@ import type {
   ViewServerWebSocketServerInput,
   ViewServerWebSocketServerOptions,
 } from "./server-types";
+
+const makeTrackedSocket = (
+  socket: Socket.Socket,
+  clientOpened: Effect.Effect<void>,
+  clientClosed: Effect.Effect<void>,
+): Socket.Socket =>
+  new Proxy(socket, {
+    get(target, property, receiver) {
+      if (property === "runRaw") {
+        const runRaw: Socket.Socket["runRaw"] = (handler, options) => {
+          let closeWhenOpened = Effect.void;
+          const onOpen = Effect.sync(() => {
+            closeWhenOpened = clientClosed;
+          }).pipe(Effect.andThen(clientOpened), Effect.andThen(options?.onOpen ?? Effect.void));
+          const close = Effect.sync(() => closeWhenOpened).pipe(
+            Effect.flatMap((closeEffect) => closeEffect),
+          );
+          return target
+            .runRaw(handler, {
+              ...options,
+              onOpen,
+            })
+            .pipe(Effect.ensuring(close));
+        };
+        return runRaw;
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+const makeTrackedUpgradeRequest = (
+  request: HttpServerRequest.HttpServerRequest,
+  clientOpened: Effect.Effect<void>,
+  clientClosed: Effect.Effect<void>,
+): HttpServerRequest.HttpServerRequest =>
+  new Proxy(request, {
+    get(target, property, receiver) {
+      if (property === "upgrade") {
+        return target.upgrade.pipe(
+          Effect.map((socket) => makeTrackedSocket(socket, clientOpened, clientClosed)),
+        );
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+const makeTrackedWebSocketProtocol = Effect.fn("ViewServerServer.websocket.protocol.make")(
+  function* <const Topics extends TopicDefinitions>(
+    path: `/${string}`,
+    input: ViewServerWebSocketServerInput<Topics>,
+  ) {
+    const router = yield* HttpRouter.HttpRouter;
+    const clientOpened = input.transport?.clientOpened ?? Effect.void;
+    const clientClosed = input.transport?.clientClosed ?? Effect.void;
+    const { httpEffect, protocol } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
+    const trackedHttpEffect = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      return yield* httpEffect.pipe(
+        Effect.provideService(
+          HttpServerRequest.HttpServerRequest,
+          makeTrackedUpgradeRequest(request, clientOpened, clientClosed),
+        ),
+      );
+    });
+    yield* router.add("GET", path, trackedHttpEffect);
+    return protocol;
+  },
+);
+
+const makeTrackedWebSocketProtocolLayer = <const Topics extends TopicDefinitions>(
+  path: `/${string}`,
+  input: ViewServerWebSocketServerInput<Topics>,
+) => Layer.effect(RpcServer.Protocol)(makeTrackedWebSocketProtocol(path, input));
 
 export type {
   Jsonify,
@@ -36,7 +110,9 @@ export const makeViewServerWebSocketServer: <const Topics extends TopicDefinitio
 ) {
   const path = options.path ?? "/rpc";
   const healthPath = options.healthPath ?? "/health";
-  const protocol = RpcServer.layerProtocolWebsocket({ path }).pipe(Layer.provide(HttpRouter.layer));
+  const protocol = makeTrackedWebSocketProtocolLayer(path, input).pipe(
+    Layer.provide(HttpRouter.layer),
+  );
   const handlers = ViewServerRpcs.toLayer(makeViewServerRpcHandlers(config, input));
   const healthRoute = makeViewServerHealthRoute(config, input, healthPath);
   const httpApp = Layer.merge(protocol, healthRoute);

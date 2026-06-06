@@ -12,6 +12,7 @@ import { ViewServerRpcErrorSchema, ViewServerRpcs } from "@view-server/protocol"
 import { createViewServerRuntimeCore } from "@view-server/runtime-core";
 import {
   Context,
+  Deferred,
   Effect,
   Fiber,
   Layer,
@@ -24,6 +25,7 @@ import { fromStringUnsafe } from "effect/BigDecimal";
 import { AtomRef } from "effect/unstable/reactivity";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
+import * as Net from "node:net";
 import { makeViewServerWebSocketServer } from "./index";
 
 const Order = Schema.Struct({
@@ -54,6 +56,20 @@ const HealthJson = Schema.Struct({
 
 class ServerTestJsonParseError extends Schema.TaggedErrorClass<ServerTestJsonParseError>()(
   "ServerTestJsonParseError",
+  {
+    cause: Schema.Unknown,
+  },
+) {}
+
+class ServerTestMalformedUpgradeError extends Schema.TaggedErrorClass<ServerTestMalformedUpgradeError>()(
+  "ServerTestMalformedUpgradeError",
+  {
+    cause: Schema.Unknown,
+  },
+) {}
+
+class ServerTestWebSocketOpenError extends Schema.TaggedErrorClass<ServerTestWebSocketOpenError>()(
+  "ServerTestWebSocketOpenError",
   {
     cause: Schema.Unknown,
   },
@@ -149,16 +165,103 @@ const fetchJson = Effect.fn("ViewServerServer.test.fetchJson")(function* (url: s
   return { response, value };
 });
 
+const sendMalformedWebSocketUpgrade = Effect.fn("ViewServerServer.test.websocket.malformedUpgrade")(
+  function* (url: string) {
+    const target = new URL(url.replace("ws://", "http://"));
+    yield* Effect.callback<void, ServerTestMalformedUpgradeError>((resume, signal) => {
+      const socket = Net.createConnection({
+        host: target.hostname,
+        port: Number(target.port),
+      });
+      const cleanup = () => {
+        socket.removeAllListeners();
+        socket.destroy();
+      };
+      const succeed = () => {
+        cleanup();
+        resume(Effect.void);
+      };
+      const fail = (cause: unknown) => {
+        cleanup();
+        resume(Effect.fail(new ServerTestMalformedUpgradeError({ cause })));
+      };
+
+      signal.addEventListener("abort", cleanup, { once: true });
+      socket.once("connect", () => {
+        socket.write(
+          [
+            `GET ${target.pathname} HTTP/1.1`,
+            `Host: ${target.host}`,
+            "Connection: Upgrade",
+            "Upgrade: websocket",
+            "",
+            "",
+          ].join("\r\n"),
+          () => {
+            socket.destroy();
+          },
+        );
+      });
+      socket.once("close", succeed);
+      socket.once("error", fail);
+      return Effect.sync(cleanup);
+    });
+  },
+);
+
+const openRawWebSocket = Effect.fn("ViewServerServer.test.websocket.raw.open")(function* (
+  url: string,
+) {
+  return yield* Effect.callback<globalThis.WebSocket, ServerTestWebSocketOpenError>(
+    (resume, signal) => {
+      const socket = new WebSocket(url);
+      const cleanup = () => {
+        socket.removeEventListener("open", opened);
+        socket.removeEventListener("error", failed);
+        signal.removeEventListener("abort", aborted);
+      };
+      function opened() {
+        cleanup();
+        resume(Effect.succeed(socket));
+      }
+      function failed(cause: Event) {
+        cleanup();
+        socket.close();
+        resume(Effect.fail(new ServerTestWebSocketOpenError({ cause })));
+      }
+      function aborted() {
+        cleanup();
+        socket.close();
+      }
+
+      signal.addEventListener("abort", aborted, { once: true });
+      socket.addEventListener("open", opened, { once: true });
+      socket.addEventListener("error", failed, { once: true });
+      return Effect.sync(aborted);
+    },
+  );
+});
+
 describe("@view-server/server", () => {
   it.live("serves an in-memory runtime through Effect RPC WebSocket", () =>
     Effect.gen(function* () {
       const inMemory = createServerTestRuntime(viewServer);
+      let openedClients = 0;
+      let closedClients = 0;
       let openedStreams = 0;
       let closedStreams = 0;
+      const clientClosedSignal = yield* Deferred.make<void>();
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient: inMemory.liveClient,
         runtime: inMemory.client,
         transport: {
+          clientOpened: Effect.sync(() => {
+            openedClients += 1;
+          }),
+          clientClosed: Effect.gen(function* () {
+            closedClients += 1;
+            yield* Deferred.succeed(clientClosedSignal, void 0);
+          }),
           streamOpened: Effect.sync(() => {
             openedStreams += 1;
           }),
@@ -238,9 +341,104 @@ describe("@view-server/server", () => {
       expect(afterClose.engine.topics.orders.activeSubscriptions).toBe(0);
 
       yield* client.close;
+      yield* Deferred.await(clientClosedSignal);
+      expect(openedClients).toBe(1);
+      expect(closedClients).toBe(1);
       expect(openedStreams).toBe(3);
       expect(closedStreams).toBe(3);
       yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("does not count plain HTTP GET requests as websocket clients", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      let openedClients = 0;
+      let closedClients = 0;
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: inMemory.client,
+        transport: {
+          clientOpened: Effect.sync(() => {
+            openedClients += 1;
+          }),
+          clientClosed: Effect.sync(() => {
+            closedClients += 1;
+          }),
+        },
+      });
+
+      const response = yield* Effect.promise(() => fetch(server.url.replace("ws://", "http://")));
+      yield* Effect.promise(() => response.text());
+
+      expect(response.ok).toBe(false);
+      expect(openedClients).toBe(0);
+      expect(closedClients).toBe(0);
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("does not count malformed websocket upgrades as clients", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      let openedClients = 0;
+      let closedClients = 0;
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: inMemory.client,
+        transport: {
+          clientOpened: Effect.sync(() => {
+            openedClients += 1;
+          }),
+          clientClosed: Effect.sync(() => {
+            closedClients += 1;
+          }),
+        },
+      });
+
+      yield* sendMalformedWebSocketUpgrade(server.url);
+
+      expect(openedClients).toBe(0);
+      expect(closedClients).toBe(0);
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("closes tracked websocket clients when interrupted during the open hook", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      let openedClients = 0;
+      let closedClients = 0;
+      const clientOpenedSignal = yield* Deferred.make<void>();
+      const clientClosedSignal = yield* Deferred.make<void>();
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: inMemory.client,
+        transport: {
+          clientOpened: Effect.gen(function* () {
+            openedClients += 1;
+            yield* Deferred.succeed(clientOpenedSignal, void 0);
+            return yield* Effect.never;
+          }),
+          clientClosed: Effect.gen(function* () {
+            closedClients += 1;
+            yield* Deferred.succeed(clientClosedSignal, void 0);
+          }),
+        },
+      });
+
+      const socket = yield* openRawWebSocket(server.url);
+      yield* Deferred.await(clientOpenedSignal);
+      socket.close();
+      const closeFiber = yield* server.close.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(clientClosedSignal);
+      yield* Fiber.join(closeFiber);
+
+      expect(openedClients).toBe(1);
+      expect(closedClients).toBe(1);
       yield* inMemory.close;
     }),
   );
