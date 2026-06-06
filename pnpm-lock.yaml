@@ -78,6 +78,9 @@ importers:
       '@view-server/runtime':
         specifier: workspace:*
         version: link:packages/runtime
+      '@view-server/runtime-core':
+        specifier: workspace:*
+        version: link:packages/runtime-core
       '@view-server/server':
         specifier: workspace:*
         version: link:packages/server
@@ -177,12 +180,12 @@ importers:
       '@view-server/client':
         specifier: workspace:*
         version: link:../client
-      '@view-server/column-live-view-engine':
-        specifier: workspace:*
-        version: link:../column-live-view-engine
       '@view-server/config':
         specifier: workspace:*
         version: link:../config
+      '@view-server/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
       effect:
         specifier: 'catalog:'
         version: 4.0.0-beta.70
@@ -258,6 +261,9 @@ importers:
       '@view-server/in-memory':
         specifier: workspace:*
         version: link:../in-memory
+      '@view-server/runtime-core':
+        specifier: workspace:*
+        version: link:../runtime-core
       '@view-server/server':
         specifier: workspace:*
         version: link:../server
@@ -297,9 +303,9 @@ importers:
       '@view-server/config':
         specifier: workspace:*
         version: link:../config
-      '@view-server/in-memory':
+      '@view-server/runtime-core':
         specifier: workspace:*
-        version: link:../in-memory
+        version: link:../runtime-core
       '@view-server/server':
         specifier: workspace:*
         version: link:../server
@@ -313,6 +319,37 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.1
+      '@vitest/coverage-istanbul':
+        specifier: 'catalog:'
+        version: 4.1.6(@voidzero-dev/vite-plus-test@0.1.23)
+      '@vitest/runner':
+        specifier: 'catalog:'
+        version: 4.1.6
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@0.1.23
+        version: '@voidzero-dev/vite-plus-test@0.1.23(@types/node@25.9.1)(@vitest/coverage-istanbul@4.1.6)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(yaml@2.9.0))(yaml@2.9.0)'
+
+  packages/runtime-core:
+    dependencies:
+      '@view-server/client':
+        specifier: workspace:*
+        version: link:../client
+      '@view-server/column-live-view-engine':
+        specifier: workspace:*
+        version: link:../column-live-view-engine
+      '@view-server/config':
+        specifier: workspace:*
+        version: link:../config
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70(@voidzero-dev/vite-plus-test@0.1.23)(effect@4.0.0-beta.70)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.6(@voidzero-dev/vite-plus-test@0.1.23)
@@ -350,9 +387,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.1
-      '@view-server/in-memory':
+      '@view-server/runtime-core':
         specifier: workspace:*
-        version: link:../in-memory
+        version: link:../runtime-core
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.6(@voidzero-dev/vite-plus-test@0.1.23)

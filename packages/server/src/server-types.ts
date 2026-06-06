@@ -14,6 +14,12 @@ export type ViewServerServerRuntime<Topics extends TopicDefinitions> = Pick<
 export type ViewServerWebSocketServerInput<Topics extends TopicDefinitions> = {
   readonly liveClient: ViewServerRuntimeLiveClient<Topics>;
   readonly runtime: ViewServerServerRuntime<Topics>;
+  readonly transport?: {
+    readonly clientOpened?: Effect.Effect<void>;
+    readonly clientClosed?: Effect.Effect<void>;
+    readonly streamOpened?: Effect.Effect<void>;
+    readonly streamClosed?: Effect.Effect<void>;
+  };
 };
 
 export type ViewServerWebSocketServerOptions = {

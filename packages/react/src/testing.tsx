@@ -1,4 +1,4 @@
-import type { ViewServerInMemoryRuntime } from "@view-server/config";
+import type { ViewServerRuntimeClient } from "@view-server/config";
 import {
   createInMemoryViewServer,
   type DecodableTopicDefinitions,
@@ -19,7 +19,7 @@ export type ViewServerInMemoryProviderProps = {
 
 export type ViewServerInMemoryReactInstance<Topics extends DecodableTopicDefinitions> = {
   readonly ViewServerInMemoryProvider: (props: ViewServerInMemoryProviderProps) => ReactNode;
-  readonly client: ViewServerInMemoryRuntime<Topics>;
+  readonly client: ViewServerRuntimeClient<Topics>;
   readonly close: Effect.Effect<void>;
 };
 
@@ -34,7 +34,7 @@ const InMemoryLifetimeAtom = AtomReact.make((close: Effect.Effect<void>) =>
 
 export const createInMemoryViewServerReact = <const Topics extends DecodableTopicDefinitions>(
   react: ViewServerReactBindings<Topics>,
-  options: ViewServerInMemoryOptions = {},
+  options: ViewServerInMemoryOptions<Topics> = {},
 ): ViewServerInMemoryReactInstance<Topics> => {
   const ViewServerClientProvider = react[ViewServerReactClientProvider];
   const inMemory = createInMemoryViewServer(react[ViewServerReactConfig], options);

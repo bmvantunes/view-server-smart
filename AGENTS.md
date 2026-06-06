@@ -66,6 +66,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - React components in tests and examples should be `function Component() { ... }`, not arrow component constants.
 - Production React must be transport-agnostic. Hooks consume a provider/client seam; hooks must not know whether the backend is in-memory, RPC, WebSocket, HTTP, or something else.
 - `@view-server/react` production code must not depend on `@view-server/in-memory`.
+- In-memory behavior must use the same shared runtime core and Column Live View Engine as production. Only transport/ingress Adapters may differ.
 - In-memory React helpers belong under `@view-server/react/testing`.
 - Provider ownership must be explicit. Generic providers receiving caller-owned clients must not close those clients. Testing/in-memory providers that create clients may own cleanup.
 - Do not use `useEffect` for Effect runtime integration when `@effect/atom-react` / Effect reactivity primitives are the right fit.
@@ -126,7 +127,9 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   - server: server/runtime adapters.
   - react: React bindings only.
   - react/testing: React test helpers.
-  - in-memory: framework-neutral in-memory runtime/client.
+  - runtime-core: shared engine-backed runtime Module; owns runtime client, live client, health snapshots, and lifecycle.
+  - in-memory: in-process Adapter over runtime-core for tests, demos, Storybook, and browser benchmarks.
+  - runtime: production composition of runtime-core plus server and future Kafka/TCP/gRPC ingress Adapters.
 - Do not make production packages depend on testing packages or in-memory implementations.
 
 ## Common Blockers
@@ -149,6 +152,7 @@ These issues block merge until fixed or explicitly accepted by the user:
 - Implementation adds casts, especially broad casts (`as any`, `as unknown`, `as never`), or hides type erasure behind casts.
 - Public APIs require consumers to add `as const` for correct inference.
 - Production React depends on in-memory runtime code.
+- Production runtime imports the in-memory Adapter instead of runtime-core.
 - Browser/remote client exposes publish, publishMany, reset, or other admin mutation RPCs.
 - A package imports through a root export that also pulls in the wrong runtime/platform adapter.
 - Public API type tests are missing for new generic inference or rejection behavior.

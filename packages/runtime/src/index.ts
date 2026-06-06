@@ -4,6 +4,7 @@ import type { HttpServerError } from "effect/unstable/http";
 import {
   makeDefaultRuntimeDependencies,
   makeViewServerRuntimeWithDependencies,
+  runViewServerRuntimeWithDependencies,
   type ViewServerRuntime,
   type ViewServerRuntimeOptions,
   type ViewServerRuntimeTopicDefinitions,
@@ -28,3 +29,19 @@ export const makeViewServerRuntime: <const Topics extends ViewServerRuntimeTopic
 });
 
 export const createViewServerRuntime = makeViewServerRuntime;
+
+export const runViewServerRuntime: <const Topics extends ViewServerRuntimeTopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  options?: ViewServerRuntimeOptions,
+) => Effect.Effect<never, HttpServerError.ServeError> = Effect.fn("ViewServerRuntime.run")(
+  function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
+    config: ViewServerConfig<Topics>,
+    options: ViewServerRuntimeOptions = {},
+  ) {
+    return yield* runViewServerRuntimeWithDependencies(
+      makeDefaultRuntimeDependencies<Topics>(),
+      config,
+      options,
+    );
+  },
+);

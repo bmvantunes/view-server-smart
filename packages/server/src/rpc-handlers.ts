@@ -10,13 +10,26 @@ import {
   viewServerEncodeHealthTopicEvent,
   viewServerEncodeLiveEvent,
 } from "@view-server/protocol";
-import { Effect, Stream } from "effect";
+import { Effect, Exit, Stream } from "effect";
 import type { ViewServerWebSocketServerInput } from "./server-types";
 
 export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>(
   config: ViewServerConfig<Topics>,
   input: ViewServerWebSocketServerInput<Topics>,
 ) => {
+  const streamOpened = input.transport?.streamOpened ?? Effect.void;
+  const streamClosed = input.transport?.streamClosed ?? Effect.void;
+  const withTransportLifecycle = <A, E, R>(
+    stream: Effect.Effect<Stream.Stream<A, E, R>, E, R>,
+  ): Stream.Stream<A, E, R> =>
+    Stream.unwrap(
+      streamOpened.pipe(
+        Effect.andThen(stream),
+        Effect.onExit((exit) => (Exit.isFailure(exit) ? streamClosed : Effect.void)),
+        Effect.map((openedStream) => openedStream.pipe(Stream.ensuring(streamClosed))),
+      ),
+    );
+
   return ViewServerRpcs.of({
     "ViewServer.Health": () =>
       Effect.gen(function* () {
@@ -24,7 +37,7 @@ export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>
         return yield* viewServerDecodeHealth(config, health);
       }),
     "ViewServer.Subscribe": (payload) =>
-      Stream.unwrap(
+      withTransportLifecycle(
         Effect.gen(function* () {
           if (payload.topic === VIEW_SERVER_HEALTH_SUMMARY_TOPIC) {
             yield* viewServerDecodeHealthQuery(payload.topic, payload.query);

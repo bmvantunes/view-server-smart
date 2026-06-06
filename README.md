@@ -5,25 +5,25 @@
 Server code starts a runtime through Effect RPC WebSocket and same-server
 `GET /health`:
 
+Node entrypoints should use `@effect/platform-node`'s `NodeRuntime.runMain` so
+`SIGINT` and `SIGTERM` interrupt the main fiber and run Effect finalizers.
+
 ```ts
-import { createViewServerRuntime } from "@view-server/runtime";
-import { Effect } from "effect";
+import { NodeRuntime } from "@effect/platform-node";
+import { runViewServerRuntime } from "@view-server/runtime";
 import { viewServer } from "./view-server-config";
 
-const runtime = await Effect.runPromise(
-  createViewServerRuntime(viewServer, {
+NodeRuntime.runMain(
+  runViewServerRuntime(viewServer, {
     host: "127.0.0.1",
     websocketPort: 8080,
   }),
 );
-
-console.log(runtime.url);
-console.log(runtime.healthUrl);
 ```
 
-`runtime.healthUrl` serves the cached runtime health snapshot for deployment
-readiness checks. Internal `bigint` health fields, such as Kafka lag, are encoded
-as decimal strings in the JSON response.
+The same-server `GET /health` endpoint serves the cached runtime health snapshot
+for deployment readiness checks. Internal `bigint` health fields, such as Kafka
+lag, are encoded as decimal strings in the JSON response.
 
 Browser React code keeps using the normal provider and hooks:
 
