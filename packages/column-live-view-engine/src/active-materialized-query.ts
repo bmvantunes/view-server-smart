@@ -22,6 +22,12 @@ export type MaterializedQueryExecutionSlot = {
   refs: number;
 };
 
+export type MaterializedQueryExecutionModeCounts = {
+  readonly activeFallback: number;
+  readonly activeIncremental: number;
+  readonly activeTotal: number;
+};
+
 const getActiveMaterializedQueryMap = (
   store: ActiveQueryStoreState,
 ): Map<string, MaterializedQueryExecutionSlot> => {
@@ -134,3 +140,26 @@ export const clearMaterializedQueryExecutions = Effect.fn(
 export const activeMaterializedQueryExecutionCount = Effect.fn(
   "ColumnLiveViewEngine.activeQuery.materialized.countStore",
 )((store: ActiveQueryStoreState) => Effect.sync(() => getActiveMaterializedQueryMap(store).size));
+
+export const activeMaterializedQueryExecutionModeCounts = Effect.fn(
+  "ColumnLiveViewEngine.activeQuery.materialized.countModes",
+)((store: ActiveQueryStoreState) =>
+  Effect.sync(() => {
+    let activeFallback = 0;
+    let activeIncremental = 0;
+
+    for (const entry of getActiveMaterializedQueryMap(store).values()) {
+      if (entry.execution.incremental) {
+        activeIncremental += 1;
+      } else {
+        activeFallback += 1;
+      }
+    }
+
+    return {
+      activeFallback,
+      activeIncremental,
+      activeTotal: activeFallback + activeIncremental,
+    } satisfies MaterializedQueryExecutionModeCounts;
+  }),
+);

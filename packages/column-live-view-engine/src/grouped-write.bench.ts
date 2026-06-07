@@ -4,11 +4,17 @@ import { defineViewServerConfig } from "@view-server/config";
 import { Cause, Effect, Exit, Schema, Scope, Stream } from "effect";
 import {
   createColumnLiveViewEngine,
+  defaultGroupedIncrementalAdmissionLimits,
+  groupedIncrementalAdmissionLimitsFromConfig,
   type ColumnLiveViewEngine,
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
+  type GroupedIncrementalAdmissionLimits,
 } from "./index";
 import {
+  activeFallbackGroupedViewCountFromEngineHealth,
+  activeIncrementalGroupedViewCountFromEngineHealth,
+  activeViewCountFromEngineHealth,
   backpressureCountFromEngineHealth,
   benchmarkOutputJsonPath,
   cleanupLeakCountFromEngineHealth,
@@ -47,6 +53,7 @@ type Engine = ColumnLiveViewEngine<Topics>;
 type OrderRow = typeof Order.Type;
 type OrderStatus = OrderRow["status"];
 type GroupedWriteMode = "fallback" | "incremental";
+type ExpectedGroupedAdmission = "fallback" | "incremental";
 type GroupedReaderName = "primary" | "secondary";
 type GroupedEvent = ColumnLiveViewEngineEvent<object>;
 type GroupedSubscription = ColumnLiveViewSubscription<object>;
@@ -79,6 +86,9 @@ type BenchmarkProfile = {
   regionStatusSubscription: GroupedSubscription | undefined;
   rowMutationCount: number;
   sameGroupPatchKeys: ReadonlyArray<string>;
+  setupActiveFallbackGroupedViews: number;
+  setupActiveIncrementalGroupedViews: number;
+  setupActiveViews: number;
   statusReader: GroupedEventReader | undefined;
   statusScope: Scope.Closeable | undefined;
   statusSubscription: GroupedSubscription | undefined;
@@ -154,8 +164,25 @@ const groupedWriteModeFromEnv = (): GroupedWriteMode => {
   throw new Error("VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE must be fallback or incremental.");
 };
 
+const expectedGroupedAdmissionFromEnv = (
+  defaultAdmission: ExpectedGroupedAdmission,
+): ExpectedGroupedAdmission => {
+  const raw = process.env["VIEW_SERVER_ENGINE_BENCH_EXPECTED_GROUPED_ADMISSION"];
+  if (raw === undefined || raw.trim() === "") {
+    return defaultAdmission;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "fallback" || trimmed === "incremental") {
+    return trimmed;
+  }
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_EXPECTED_GROUPED_ADMISSION must be fallback or incremental.",
+  );
+};
+
 const benchmarkRowCount = rowCountFromEnv();
 const groupedWriteMode = groupedWriteModeFromEnv();
+const expectedGroupedAdmission = expectedGroupedAdmissionFromEnv(groupedWriteMode);
 const seedBatchSize = positiveIntegerFromEnv(
   "VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE",
   defaultSeedBatchSize,
@@ -164,6 +191,36 @@ const mutationBatchSize = positiveIntegerFromEnv(
   "VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE",
   defaultMutationBatchSize,
 );
+const configuredGroupedIncrementalAdmissionLimits: GroupedIncrementalAdmissionLimits =
+  groupedIncrementalAdmissionLimitsFromConfig({
+    maxGroups: positiveIntegerFromEnv(
+      "VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_GROUPS",
+      defaultGroupedIncrementalAdmissionLimits.maxGroups,
+    ),
+    maxMembers: positiveIntegerFromEnv(
+      "VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_MEMBERS",
+      defaultGroupedIncrementalAdmissionLimits.maxMembers,
+    ),
+    maxMembersPerGroup: positiveIntegerFromEnv(
+      "VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_MEMBERS_PER_GROUP",
+      defaultGroupedIncrementalAdmissionLimits.maxMembersPerGroup,
+    ),
+    maxRetainedValueEntries: positiveIntegerFromEnv(
+      "VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_RETAINED_VALUE_ENTRIES",
+      defaultGroupedIncrementalAdmissionLimits.maxRetainedValueEntries,
+    ),
+  });
+const forcedFallbackGroupedIncrementalAdmissionLimits: GroupedIncrementalAdmissionLimits =
+  groupedIncrementalAdmissionLimitsFromConfig({
+    maxGroups: 1,
+    maxMembers: 1,
+    maxMembersPerGroup: 1,
+    maxRetainedValueEntries: 1,
+  });
+const groupedIncrementalAdmissionLimits =
+  groupedWriteMode === "fallback"
+    ? forcedFallbackGroupedIncrementalAdmissionLimits
+    : configuredGroupedIncrementalAdmissionLimits;
 const maximumSafeMutationBatchSize = Math.max(1, Math.floor(benchmarkRowCount / 20));
 if (seedBatchSize > benchmarkRowCount) {
   throw new Error("VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE must be less than or equal to row count.");
@@ -219,6 +276,9 @@ const profile: BenchmarkProfile = {
   regionStatusSubscription: undefined,
   rowMutationCount: benchmarkRowCount,
   sameGroupPatchKeys: [],
+  setupActiveFallbackGroupedViews: 0,
+  setupActiveIncrementalGroupedViews: 0,
+  setupActiveViews: 0,
   statusReader: undefined,
   statusScope: undefined,
   statusSubscription: undefined,
@@ -511,8 +571,50 @@ const drainDeltas = async (benchmarkProfile: BenchmarkProfile, caseName: string)
   benchmarkProfile.deltaRecords.push(deltaRecord(regionStatusEvents, "secondary", caseName));
 };
 
+const activeGroupedViewCounts = (
+  health: unknown,
+  label: string,
+): {
+  readonly activeFallbackGroupedViews: number;
+  readonly activeIncrementalGroupedViews: number;
+  readonly activeViews: number;
+} => {
+  expect(isBenchmarkEngineHealth(health)).toBe(true);
+  if (!isBenchmarkEngineHealth(health)) {
+    throw new Error(`Grouped write benchmark ${label} health is malformed.`);
+  }
+  expect(health.activeSubscriptions).toBe(2);
+  expect(health.backpressureEvents).toBe(0);
+  expect(health.queuedEvents).toBe(0);
+  return {
+    activeFallbackGroupedViews: activeFallbackGroupedViewCountFromEngineHealth(health),
+    activeIncrementalGroupedViews: activeIncrementalGroupedViewCountFromEngineHealth(health),
+    activeViews: activeViewCountFromEngineHealth(health),
+  };
+};
+
+const expectGroupedAdmission = (counts: {
+  readonly activeFallbackGroupedViews: number;
+  readonly activeIncrementalGroupedViews: number;
+  readonly activeViews: number;
+}): void => {
+  expect(counts.activeViews).toBe(2);
+  if (expectedGroupedAdmission === "incremental") {
+    expect(counts.activeFallbackGroupedViews).toBe(0);
+    expect(counts.activeIncrementalGroupedViews).toBe(2);
+    return;
+  }
+  expect(counts.activeFallbackGroupedViews).toBe(2);
+  expect(counts.activeIncrementalGroupedViews).toBe(0);
+};
+
 beforeAll(async () => {
-  const engine = Effect.runSync(createColumnLiveViewEngine({ topics: viewServer.topics }));
+  const engine = Effect.runSync(
+    createColumnLiveViewEngine({
+      groupedIncrementalAdmissionLimits,
+      topics: viewServer.topics,
+    }),
+  );
   await Effect.runPromise(seedEngine(engine, profile.rowCount));
   const requiredMutationKeys = benchOptions.iterations * mutationBatchSize;
 
@@ -540,6 +642,10 @@ beforeAll(async () => {
   expect(statusInitialVersion).toBe(expectedInitialVersion);
   expect(regionStatusInitialVersion).toBe(expectedInitialVersion);
 
+  const setupHealth = await Effect.runPromise(engine.health());
+  const setupCounts = activeGroupedViewCounts(setupHealth, "after setup");
+  expectGroupedAdmission(setupCounts);
+
   profile.deleteKeys = matchingSeedKeysForStatus(
     Math.floor(benchmarkRowCount * 0.66),
     requiredMutationKeys,
@@ -557,6 +663,9 @@ beforeAll(async () => {
   profile.regionStatusScope = regionStatusScope;
   profile.regionStatusSubscription = regionStatusSubscription;
   profile.sameGroupPatchKeys = matchingSeedKeysForStatus(0, requiredMutationKeys, "open");
+  profile.setupActiveFallbackGroupedViews = setupCounts.activeFallbackGroupedViews;
+  profile.setupActiveIncrementalGroupedViews = setupCounts.activeIncrementalGroupedViews;
+  profile.setupActiveViews = setupCounts.activeViews;
   profile.statusReader = statusReader;
   profile.statusScope = statusScope;
   profile.statusSubscription = statusSubscription;
@@ -575,6 +684,10 @@ afterAll(async () => {
     .filter((record) => record.readerName === "secondary")
     .map((record) => record.fromVersion);
   const memoryAfterSetup = profile.memoryAfterSetup ?? memoryBefore;
+  let preCleanupHealth: unknown = undefined;
+  let activeFallbackGroupedViewsBeforeCleanup = 0;
+  let activeIncrementalGroupedViewsBeforeCleanup = 0;
+  let activeViewsBeforeCleanup = 0;
   expect(profile.deltaRecords.length).toBe(expectedMutationDeltaEvents);
   expect(statusFromVersions).toStrictEqual(expectedFromVersions);
   expect(regionStatusFromVersions).toStrictEqual(expectedFromVersions);
@@ -585,14 +698,12 @@ afterAll(async () => {
     expect(record.totalRows > 0).toBe(true);
   }
   if (profile.engine !== undefined) {
-    const healthBeforeCleanup = await Effect.runPromise(profile.engine.health());
-    expect(isBenchmarkEngineHealth(healthBeforeCleanup)).toBe(true);
-    const benchmarkHealthBeforeCleanup = isBenchmarkEngineHealth(healthBeforeCleanup)
-      ? healthBeforeCleanup
-      : undefined;
-    expect(benchmarkHealthBeforeCleanup?.activeSubscriptions).toBe(2);
-    expect(benchmarkHealthBeforeCleanup?.backpressureEvents).toBe(0);
-    expect(benchmarkHealthBeforeCleanup?.queuedEvents).toBe(0);
+    preCleanupHealth = await Effect.runPromise(profile.engine.health());
+    const preCleanupCounts = activeGroupedViewCounts(preCleanupHealth, "before cleanup");
+    expectGroupedAdmission(preCleanupCounts);
+    activeFallbackGroupedViewsBeforeCleanup = preCleanupCounts.activeFallbackGroupedViews;
+    activeIncrementalGroupedViewsBeforeCleanup = preCleanupCounts.activeIncrementalGroupedViews;
+    activeViewsBeforeCleanup = preCleanupCounts.activeViews;
   }
   if (profile.statusSubscription !== undefined) {
     await Effect.runPromise(profile.statusSubscription.close());
@@ -641,6 +752,22 @@ afterAll(async () => {
     benchmarkName: "grouped write engine benchmark",
     benchmarkScope: "engine-grouped-write",
     cleanupLeakCount,
+    groupedWriteAdmission: {
+      activeFallbackGroupedViewsAfterSetup: profile.setupActiveFallbackGroupedViews,
+      activeFallbackGroupedViewsBeforeCleanup,
+      activeIncrementalGroupedViewsAfterSetup: profile.setupActiveIncrementalGroupedViews,
+      activeIncrementalGroupedViewsBeforeCleanup,
+      activeViewsAfterSetup: profile.setupActiveViews,
+      activeViewsBeforeCleanup,
+      configuredMode: groupedWriteMode,
+      expectedAdmission: expectedGroupedAdmission,
+      incrementalAdmissionLimits: groupedIncrementalAdmissionLimits,
+      priceThreshold:
+        groupedWriteMode === "incremental" ? incrementalPriceThreshold(benchmarkRowCount) : null,
+      seedMutationCount: profile.rowCount,
+      timedMutationCount: profile.rowMutationCount - profile.rowCount,
+      writeBatchSize: mutationBatchSize,
+    },
     health,
     latency: {
       outputJsonPath,
@@ -655,16 +782,18 @@ afterAll(async () => {
       "Timed bodies include the grouped write operation and draining one delta from each active grouped subscription.",
       groupedWriteMode === "incremental"
         ? "Incremental mode uses selective grouped subscriptions sized under the current grouped incremental admission limits."
-        : "Fallback mode intentionally uses broad grouped subscriptions and measures full grouped fallback rebuild pressure.",
+        : "Fallback mode intentionally uses broad grouped subscriptions with forced fallback admission limits and measures full grouped fallback rebuild pressure.",
       "The benchmark keeps two grouped live subscriptions open: primary region/status aggregates and secondary status/region aggregates.",
-      `Seed row count: ${profile.rowCount}. Configured write batch size: ${mutationBatchSize}.`,
+      `Seed mutation count: ${profile.rowCount}. Timed mutation count: ${profile.rowMutationCount - profile.rowCount}. Configured write batch size: ${mutationBatchSize}.`,
       `Grouped write mode: ${groupedWriteMode}.`,
+      `Expected grouped admission: ${expectedGroupedAdmission}.`,
       groupedWriteMode === "incremental"
         ? `Incremental mode price threshold: ${incrementalPriceThreshold(benchmarkRowCount)}.`
         : "Fallback mode has no selective price threshold.",
       `Grouped write engine versions during timed samples: ${profile.deltaVersionCount}.`,
     ],
     outputJsonPath,
+    preCleanupHealth,
     queuedEventCount: queuedEventCountFromEngineHealth(health),
     rowCount: profile.rowCount,
     subscriberCount: 2,

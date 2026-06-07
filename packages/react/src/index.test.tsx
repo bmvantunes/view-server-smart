@@ -83,6 +83,8 @@ const healthTopicRow = (
   mutationsPerSecond: 0,
   rowsPerSecond: 0,
   pendingMutationBatches: 0,
+  activeFallbackGroupedViews: 0,
+  activeIncrementalGroupedViews: 0,
   activeViews: 0,
   activeSubscriptions: 0,
   queuedEvents: 0,

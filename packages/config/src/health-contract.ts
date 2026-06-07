@@ -34,6 +34,8 @@ export type TopicRuntimeHealth = {
   readonly mutationsPerSecond: number;
   readonly rowsPerSecond: number;
   readonly pendingMutationBatches: number;
+  readonly activeFallbackGroupedViews: number;
+  readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
@@ -130,6 +132,8 @@ export type ViewServerHealthTopicRow<Topic extends string = string> = {
   readonly mutationsPerSecond: number;
   readonly rowsPerSecond: number;
   readonly pendingMutationBatches: number;
+  readonly activeFallbackGroupedViews: number;
+  readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
@@ -243,6 +247,8 @@ export const viewServerHealthTopicRowsFromHealth = <Topics extends object>(
       mutationsPerSecond: topic.mutationsPerSecond,
       rowsPerSecond: topic.rowsPerSecond,
       pendingMutationBatches: topic.pendingMutationBatches,
+      activeFallbackGroupedViews: topic.activeFallbackGroupedViews,
+      activeIncrementalGroupedViews: topic.activeIncrementalGroupedViews,
       activeViews: topic.activeViews,
       activeSubscriptions: topic.activeSubscriptions,
       queuedEvents: topic.queuedEvents,

@@ -38,7 +38,30 @@ export type BenchmarkEngineHealth = {
 };
 
 export type BenchmarkTopicHealth = {
+  readonly activeFallbackGroupedViews?: number;
+  readonly activeIncrementalGroupedViews?: number;
   readonly activeViews: number;
+};
+
+export type BenchmarkGroupedWriteAdmission = {
+  readonly activeFallbackGroupedViewsAfterSetup: number;
+  readonly activeFallbackGroupedViewsBeforeCleanup: number;
+  readonly activeIncrementalGroupedViewsAfterSetup: number;
+  readonly activeIncrementalGroupedViewsBeforeCleanup: number;
+  readonly activeViewsAfterSetup: number;
+  readonly activeViewsBeforeCleanup: number;
+  readonly configuredMode: "fallback" | "incremental";
+  readonly expectedAdmission: "fallback" | "incremental";
+  readonly incrementalAdmissionLimits: {
+    readonly maxGroups: number;
+    readonly maxMembers: number;
+    readonly maxMembersPerGroup: number;
+    readonly maxRetainedValueEntries: number;
+  };
+  readonly priceThreshold: number | null;
+  readonly seedMutationCount: number;
+  readonly timedMutationCount: number;
+  readonly writeBatchSize: number;
 };
 
 export type BenchmarkArtifactInput = {
@@ -67,9 +90,11 @@ export type BenchmarkArtifactInput = {
   };
   readonly backpressureCount: number;
   readonly cleanupLeakCount: number;
+  readonly groupedWriteAdmission?: BenchmarkGroupedWriteAdmission;
   readonly queuedEventCount: number;
   readonly health: unknown;
   readonly notes: ReadonlyArray<string>;
+  readonly preCleanupHealth?: unknown;
 };
 
 export const memorySnapshot = (): BenchmarkMemorySnapshot => {
@@ -149,10 +174,10 @@ export const isBenchmarkEngineHealth = (value: unknown): value is BenchmarkEngin
     return false;
   }
   const hasEngineCounters =
-    typeof value.activeSubscriptions === "number" &&
-    typeof value.backpressureEvents === "number" &&
-    typeof value.maxQueueDepth === "number" &&
-    typeof value.queuedEvents === "number";
+    isFiniteNumber(value.activeSubscriptions) &&
+    isFiniteNumber(value.backpressureEvents) &&
+    isFiniteNumber(value.maxQueueDepth) &&
+    isFiniteNumber(value.queuedEvents);
 
   if (!hasEngineCounters) {
     return false;
@@ -171,17 +196,33 @@ export const isBenchmarkEngineHealth = (value: unknown): value is BenchmarkEngin
   }
 
   for (const topic of Object.values(topics)) {
-    if (
-      typeof topic !== "object" ||
-      topic === null ||
-      !("activeViews" in topic) ||
-      typeof topic.activeViews !== "number"
-    ) {
+    if (!isBenchmarkTopicHealth(topic)) {
       return false;
     }
   }
 
   return true;
+};
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const isOptionalFiniteNumber = (value: unknown): value is number | undefined =>
+  value === undefined || isFiniteNumber(value);
+
+const isBenchmarkTopicHealth = (value: unknown): value is BenchmarkTopicHealth => {
+  if (typeof value !== "object" || value === null || !("activeViews" in value)) {
+    return false;
+  }
+  const activeFallbackGroupedViews =
+    "activeFallbackGroupedViews" in value ? value.activeFallbackGroupedViews : undefined;
+  const activeIncrementalGroupedViews =
+    "activeIncrementalGroupedViews" in value ? value.activeIncrementalGroupedViews : undefined;
+  return (
+    isFiniteNumber(value.activeViews) &&
+    isOptionalFiniteNumber(activeFallbackGroupedViews) &&
+    isOptionalFiniteNumber(activeIncrementalGroupedViews)
+  );
 };
 
 export const activeViewCountFromEngineHealth = (health: BenchmarkEngineHealth): number => {
@@ -191,6 +232,32 @@ export const activeViewCountFromEngineHealth = (health: BenchmarkEngineHealth): 
   let activeViewCount = 0;
   for (const topic of Object.values(health.topics)) {
     activeViewCount += topic.activeViews;
+  }
+  return activeViewCount;
+};
+
+export const activeFallbackGroupedViewCountFromEngineHealth = (
+  health: BenchmarkEngineHealth,
+): number => {
+  if (health.topics === undefined) {
+    return 0;
+  }
+  let activeViewCount = 0;
+  for (const topic of Object.values(health.topics)) {
+    activeViewCount += topic.activeFallbackGroupedViews ?? 0;
+  }
+  return activeViewCount;
+};
+
+export const activeIncrementalGroupedViewCountFromEngineHealth = (
+  health: BenchmarkEngineHealth,
+): number => {
+  if (health.topics === undefined) {
+    return 0;
+  }
+  let activeViewCount = 0;
+  for (const topic of Object.values(health.topics)) {
+    activeViewCount += topic.activeIncrementalGroupedViews ?? 0;
   }
   return activeViewCount;
 };
@@ -208,6 +275,7 @@ export const writeBenchmarkArtifact = (input: BenchmarkArtifactInput): void => {
         benchmarkName: input.benchmarkName,
         benchmarkScope: input.benchmarkScope,
         cleanupLeakCount: input.cleanupLeakCount,
+        groupedWriteAdmission: input.groupedWriteAdmission,
         health: input.health,
         latency: input.latency,
         memory: {
@@ -221,6 +289,7 @@ export const writeBenchmarkArtifact = (input: BenchmarkArtifactInput): void => {
         mutationCount: input.mutationCount,
         notes: input.notes,
         outputJsonPath: input.outputJsonPath,
+        preCleanupHealth: input.preCleanupHealth,
         queuedEventCount: input.queuedEventCount,
         rowCount: input.rowCount,
         subscriberCount: input.subscriberCount,

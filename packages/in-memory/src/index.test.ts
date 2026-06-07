@@ -77,6 +77,35 @@ describe("@view-server/in-memory", () => {
     }),
   );
 
+  it.effect("forwards grouped admission limits through the public in-memory API", () =>
+    Effect.gen(function* () {
+      const inMemory = createInMemoryViewServer(viewServer, {
+        groupedIncrementalAdmissionLimits: {
+          maxGroups: 1,
+        },
+      });
+      yield* inMemory.client.publishMany("orders", [
+        { id: "order-1", price: 10 },
+        { id: "order-2", price: 20 },
+      ]);
+      const subscription = yield* inMemory.liveClient.subscribe("orders", {
+        groupBy: ["price"],
+        aggregates: {
+          rowCount: { aggFunc: "count" },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      const health = yield* inMemory.client.health();
+      expect(health.engine.topics.orders.activeFallbackGroupedViews).toBe(1);
+      expect(health.engine.topics.orders.activeIncrementalGroupedViews).toBe(0);
+
+      yield* subscription.close();
+      yield* inMemory.close;
+    }),
+  );
+
   it.effect("ignores smuggled runtime-core transport health options", () =>
     Effect.gen(function* () {
       const widenedOptions = {

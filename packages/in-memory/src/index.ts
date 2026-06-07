@@ -25,6 +25,9 @@ export type ViewServerInMemoryOptions<
 const toRuntimeCoreOptions = <const Topics extends DecodableTopicDefinitions>(
   input: ViewServerInMemoryOptions<Topics>,
 ): ViewServerRuntimeCoreOptionsFor<Topics> => ({
+  ...(input.groupedIncrementalAdmissionLimits === undefined
+    ? {}
+    : { groupedIncrementalAdmissionLimits: input.groupedIncrementalAdmissionLimits }),
   ...(input.subscriptionQueueCapacity === undefined
     ? {}
     : { subscriptionQueueCapacity: input.subscriptionQueueCapacity }),

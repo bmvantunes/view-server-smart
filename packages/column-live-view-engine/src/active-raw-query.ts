@@ -30,8 +30,16 @@ type RawQueryExecutionWindowSlot = {
 };
 
 type ActiveQueryBaseEvaluation<Row extends RowObject> = TopicRawWindowScanResult<Row> & {
+  readonly retainedWindowFilled: boolean;
   readonly version: number;
 };
+
+const retainedWindowFilled = (
+  window: ReadonlyArray<{ readonly key: string; readonly row: RowObject }>,
+  totalRows: number,
+  queryWindow: RawQueryPlanWindow,
+): boolean =>
+  queryWindow.limit === undefined || window.length >= Math.min(totalRows, queryWindow.limit);
 
 const getActiveRawQueryMap = (store: ActiveQueryStoreState): Map<string, RawQueryExecutionSlot> => {
   return store.activeQueries.raw;
@@ -58,6 +66,11 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   const scanResult = store.scanRawWindow(rawQueryWindowScanPlan(compiled.plan, queryWindow));
   return {
     ...scanResult,
+    retainedWindowFilled: retainedWindowFilled(
+      scanResult.window,
+      scanResult.totalRows,
+      queryWindow,
+    ),
     version,
   };
 };
@@ -129,6 +142,7 @@ const updateBaseEvaluationFromRetainedChanges = (
   if (queryWindow.limit === 0) {
     return {
       keys: [],
+      retainedWindowFilled: true,
       totalRows,
       version: currentVersion,
       window: [],
@@ -148,16 +162,22 @@ const updateBaseEvaluationFromRetainedChanges = (
     if (windowEntries === evaluation.window && totalRows === evaluation.totalRows) {
       return {
         ...evaluation,
+        retainedWindowFilled: retainedWindowFilled(windowEntries, totalRows, queryWindow),
         version: currentVersion,
       };
     }
     return {
       ...evaluation,
       keys: windowEntries.map((entry) => entry.key),
+      retainedWindowFilled: retainedWindowFilled(windowEntries, totalRows, queryWindow),
       totalRows,
       version: currentVersion,
       window: windowEntries,
     };
+  }
+
+  if (!evaluation.retainedWindowFilled) {
+    return undefined;
   }
 
   const window = [...windowEntries, ...insertedWindowEntries.values()].sort(compiled.plan.compare);
@@ -168,6 +188,7 @@ const updateBaseEvaluationFromRetainedChanges = (
   const limitedWindow = retainedLimit === undefined ? window : window.slice(0, retainedLimit);
   return {
     keys: limitedWindow.map((entry) => entry.key),
+    retainedWindowFilled: retainedWindowFilled(limitedWindow, totalRows, queryWindow),
     totalRows,
     version: currentVersion,
     window: limitedWindow,

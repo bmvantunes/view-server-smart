@@ -1,6 +1,7 @@
 import {
   createColumnLiveViewEngine,
   type DecodableTopicDefinitions,
+  type GroupedIncrementalAdmissionLimits,
 } from "@view-server/column-live-view-engine";
 import type { ViewServerRuntimeLiveClient } from "@view-server/client";
 import type {
@@ -20,6 +21,7 @@ import { makeRuntimeCoreLiveClient } from "./live-client";
 import { makeRuntimeCoreClient } from "./runtime-client";
 
 export type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";
+export type { GroupedIncrementalAdmissionLimits } from "@view-server/column-live-view-engine";
 export type { RuntimeCoreTransportHealth } from "./health";
 
 export type ViewServerRuntimeCoreInstance<Topics extends DecodableTopicDefinitions> = {
@@ -29,12 +31,14 @@ export type ViewServerRuntimeCoreInstance<Topics extends DecodableTopicDefinitio
 };
 
 export type ViewServerRuntimeCoreOptions = {
+  readonly groupedIncrementalAdmissionLimits?: Partial<GroupedIncrementalAdmissionLimits>;
   readonly subscriptionQueueCapacity?: number;
   readonly transportHealth?: RuntimeCoreTransportHealth<DecodableTopicDefinitions>;
   readonly healthRefreshCadence?: Duration.Input;
 };
 
 export type ViewServerRuntimeCoreOptionsFor<Topics extends DecodableTopicDefinitions> = {
+  readonly groupedIncrementalAdmissionLimits?: Partial<GroupedIncrementalAdmissionLimits>;
   readonly subscriptionQueueCapacity?: number;
   readonly transportHealth?: RuntimeCoreTransportHealth<Topics>;
   readonly healthRefreshCadence?: Duration.Input;
@@ -49,13 +53,15 @@ export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefi
     input: ViewServerRuntimeCoreOptionsFor<Topics>,
   ) {
     const transportHealth = input.transportHealth ?? defaultRuntimeCoreTransportHealth;
-    const engineConfig =
-      input.subscriptionQueueCapacity === undefined
-        ? { topics: config.topics }
-        : {
-            topics: config.topics,
-            subscriptionQueueCapacity: input.subscriptionQueueCapacity,
-          };
+    const engineConfig = {
+      ...(input.groupedIncrementalAdmissionLimits === undefined
+        ? {}
+        : { groupedIncrementalAdmissionLimits: input.groupedIncrementalAdmissionLimits }),
+      ...(input.subscriptionQueueCapacity === undefined
+        ? {}
+        : { subscriptionQueueCapacity: input.subscriptionQueueCapacity }),
+      topics: config.topics,
+    };
     const engine = yield* createColumnLiveViewEngine<Topics>(engineConfig);
     const engineHealth = yield* engine.health();
     const health: AtomRef.AtomRef<ViewServerHealth<Topics>> = AtomRef.make(

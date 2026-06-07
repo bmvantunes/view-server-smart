@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import { readFileSync } from "node:fs";
 import {
+  activeFallbackGroupedViewCountFromEngineHealth,
+  activeIncrementalGroupedViewCountFromEngineHealth,
   activeViewCountFromEngineHealth,
   backpressureCountFromEngineHealth,
   benchmarkOutputJsonPath,
@@ -66,6 +68,8 @@ describe("benchmark artifact helpers", () => {
       queuedEvents: 3,
       topics: {
         orders: {
+          activeFallbackGroupedViews: 0,
+          activeIncrementalGroupedViews: 0,
           activeViews: 7,
         },
       },
@@ -75,6 +79,23 @@ describe("benchmark artifact helpers", () => {
     expect(backpressureCountFromEngineHealth(health)).toBe(5);
     expect(queuedEventCountFromEngineHealth(health)).toBe(3);
     expect(activeViewCountFromEngineHealth(health)).toBe(7);
+    expect(activeFallbackGroupedViewCountFromEngineHealth(health)).toBe(0);
+    expect(activeIncrementalGroupedViewCountFromEngineHealth(health)).toBe(0);
+
+    const minimalTopicHealth = {
+      activeSubscriptions: 0,
+      backpressureEvents: 0,
+      maxQueueDepth: 0,
+      queuedEvents: 0,
+      topics: {
+        orders: {
+          activeViews: 1,
+        },
+      },
+    };
+    expect(isBenchmarkEngineHealth(minimalTopicHealth)).toBe(true);
+    expect(activeFallbackGroupedViewCountFromEngineHealth(minimalTopicHealth)).toBe(0);
+    expect(activeIncrementalGroupedViewCountFromEngineHealth(minimalTopicHealth)).toBe(0);
 
     const healthWithoutTopics = {
       activeSubscriptions: 2,
@@ -84,6 +105,8 @@ describe("benchmark artifact helpers", () => {
     };
     expect(isBenchmarkEngineHealth(healthWithoutTopics)).toBe(true);
     expect(activeViewCountFromEngineHealth(healthWithoutTopics)).toBe(0);
+    expect(activeFallbackGroupedViewCountFromEngineHealth(healthWithoutTopics)).toBe(0);
+    expect(activeIncrementalGroupedViewCountFromEngineHealth(healthWithoutTopics)).toBe(0);
     expect(
       isBenchmarkEngineHealth({
         activeSubscriptions: 2,
@@ -121,9 +144,98 @@ describe("benchmark artifact helpers", () => {
         queuedEvents: 3,
         topics: {
           orders: {
+            activeFallbackGroupedViews: 0,
+            activeIncrementalGroupedViews: 0,
             activeViews: "7",
           },
         },
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+        topics: {
+          orders: null,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+        topics: {
+          orders: {
+            activeFallbackGroupedViews: 0,
+            activeIncrementalGroupedViews: 0,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+        topics: {
+          orders: {
+            activeFallbackGroupedViews: "0",
+            activeIncrementalGroupedViews: 0,
+            activeViews: 7,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+        topics: {
+          orders: {
+            activeFallbackGroupedViews: 0,
+            activeIncrementalGroupedViews: Number.NaN,
+            activeViews: 7,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: Number.NaN,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: Number.POSITIVE_INFINITY,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: Number.NEGATIVE_INFINITY,
+        queuedEvents: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: Number.NaN,
       }),
     ).toBe(false);
     expect(cleanupLeakCountFromEngineHealth({})).toBe(0);
@@ -144,6 +256,26 @@ describe("benchmark artifact helpers", () => {
       benchmarkName: "benchmark artifact test",
       benchmarkScope: "engine-raw-snapshot",
       cleanupLeakCount: 0,
+      groupedWriteAdmission: {
+        activeFallbackGroupedViewsAfterSetup: 0,
+        activeFallbackGroupedViewsBeforeCleanup: 0,
+        activeIncrementalGroupedViewsAfterSetup: 2,
+        activeIncrementalGroupedViewsBeforeCleanup: 2,
+        activeViewsAfterSetup: 2,
+        activeViewsBeforeCleanup: 2,
+        configuredMode: "incremental",
+        expectedAdmission: "incremental",
+        incrementalAdmissionLimits: {
+          maxGroups: 10,
+          maxMembers: 20,
+          maxMembersPerGroup: 30,
+          maxRetainedValueEntries: 40,
+        },
+        priceThreshold: 900,
+        seedMutationCount: 100,
+        timedMutationCount: 10,
+        writeBatchSize: 32,
+      },
       health: {
         status: "ready",
       },
@@ -157,6 +289,9 @@ describe("benchmark artifact helpers", () => {
       mutationCount: 10,
       notes: ["test artifact"],
       outputJsonPath,
+      preCleanupHealth: {
+        status: "ready",
+      },
       queuedEventCount: 0,
       rowCount: 100,
       subscriberCount: 1,
@@ -172,6 +307,26 @@ describe("benchmark artifact helpers", () => {
           benchmarkName: "benchmark artifact test",
           benchmarkScope: "engine-raw-snapshot",
           cleanupLeakCount: 0,
+          groupedWriteAdmission: {
+            activeFallbackGroupedViewsAfterSetup: 0,
+            activeFallbackGroupedViewsBeforeCleanup: 0,
+            activeIncrementalGroupedViewsAfterSetup: 2,
+            activeIncrementalGroupedViewsBeforeCleanup: 2,
+            activeViewsAfterSetup: 2,
+            activeViewsBeforeCleanup: 2,
+            configuredMode: "incremental",
+            expectedAdmission: "incremental",
+            incrementalAdmissionLimits: {
+              maxGroups: 10,
+              maxMembers: 20,
+              maxMembersPerGroup: 30,
+              maxRetainedValueEntries: 40,
+            },
+            priceThreshold: 900,
+            seedMutationCount: 100,
+            timedMutationCount: 10,
+            writeBatchSize: 32,
+          },
           health: {
             status: "ready",
           },
@@ -190,6 +345,9 @@ describe("benchmark artifact helpers", () => {
           mutationCount: 10,
           notes: ["test artifact"],
           outputJsonPath,
+          preCleanupHealth: {
+            status: "ready",
+          },
           queuedEventCount: 0,
           rowCount: 100,
           subscriberCount: 1,

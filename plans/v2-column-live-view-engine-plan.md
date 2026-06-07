@@ -1514,6 +1514,19 @@ write batch to verify wiring quickly. Larger write batches are supported through
 `VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE`, but should be run intentionally because grouped
 patch/delete/group-move costs can become very expensive at high row counts.
 
+Grouped admission tuning uses a dedicated serial baseline profile:
+
+```bash
+pnpm run bench:baseline:grouped-admission
+```
+
+That profile runs default incremental grouped writes with larger write batches, a forced-fallback
+incremental admission run, and a broad fallback run. Forced fallback and broad fallback use
+`VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX` so they do not overwrite the default incremental artifact
+for the same row count and write batch. The summary sidecar includes `groupedWriteAdmission` and
+`preCleanupHealth`, so every run records whether grouped subscriptions were admitted as incremental
+views or demoted to fallback before cleanup.
+
 Grouped write benchmark cases:
 
 - `grouped publishMany append batch`
@@ -1530,6 +1543,16 @@ Grouped write knobs:
 - `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding.
 - `VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE`: number of rows mutated by batch-style samples and by
   the per-row patch/delete loops inside each sample. Defaults to `1` for release practicality.
+- `VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX`: optional suffix added to the grouped-write artifact
+  filename. Use it when running the same mode/row-count/write-batch with different admission limits.
+- `VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_GROUPS`: max groups retained by an admitted
+  incremental grouped view.
+- `VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_MEMBERS`: max retained matching rows for an
+  admitted incremental grouped view.
+- `VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_MEMBERS_PER_GROUP`: max retained rows in one
+  group for an admitted incremental grouped view.
+- `VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_RETAINED_VALUE_ENTRIES`: max retained reverse
+  entries used by `countDistinct`, `min`, and `max` aggregate maintenance.
 - `VIEW_SERVER_ENGINE_BENCH_ITERATIONS`: benchmark iterations per case.
 - `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: must remain `0`; grouped write mutates shared engine state.
 - `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: must remain `0`; grouped write mutates shared engine
@@ -1552,6 +1575,9 @@ Interpretation notes:
 - Incremental grouped admission also budgets retained value state for `countDistinct`, `min`, and
   `max`. Queries that would retain too many alias/member reverse entries demote to fallback rather
   than keeping high-cardinality reversible state alive between writes.
+- Check `groupedWriteAdmission.activeIncrementalGroupedViewsBeforeCleanup` and
+  `groupedWriteAdmission.activeFallbackGroupedViewsBeforeCleanup` before interpreting benchmark
+  numbers. A run configured as incremental but admitted as fallback is a fallback result.
 - The benchmark does not prove a future grouped materialized index is worthwhile by itself; compare
   it with grouped read benchmarks before adopting storage that adds write maintenance.
 - Keep grouped write and grouped aggregate benchmarks together when evaluating grouped engine

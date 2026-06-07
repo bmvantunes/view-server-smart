@@ -20,6 +20,11 @@ const viewServer = defineViewServerConfig({
 });
 
 const inMemory = createInMemoryViewServer(viewServer);
+const inMemoryWithGroupedAdmissionLimits = createInMemoryViewServer(viewServer, {
+  groupedIncrementalAdmissionLimits: {
+    maxGroups: 1,
+  },
+});
 const invalidTransportHealthOption = createInMemoryViewServer(viewServer, {
   // @ts-expect-error in-memory does not expose Runtime Core transport adapter hooks.
   transportHealth: () => ({
@@ -35,6 +40,18 @@ const invalidTransportHealthOption = createInMemoryViewServer(viewServer, {
     reconnects: 0,
     lastError: null,
   }),
+});
+const invalidGroupedAdmissionLimitKey = createInMemoryViewServer(viewServer, {
+  groupedIncrementalAdmissionLimits: {
+    // @ts-expect-error grouped admission limit keys are exact.
+    maxGroupz: 1,
+  },
+});
+const invalidGroupedAdmissionLimitValue = createInMemoryViewServer(viewServer, {
+  groupedIncrementalAdmissionLimits: {
+    // @ts-expect-error grouped admission limits must be numeric.
+    maxGroups: "1",
+  },
 });
 
 describe("in-memory type contracts", () => {
@@ -59,7 +76,10 @@ describe("in-memory type contracts", () => {
       }>
     >();
     expectTypeOf(inMemory.liveClient).not.toHaveProperty("subscribeRuntime");
+    expectTypeOf(inMemoryWithGroupedAdmissionLimits.client).toEqualTypeOf<typeof inMemory.client>();
     expectTypeOf(invalidPatch).not.toBeAny();
     expectTypeOf(invalidTransportHealthOption).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitKey).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitValue).not.toBeAny();
   });
 });

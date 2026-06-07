@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import { makeLiveSubscription } from "./live-subscription";
 import type { CompiledGroupedQuery } from "./grouped-query-compiler";
+import type { GroupedIncrementalAdmissionLimits } from "./grouped-incremental-admission";
 import type { CompiledRawQuery } from "./raw-query-compiler";
 import { liveQueryResult, type QueryEvaluation } from "./query-result";
 import {
@@ -70,6 +71,7 @@ export const subscribeExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExe
   function* <ResultRow extends RowObject>(
     query: unknown,
     input: {
+      readonly groupedIncrementalAdmissionLimits: GroupedIncrementalAdmissionLimits;
       readonly permit: TopicStoreSubscriptionPermit;
       readonly queryId: string;
       readonly queueCapacity: number;
@@ -91,6 +93,7 @@ export const subscribeExecutableQuery = Effect.fn("ColumnLiveViewEngine.queryExe
     const execution = yield* acquireTopicStoreMaterializedQueryExecution(
       store,
       executable.compiled,
+      input.groupedIncrementalAdmissionLimits,
     );
     return yield* makeLiveSubscription({
       permit: input.permit,

@@ -31,6 +31,8 @@ const topicHealthFromRow = (
   mutationsPerSecond: row.mutationsPerSecond,
   rowsPerSecond: row.rowsPerSecond,
   pendingMutationBatches: row.pendingMutationBatches,
+  activeFallbackGroupedViews: row.activeFallbackGroupedViews,
+  activeIncrementalGroupedViews: row.activeIncrementalGroupedViews,
   activeViews: row.activeViews,
   activeSubscriptions: row.activeSubscriptions,
   queuedEvents: row.queuedEvents,

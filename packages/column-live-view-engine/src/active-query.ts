@@ -11,6 +11,7 @@ import {
 import type { MaterializedQueryExecutionSlot } from "./active-materialized-query";
 import {
   activeMaterializedQueryExecutionCount,
+  activeMaterializedQueryExecutionModeCounts,
   clearMaterializedQueryExecutions,
 } from "./active-materialized-query";
 export {
@@ -60,6 +61,12 @@ export type ActiveQueryRegistry = {
   readonly materialized: Map<string, MaterializedQueryExecutionSlot>;
 };
 
+export type ActiveQueryExecutionCounts = {
+  readonly activeFallbackGroupedViews: number;
+  readonly activeIncrementalGroupedViews: number;
+  readonly activeViews: number;
+};
+
 export const createActiveQueryRegistry = (): ActiveQueryRegistry => ({
   raw: new Map(),
   materialized: new Map(),
@@ -83,5 +90,19 @@ export const activeStoreRawQueryExecutionCount = Effect.fn(
     const rawCount = yield* activeRawQueryExecutionCount(store);
     const materializedCount = yield* activeMaterializedQueryExecutionCount(store);
     return rawCount + materializedCount;
+  }),
+);
+
+export const activeStoreQueryExecutionCounts = Effect.fn(
+  "ColumnLiveViewEngine.activeQuery.countStoreModes",
+)((store: ActiveQueryStoreState) =>
+  Effect.gen(function* () {
+    const rawCount = yield* activeRawQueryExecutionCount(store);
+    const materializedCounts = yield* activeMaterializedQueryExecutionModeCounts(store);
+    return {
+      activeFallbackGroupedViews: materializedCounts.activeFallback,
+      activeIncrementalGroupedViews: materializedCounts.activeIncremental,
+      activeViews: rawCount + materializedCounts.activeTotal,
+    } satisfies ActiveQueryExecutionCounts;
   }),
 );

@@ -26,6 +26,10 @@ import {
   type ColumnLiveViewEngineError,
 } from "./engine-errors";
 import { collectColumnLiveViewEngineHealth } from "./engine-health";
+import {
+  groupedIncrementalAdmissionLimitsFromConfig,
+  type GroupedIncrementalAdmissionLimits,
+} from "./grouped-incremental-admission";
 import type { LiveSubscription } from "./live-subscription";
 import { snapshotExecutableQuery, subscribeExecutableQuery } from "./query-execution";
 import {
@@ -51,6 +55,7 @@ class InMemoryColumnLiveViewEngine<
   Topics extends DecodableTopicDefinitions,
 > implements ColumnLiveViewEngine<Topics> {
   private readonly stores = new Map<Extract<keyof Topics, string>, TopicStore>();
+  private readonly groupedIncrementalAdmissionLimits: GroupedIncrementalAdmissionLimits;
   private readonly subscriptionQueueCapacity: number;
   private engineVersion = 0;
   private nextQueryId = 0;
@@ -62,6 +67,9 @@ class InMemoryColumnLiveViewEngine<
       Number.isSafeInteger(configuredCapacity) && configuredCapacity > 0
         ? configuredCapacity
         : defaultSubscriptionQueueCapacity;
+    this.groupedIncrementalAdmissionLimits = groupedIncrementalAdmissionLimitsFromConfig(
+      config.groupedIncrementalAdmissionLimits,
+    );
     for (const topic in config.topics) {
       if (!Object.hasOwn(config.topics, topic)) {
         continue;
@@ -241,6 +249,7 @@ class InMemoryColumnLiveViewEngine<
               const queryId = `query-${this.nextQueryId}`;
               this.nextQueryId += 1;
               const acquiredSubscription = yield* subscribeExecutableQuery<ResultRow>(query, {
+                groupedIncrementalAdmissionLimits: this.groupedIncrementalAdmissionLimits,
                 permit,
                 queryId,
                 queueCapacity: this.subscriptionQueueCapacity,

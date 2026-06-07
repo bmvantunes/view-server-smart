@@ -25,6 +25,11 @@ const viewServer = defineViewServerConfig({
 });
 
 const runtimeEffect = makeViewServerRuntime(viewServer);
+const runtimeWithGroupedAdmissionLimits = makeViewServerRuntime(viewServer, {
+  groupedIncrementalAdmissionLimits: {
+    maxGroups: 1,
+  },
+});
 const runEffect = runViewServerRuntime(viewServer);
 declare const runtime: Effect.Success<typeof runtimeEffect>;
 
@@ -42,6 +47,9 @@ describe("runtime type contracts", () => {
     >();
     expectTypeOf<Effect.Success<typeof runEffect>>().toEqualTypeOf<never>();
     expectTypeOf<Effect.Error<typeof runEffect>>().toEqualTypeOf<HttpServerError.ServeError>();
+    expectTypeOf<Effect.Success<typeof runtimeWithGroupedAdmissionLimits>>().toMatchTypeOf<
+      ViewServerRuntime<typeof viewServer.topics>
+    >();
 
     const publish = runtime.client.publish("orders", {
       id: "order-1",
@@ -104,6 +112,18 @@ describe("runtime type contracts", () => {
       // @ts-expect-error runtime health path must be a concrete slash-prefixed client URL path.
       healthPath: "*",
     });
+    const invalidGroupedAdmissionLimitKey = makeViewServerRuntime(viewServer, {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limit keys are exact.
+        maxGroupz: 1,
+      },
+    });
+    const invalidGroupedAdmissionLimitValue = makeViewServerRuntime(viewServer, {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limits must be numeric.
+        maxGroups: "1",
+      },
+    });
     expectTypeOf(invalidPublish).not.toBeAny();
     expectTypeOf(invalidSubscribe).not.toBeAny();
     expectTypeOf(invalidTopicPublish).not.toBeAny();
@@ -113,6 +133,8 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidHealthPathOptions).not.toBeAny();
     expectTypeOf(invalidWildcardRpcPathOptions).not.toBeAny();
     expectTypeOf(invalidWildcardHealthPathOptions).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitKey).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitValue).not.toBeAny();
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("port");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("path");
   });

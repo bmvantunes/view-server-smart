@@ -12,6 +12,7 @@ import {
   type CompiledGroupedQuery,
 } from "./grouped-query-compiler";
 import { makeIncrementalGroupedQueryExecution } from "./grouped-incremental-execution";
+import type { GroupedIncrementalAdmissionLimits } from "./grouped-incremental-admission";
 import { prepareRawQuery, type CompiledRawQuery } from "./raw-query-compiler";
 import type { QueryEvaluation } from "./query-result";
 import {
@@ -71,13 +72,19 @@ export const acquireTopicStoreMaterializedQueryExecution = Effect.fn(
 )(function* <ResultRow extends RowObject>(
   store: TopicStore,
   compiled: CompiledGroupedQuery<object, ResultRow>,
+  groupedIncrementalAdmissionLimits: GroupedIncrementalAdmissionLimits,
 ) {
   const readModel = topicStoreReadModel(store);
   return yield* acquireMaterializedQueryExecution(
     readModel,
     compiled.cacheKey,
     (releaseRetainedChanges) =>
-      makeIncrementalGroupedQueryExecution(readModel, compiled, releaseRetainedChanges),
+      makeIncrementalGroupedQueryExecution(
+        readModel,
+        compiled,
+        releaseRetainedChanges,
+        groupedIncrementalAdmissionLimits,
+      ),
   );
 });
 

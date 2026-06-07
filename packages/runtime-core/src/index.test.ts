@@ -53,6 +53,8 @@ const engineHealth = (
       mutationsPerSecond: 0,
       rowsPerSecond: 0,
       pendingMutationBatches: 0,
+      activeFallbackGroupedViews: 0,
+      activeIncrementalGroupedViews: 0,
       activeViews: 0,
       activeSubscriptions: 0,
       queuedEvents: 0,
@@ -151,6 +153,32 @@ describe("@view-server/runtime-core", () => {
       const health = yield* runtimeCore.client.health();
 
       expect(health.engine.topics.orders.rowCount).toBe(1);
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("forwards grouped admission limits to the engine", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {
+        groupedIncrementalAdmissionLimits: {
+          maxGroups: 1,
+        },
+      });
+      yield* runtimeCore.client.publishMany("orders", [order("a", 10), order("b", 20)]);
+      const subscription = yield* runtimeCore.liveClient.subscribe("orders", {
+        groupBy: ["price"],
+        aggregates: {
+          rowCount: { aggFunc: "count" },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      const health = yield* runtimeCore.client.health();
+      expect(health.engine.topics.orders.activeFallbackGroupedViews).toBe(1);
+      expect(health.engine.topics.orders.activeIncrementalGroupedViews).toBe(0);
+
+      yield* subscription.close();
       yield* runtimeCore.close;
     }),
   );
@@ -298,6 +326,8 @@ describe("@view-server/runtime-core", () => {
               mutationsPerSecond: 0,
               rowsPerSecond: 0,
               pendingMutationBatches: 0,
+              activeFallbackGroupedViews: 0,
+              activeIncrementalGroupedViews: 0,
               activeViews: 0,
               activeSubscriptions: 0,
               queuedEvents: 0,
@@ -330,6 +360,8 @@ describe("@view-server/runtime-core", () => {
               mutationsPerSecond: 1,
               rowsPerSecond: 1,
               pendingMutationBatches: 0,
+              activeFallbackGroupedViews: 0,
+              activeIncrementalGroupedViews: 0,
               activeViews: 0,
               activeSubscriptions: 0,
               queuedEvents: 0,

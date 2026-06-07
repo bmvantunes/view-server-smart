@@ -14,6 +14,10 @@ import {
   groupedEvaluationFromGroups,
 } from "./grouped-window-evaluation";
 import type { CompiledGroupedQuery } from "./grouped-query-compiler";
+import {
+  defaultGroupedIncrementalAdmissionLimits,
+  type GroupedIncrementalAdmissionLimits,
+} from "./grouped-incremental-admission";
 import type { QueryEvaluation } from "./query-result";
 import type { TopicRowChangeBatch, TopicRowScan } from "./row-scan";
 import { fieldValue, valuesEqual } from "./row-values";
@@ -29,10 +33,6 @@ export type IncrementalGroupedQueryExecution<ResultRow extends RowObject> = {
   readonly incremental: boolean;
   readonly latest: () => QueryEvaluation<ResultRow>;
 };
-
-const maxIncrementalGroupedMembers = 65_536;
-const maxIncrementalGroupedMembersPerGroup = 4_096;
-const maxIncrementalGroupedGroups = 8_192;
 
 const retainedValueAggregateCount = <Row extends RowObject>(
   plan: GroupedQueryPlan<Row>,
@@ -108,6 +108,7 @@ const buildCountOnlyIncrementalGroupedQueryState = <Row extends RowObject>(
   store: TopicRowScan<Row>,
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
+  limits: GroupedIncrementalAdmissionLimits,
 ): IncrementalGroupedQueryBuildState => {
   const groups = new Map<string, CountOnlyIncrementalGroupState>();
   let admitted = true;
@@ -125,7 +126,7 @@ const buildCountOnlyIncrementalGroupedQueryState = <Row extends RowObject>(
       groups.set(groupedKey, group);
     }
     group.count += 1;
-    if (groups.size > maxIncrementalGroupedGroups) {
+    if (groups.size > limits.maxGroups) {
       groups.clear();
       admitted = false;
       return false;
@@ -153,6 +154,7 @@ const buildMaterializedIncrementalGroupedQueryState = <Row extends RowObject>(
   store: TopicRowScan<Row>,
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
+  limits: GroupedIncrementalAdmissionLimits,
 ): IncrementalGroupedQueryBuildState => {
   const groups = new Map<string, MaterializedIncrementalGroupState>();
   const retainedAggregateCount = retainedValueAggregateCount(plan);
@@ -174,11 +176,11 @@ const buildMaterializedIncrementalGroupedQueryState = <Row extends RowObject>(
     group.members.set(key, row);
     memberCount += 1;
     if (
-      memberCount > maxIncrementalGroupedMembers ||
+      memberCount > limits.maxMembers ||
       retainedValueEntryEstimate(memberCount, retainedAggregateCount) >
-        maxIncrementalGroupedMembers ||
-      group.members.size > maxIncrementalGroupedMembersPerGroup ||
-      groups.size > maxIncrementalGroupedGroups
+        limits.maxRetainedValueEntries ||
+      group.members.size > limits.maxMembersPerGroup ||
+      groups.size > limits.maxGroups
     ) {
       groups.clear();
       admitted = false;
@@ -212,10 +214,11 @@ const buildIncrementalGroupedQueryState = <Row extends RowObject>(
   store: TopicRowScan<Row>,
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
+  limits: GroupedIncrementalAdmissionLimits,
 ): IncrementalGroupedQueryBuildState =>
   plan.zeroLimit
-    ? buildCountOnlyIncrementalGroupedQueryState(store, plan, matches)
-    : buildMaterializedIncrementalGroupedQueryState(store, plan, matches);
+    ? buildCountOnlyIncrementalGroupedQueryState(store, plan, matches, limits)
+    : buildMaterializedIncrementalGroupedQueryState(store, plan, matches, limits);
 
 const removeMaterializedIncrementalGroupedMember = <Row extends RowObject>(
   dirtyAggregateRecomputes: DirtyAggregateRecomputes,
@@ -411,6 +414,7 @@ const applyMaterializedIncrementalGroupedQueryBatch = <Row extends RowObject>(
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
   batch: TopicRowChangeBatch<Row>,
+  limits: GroupedIncrementalAdmissionLimits,
 ): boolean => {
   const retainedAggregateCount = retainedValueAggregateCount(plan);
   const dirtyAggregateRecomputes: DirtyAggregateRecomputes = new Set();
@@ -463,18 +467,18 @@ const applyMaterializedIncrementalGroupedQueryBatch = <Row extends RowObject>(
       if (upserted === undefined) {
         continue;
       }
-      if (upserted.groupSize > maxIncrementalGroupedMembersPerGroup) {
+      if (upserted.groupSize > limits.maxMembersPerGroup) {
         return false;
       }
-      if (state.groups.size > maxIncrementalGroupedGroups) {
+      if (state.groups.size > limits.maxGroups) {
         return false;
       }
       if (upserted.inserted) {
         state.memberCount += 1;
         if (
-          state.memberCount > maxIncrementalGroupedMembers ||
+          state.memberCount > limits.maxMembers ||
           retainedValueEntryEstimate(state.memberCount, retainedAggregateCount) >
-            maxIncrementalGroupedMembers
+            limits.maxRetainedValueEntries
         ) {
           return false;
         }
@@ -490,6 +494,7 @@ const applyCountOnlyIncrementalGroupedQueryBatch = <Row extends RowObject>(
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
   batch: TopicRowChangeBatch<Row>,
+  limits: GroupedIncrementalAdmissionLimits,
 ): boolean => {
   for (const change of batch.changes) {
     if (change.previous !== undefined) {
@@ -505,7 +510,7 @@ const applyCountOnlyIncrementalGroupedQueryBatch = <Row extends RowObject>(
       if (!inserted) {
         continue;
       }
-      if (state.groups.size > maxIncrementalGroupedGroups) {
+      if (state.groups.size > limits.maxGroups) {
         return false;
       }
     }
@@ -518,9 +523,10 @@ const applyMaterializedIncrementalGroupedQueryBatches = <Row extends RowObject>(
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
   batches: ReadonlyArray<TopicRowChangeBatch<Row>>,
+  limits: GroupedIncrementalAdmissionLimits,
 ): boolean => {
   for (const batch of batches) {
-    if (!applyMaterializedIncrementalGroupedQueryBatch(state, plan, matches, batch)) {
+    if (!applyMaterializedIncrementalGroupedQueryBatch(state, plan, matches, batch, limits)) {
       state.groups.clear();
       state.memberCount = 0;
       return false;
@@ -536,9 +542,10 @@ const applyCountOnlyIncrementalGroupedQueryBatches = <Row extends RowObject>(
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
   batches: ReadonlyArray<TopicRowChangeBatch<Row>>,
+  limits: GroupedIncrementalAdmissionLimits,
 ): boolean => {
   for (const batch of batches) {
-    if (!applyCountOnlyIncrementalGroupedQueryBatch(state, plan, matches, batch)) {
+    if (!applyCountOnlyIncrementalGroupedQueryBatch(state, plan, matches, batch, limits)) {
       state.groups.clear();
       return false;
     }
@@ -553,11 +560,12 @@ const applyIncrementalGroupedQueryBatches = <Row extends RowObject>(
   plan: GroupedQueryPlan<Row>,
   matches: (row: Row) => boolean,
   batches: ReadonlyArray<TopicRowChangeBatch<Row>>,
+  limits: GroupedIncrementalAdmissionLimits,
 ): boolean => {
   if (state.mode === "countOnly") {
-    return applyCountOnlyIncrementalGroupedQueryBatches(state, plan, matches, batches);
+    return applyCountOnlyIncrementalGroupedQueryBatches(state, plan, matches, batches, limits);
   }
-  return applyMaterializedIncrementalGroupedQueryBatches(state, plan, matches, batches);
+  return applyMaterializedIncrementalGroupedQueryBatches(state, plan, matches, batches, limits);
 };
 
 const makeFallbackGroupedQueryExecution = <Row extends RowObject, ResultRow extends RowObject>(
@@ -590,8 +598,9 @@ export const makeIncrementalGroupedQueryExecution = <
   store: TopicRowScan<Row>,
   compiled: CompiledGroupedQuery<Row, ResultRow>,
   releaseRetainedChanges: () => void,
+  limits: GroupedIncrementalAdmissionLimits = defaultGroupedIncrementalAdmissionLimits,
 ): IncrementalGroupedQueryExecution<ResultRow> => {
-  let build = buildIncrementalGroupedQueryState(store, compiled.plan, compiled.matches);
+  let build = buildIncrementalGroupedQueryState(store, compiled.plan, compiled.matches, limits);
   if (!build.admitted) {
     return makeFallbackGroupedQueryExecution(store, compiled);
   }
@@ -618,14 +627,22 @@ export const makeIncrementalGroupedQueryExecution = <
       }
       const batches = store.changesSince(state.version);
       if (batches === undefined) {
-        build = buildIncrementalGroupedQueryState(store, compiled.plan, compiled.matches);
+        build = buildIncrementalGroupedQueryState(store, compiled.plan, compiled.matches, limits);
         if (!build.admitted) {
           return activateFallback().latest();
         }
         state = build.state;
         return typedGroupedEvaluation<ResultRow>(state.evaluation);
       }
-      if (!applyIncrementalGroupedQueryBatches(state, compiled.plan, compiled.matches, batches)) {
+      if (
+        !applyIncrementalGroupedQueryBatches(
+          state,
+          compiled.plan,
+          compiled.matches,
+          batches,
+          limits,
+        )
+      ) {
         return activateFallback().latest();
       }
       return typedGroupedEvaluation<ResultRow>(state.evaluation);

@@ -1,4 +1,5 @@
 import type { ViewServerLiveClient } from "@view-server/client";
+import type { GroupedIncrementalAdmissionLimits } from "@view-server/runtime-core";
 import type {
   RowSchema,
   TopicDefinitions,
@@ -24,6 +25,7 @@ export type ViewServerRuntimeOptions = {
   readonly websocketPort?: number;
   readonly rpcPath?: RuntimeHttpPath;
   readonly healthPath?: RuntimeHttpPath;
+  readonly groupedIncrementalAdmissionLimits?: Partial<GroupedIncrementalAdmissionLimits>;
   readonly subscriptionQueueCapacity?: number;
 };
 

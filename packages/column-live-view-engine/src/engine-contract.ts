@@ -21,6 +21,7 @@ import type {
 import type { Effect, Schema, Stream } from "effect";
 import type { ColumnLiveViewEngineHealth } from "./engine-health";
 import type { ColumnLiveViewEngineError, EngineClosedError } from "./engine-errors";
+import type { GroupedIncrementalAdmissionLimits } from "./grouped-incremental-admission";
 
 export type DecodableTopicDefinitions = Record<
   string,
@@ -44,6 +45,7 @@ type ValidateEngineTopics<Topics extends DecodableTopicDefinitions> = {
 
 export type ColumnLiveViewEngineConfig<Topics extends DecodableTopicDefinitions> = {
   readonly topics: Topics & ValidateEngineTopics<Topics>;
+  readonly groupedIncrementalAdmissionLimits?: Partial<GroupedIncrementalAdmissionLimits>;
   readonly subscriptionQueueCapacity?: number;
 };
 

@@ -182,6 +182,8 @@ describe("@view-server/runtime", () => {
             mutationsPerSecond: 2,
             rowsPerSecond: 2,
             pendingMutationBatches: 0,
+            activeFallbackGroupedViews: 0,
+            activeIncrementalGroupedViews: 1,
             activeViews: 1,
             activeSubscriptions: 4,
             queuedEvents: 5,
@@ -250,6 +252,9 @@ describe("@view-server/runtime", () => {
       };
 
       const runtime = yield* makeViewServerRuntimeWithDependencies(dependencies, viewServer, {
+        groupedIncrementalAdmissionLimits: {
+          maxGroups: 1,
+        },
         host: "0.0.0.0",
         websocketPort: 1234,
         rpcPath: "/custom-rpc",
@@ -258,6 +263,9 @@ describe("@view-server/runtime", () => {
       });
 
       expect(runtimeCoreOptions?.subscriptionQueueCapacity).toBe(7);
+      expect(runtimeCoreOptions?.groupedIncrementalAdmissionLimits).toStrictEqual({
+        maxGroups: 1,
+      });
       expect(runtimeCoreOptions?.transportHealth).toBeTypeOf("function");
       expect(serverInput?.transport?.clientOpened).toBeDefined();
       expect(serverInput?.transport?.clientClosed).toBeDefined();

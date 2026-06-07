@@ -10,10 +10,14 @@ export type ResolvedViewServerRuntimeOptions = {
 export const resolveViewServerRuntimeOptions = (
   options: ViewServerRuntimeOptions,
 ): ResolvedViewServerRuntimeOptions => {
-  const runtimeCoreOptions =
-    options.subscriptionQueueCapacity === undefined
+  const runtimeCoreOptions = {
+    ...(options.groupedIncrementalAdmissionLimits === undefined
       ? {}
-      : { subscriptionQueueCapacity: options.subscriptionQueueCapacity };
+      : { groupedIncrementalAdmissionLimits: options.groupedIncrementalAdmissionLimits }),
+    ...(options.subscriptionQueueCapacity === undefined
+      ? {}
+      : { subscriptionQueueCapacity: options.subscriptionQueueCapacity }),
+  };
   const serverOptions = {
     ...(options.host === undefined ? {} : { host: options.host }),
     ...(options.websocketPort === undefined ? {} : { port: options.websocketPort }),

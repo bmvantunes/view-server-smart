@@ -1,6 +1,6 @@
 import { Clock, Effect } from "effect";
 import type { TopicRuntimeHealth } from "@view-server/config";
-import { activeStoreRawQueryExecutionCount } from "./active-query";
+import { activeStoreQueryExecutionCounts, type ActiveQueryExecutionCounts } from "./active-query";
 import type { createTopicHealthLedger } from "./topic-health-ledger";
 import { TopicStore, topicStoreReadModel, topicStoreState } from "./topic-store-state";
 import type { LiveTopicSubscriber } from "./topic-subscriber";
@@ -16,6 +16,8 @@ export type TopicStoreHealthView = {
   readonly mutationsPerSecond: number;
   readonly rowsPerSecond: number;
   readonly pendingMutationBatches: number;
+  readonly activeFallbackGroupedViews: number;
+  readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
@@ -27,16 +29,19 @@ export type TopicStoreHealthView = {
 };
 
 export type TopicStoreHealthState = {
-  readonly activeViews: number;
+  readonly activeQueries: ActiveQueryExecutionCounts;
   readonly healthLedger: ReturnType<typeof createTopicHealthLedger>;
   readonly subscribers: ReadonlySet<LiveTopicSubscriber>;
   readonly topic: string;
 };
 
-const topicStoreHealthState = (store: TopicStore, activeViews: number): TopicStoreHealthState => {
+const topicStoreHealthState = (
+  store: TopicStore,
+  activeQueries: ActiveQueryExecutionCounts,
+): TopicStoreHealthState => {
   const state = topicStoreState(store);
   return {
-    activeViews,
+    activeQueries,
     healthLedger: state.healthLedger,
     subscribers: state.subscribers,
     topic: store.topic,
@@ -69,7 +74,9 @@ export const collectTopicStoreHealthView = Effect.fn(
     mutationsPerSecond: totals.mutationsPerSecond,
     rowsPerSecond,
     pendingMutationBatches: totals.pendingMutationBatches,
-    activeViews: state.activeViews,
+    activeFallbackGroupedViews: state.activeQueries.activeFallbackGroupedViews,
+    activeIncrementalGroupedViews: state.activeQueries.activeIncrementalGroupedViews,
+    activeViews: state.activeQueries.activeViews,
     activeSubscriptions,
     queuedEvents,
     maxQueueDepth: totals.maxQueueDepth,
@@ -83,7 +90,7 @@ export const collectTopicStoreHealthView = Effect.fn(
 
 export const collectTopicStoreHealth = Effect.fn("ColumnLiveViewEngine.topicStore.health")(
   function* (store: TopicStore, closed: boolean) {
-    const activeViews = yield* activeStoreRawQueryExecutionCount(topicStoreReadModel(store));
-    return yield* collectTopicStoreHealthView(topicStoreHealthState(store, activeViews), closed);
+    const activeQueries = yield* activeStoreQueryExecutionCounts(topicStoreReadModel(store));
+    return yield* collectTopicStoreHealthView(topicStoreHealthState(store, activeQueries), closed);
   },
 );

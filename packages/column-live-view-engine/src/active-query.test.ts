@@ -1259,6 +1259,126 @@ describe("column-live-view-engine active query execution", () => {
   );
 
   it.effect(
+    "rescans before accepting later inserts after a retained delete exhausts lookahead",
+    () =>
+      Effect.gen(function* () {
+        const store = new TopicStore(
+          "raw-retained-exhausted-lookahead-rejects-later-insert",
+          Schema.Struct({
+            id: Schema.String,
+            status: Schema.String,
+            score: Schema.Number,
+          }),
+          "id",
+          () => {},
+        );
+        yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+
+        const scanLimits: Array<number | undefined> = [];
+        const readModel = topicStoreReadModel(store);
+        const observedReadModel = {
+          ...readModel,
+          scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+            scanLimits.push(plan.limit);
+            return readModel.scanRawWindow(plan);
+          },
+        };
+
+        const compiled = yield* prepareRawQuery(
+          "raw-retained-exhausted-lookahead-rejects-later-insert",
+          topicStoreRawQueryMetadata(store),
+          {
+            select: ["id", "score"],
+            where: {
+              status: "open",
+            },
+            orderBy: [{ field: "score", direction: "desc" }],
+            limit: 2,
+          },
+        );
+
+        const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+        expect(execution.initial("query").keys).toStrictEqual(["d", "c"]);
+        const cursor = execution.createCursor();
+
+        yield* deleteTopicStoreRow(store, "d");
+
+        const deleteTopDelta = yield* execution.next("query", cursor);
+        expect(Option.getOrThrow(deleteTopDelta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-retained-exhausted-lookahead-rejects-later-insert",
+          queryId: "query",
+          fromVersion: 4,
+          toVersion: 5,
+          operations: [
+            {
+              type: "remove",
+              key: "d",
+            },
+            {
+              type: "insert",
+              key: "b",
+              row: {
+                id: "b",
+                score: 2,
+              },
+              index: 1,
+            },
+          ],
+          totalRows: 3,
+        });
+        expect(scanLimits).toStrictEqual([3]);
+
+        yield* publishTopicStoreRow(store, { id: "x", status: "open", score: 0 }, invalidRow);
+
+        const lowInsertDelta = yield* execution.next("query", cursor);
+        expect(Option.getOrThrow(lowInsertDelta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-retained-exhausted-lookahead-rejects-later-insert",
+          queryId: "query",
+          fromVersion: 5,
+          toVersion: 6,
+          operations: [],
+          totalRows: 4,
+        });
+        expect(scanLimits).toStrictEqual([3, 3]);
+
+        yield* deleteTopicStoreRow(store, "c");
+
+        const deleteSecondDelta = yield* execution.next("query", cursor);
+        expect(Option.getOrThrow(deleteSecondDelta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-retained-exhausted-lookahead-rejects-later-insert",
+          queryId: "query",
+          fromVersion: 6,
+          toVersion: 7,
+          operations: [
+            {
+              type: "remove",
+              key: "c",
+            },
+            {
+              type: "insert",
+              key: "a",
+              row: {
+                id: "a",
+                score: 1,
+              },
+              index: 1,
+            },
+          ],
+          totalRows: 3,
+        });
+        expect(scanLimits).toStrictEqual([3, 3]);
+
+        yield* releaseRawQueryExecution(observedReadModel, compiled);
+      }),
+  );
+
+  it.effect(
     "updates total rows for matching deletes outside retained raw windows without rescanning",
     () =>
       Effect.gen(function* () {

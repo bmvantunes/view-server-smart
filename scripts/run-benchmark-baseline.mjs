@@ -43,6 +43,23 @@ const groupedWriteReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE: "1",
 };
 
+const groupedAdmissionReleaseEnv = {
+  VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE: "incremental",
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "3",
+  VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE: "32",
+};
+
+const forcedGroupedFallbackAdmissionEnv = {
+  VIEW_SERVER_ENGINE_BENCH_EXPECTED_GROUPED_ADMISSION: "fallback",
+  VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_GROUPS: "1",
+  VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_MEMBERS: "1",
+  VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_MEMBERS_PER_GROUP: "1",
+  VIEW_SERVER_ENGINE_BENCH_GROUPED_INCREMENTAL_MAX_RETAINED_VALUE_ENTRIES: "1",
+};
+
 const task = (label, vpTask, env) => ({
   args: ["run", "--no-cache", vpTask],
   command: "vp",
@@ -92,11 +109,16 @@ const groupedAggregateTask = (rowCount, env = {}) =>
   });
 
 const groupedWriteTask = (mode, rowCount, env = {}) =>
-  task(`grouped write ${mode} ${rowCount} rows`, "column-live-view-engine#bench:grouped-write", {
-    VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE: mode,
-    VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
-    ...env,
-  });
+  task(
+    `grouped write ${mode} ${rowCount} rows ${env.VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE ?? "1"} mutations${env.VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX === undefined ? "" : ` ${env.VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX}`}`,
+    "column-live-view-engine#bench:grouped-write",
+    {
+      VIEW_SERVER_ENGINE_BENCH_EXPECTED_GROUPED_ADMISSION: mode,
+      VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE: mode,
+      VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
+      ...env,
+    },
+  );
 
 const rawActiveRetainedDeltaTask = (retainedCase, rowCount, env = {}) =>
   task(
@@ -158,6 +180,27 @@ const profiles = new Map([
       reactInMemoryTask("chromium", 20, {
         VIEW_SERVER_REACT_BENCH_BATCH_SIZE: "10",
         ...commonReactSmokeEnv,
+      }),
+    ],
+  ],
+  [
+    "grouped-admission",
+    [
+      groupedWriteTask("incremental", 100_000, groupedAdmissionReleaseEnv),
+      groupedWriteTask("incremental", 1_000_000, groupedAdmissionReleaseEnv),
+      groupedWriteTask("incremental", 1_000_000, {
+        ...groupedAdmissionReleaseEnv,
+        VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE: "128",
+      }),
+      groupedWriteTask("incremental", 100_000, {
+        ...groupedAdmissionReleaseEnv,
+        ...forcedGroupedFallbackAdmissionEnv,
+        VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX: "forced-fallback-admission",
+      }),
+      groupedWriteTask("fallback", 100_000, {
+        ...groupedAdmissionReleaseEnv,
+        VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX: "broad-fallback",
+        VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE: "fallback",
       }),
     ],
   ],
