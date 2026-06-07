@@ -34,6 +34,15 @@ const groupedAggregateReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
 };
 
+const groupedWriteReleaseEnv = {
+  VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE: "incremental",
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "3",
+  VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE: "1",
+};
+
 const task = (label, vpTask, env) => ({
   args: ["run", "--no-cache", vpTask],
   command: "vp",
@@ -78,6 +87,13 @@ const rawLiveFanoutTask = (fanoutCase, rowCount, subscriberCount, env = {}) =>
 
 const groupedAggregateTask = (rowCount, env = {}) =>
   task(`grouped aggregate ${rowCount} rows`, "column-live-view-engine#bench:grouped-aggregate", {
+    VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
+    ...env,
+  });
+
+const groupedWriteTask = (mode, rowCount, env = {}) =>
+  task(`grouped write ${mode} ${rowCount} rows`, "column-live-view-engine#bench:grouped-write", {
+    VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE: mode,
     VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
     ...env,
   });
@@ -129,6 +145,11 @@ const profiles = new Map([
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
         ...commonEngineSmokeEnv,
       }),
+      groupedWriteTask("incremental", 1_000, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
+        VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE: "1",
+        ...retainedDeltaSmokeEnv,
+      }),
       rawActiveRetainedDeltaTask("noop", 101, retainedDeltaSmokeEnv),
       rawActiveRetainedDeltaTask("predicate-enter", 101, retainedDeltaSmokeEnv),
       rawActiveRetainedDeltaTask("visible-delete", 101, retainedDeltaSmokeEnv),
@@ -162,6 +183,9 @@ const profiles = new Map([
       groupedAggregateTask(100_000, groupedAggregateReleaseEnv),
       groupedAggregateTask(1_000_000, groupedAggregateReleaseEnv),
       groupedAggregateTask(5_000_000, groupedAggregateReleaseEnv),
+      groupedWriteTask("incremental", 100_000, groupedWriteReleaseEnv),
+      groupedWriteTask("incremental", 1_000_000, groupedWriteReleaseEnv),
+      groupedWriteTask("incremental", 5_000_000, groupedWriteReleaseEnv),
       rawActiveRetainedDeltaTask("noop", 100_000, retainedDeltaReleaseEnv),
       rawActiveRetainedDeltaTask("predicate-enter", 100_000, retainedDeltaReleaseEnv),
       rawActiveRetainedDeltaTask("visible-delete", 100_000, retainedDeltaReleaseEnv),

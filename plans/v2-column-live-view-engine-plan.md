@@ -1480,6 +1480,73 @@ Interpretation notes:
   must add matching grouped write-path cases before adoption, because faster grouped reads can easily
   regress publish/patch/delete costs.
 
+Current grouped write benchmark harness:
+
+```bash
+vp run --no-cache column-live-view-engine#bench:grouped-write
+```
+
+This harness uses Vitest `bench()` against the public `ColumnLiveViewEngine` subscribe and mutation
+path. It seeds one topic, opens two grouped live subscriptions, drains their initial snapshots, then
+times grouped writes while also draining one delta from each active subscription. This is an
+end-to-end grouped write signal: publish/patch/delete plus grouped delta publication, not only raw
+mutation enqueue cost.
+
+It defaults to `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE=incremental`, which uses selective
+grouped subscriptions sized under the current grouped incremental admission limits. An explicit
+`VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE=fallback` keeps broad grouped subscriptions and measures
+full grouped fallback rebuild pressure; do not interpret fallback mode as materialized grouped write
+maintenance.
+
+It writes `grouped-write-<mode>-<rows>rows-<mutations>mutations.json` plus a matching `.summary.json`
+sidecar under `packages/column-live-view-engine/.artifacts/`. Run each row count in a separate
+process so previous profiles do not contaminate GC/RSS/latency or overwrite artifacts:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE=incremental VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:grouped-write
+VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE=incremental VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 vp run --no-cache column-live-view-engine#bench:grouped-write
+VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE=incremental VIEW_SERVER_ENGINE_BENCH_ROWS=5000000 vp run --no-cache column-live-view-engine#bench:grouped-write
+```
+
+The release baseline runner includes those three grouped write row counts with `iterations=3`,
+`time=0`, and `VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE=1`. The smoke runner also uses a one-row
+write batch to verify wiring quickly. Larger write batches are supported through
+`VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE`, but should be run intentionally because grouped
+patch/delete/group-move costs can become very expensive at high row counts.
+
+Grouped write benchmark cases:
+
+- `grouped publishMany append batch`
+- `grouped patch aggregate values`
+- `grouped patch group moves`
+- `grouped delete existing rows`
+
+Grouped write knobs:
+
+- `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE`: `incremental` or `fallback`; defaults to
+  `incremental`.
+- `VIEW_SERVER_ENGINE_BENCH_ROWS`: row count for this benchmark process.
+- `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding.
+- `VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE`: number of rows mutated by batch-style samples and by
+  the per-row patch/delete loops inside each sample. Defaults to `1` for release practicality.
+- `VIEW_SERVER_ENGINE_BENCH_ITERATIONS`: benchmark iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: must remain `0`; grouped write mutates shared engine state.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: must remain `0`; grouped write mutates shared engine
+  state.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: must remain `0`; grouped write mutates shared engine
+  state.
+
+Interpretation notes:
+
+- Timed bodies include grouped mutation work and live grouped event drain for both active grouped
+  subscriptions.
+- Incremental mode covers admitted grouped insert/update/move/delete write pressure. Fallback mode
+  covers broad grouped rebuild pressure and is intentionally a different signal.
+- The benchmark does not prove a future grouped materialized index is worthwhile by itself; compare
+  it with grouped read benchmarks before adopting storage that adds write maintenance.
+- Keep grouped write and grouped aggregate benchmarks together when evaluating grouped engine
+  changes, because read wins can hide write regressions.
+
 Current raw live fanout benchmark harness:
 
 ```bash

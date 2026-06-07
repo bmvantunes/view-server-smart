@@ -50,7 +50,8 @@ export type BenchmarkArtifactInput = {
     | "engine-raw-live-fanout"
     | "engine-raw-active-retained-delta"
     | "engine-raw-write"
-    | "engine-grouped-aggregate";
+    | "engine-grouped-aggregate"
+    | "engine-grouped-write";
   readonly rowCount: number;
   readonly mutationCount: number;
   readonly subscriberCount: number;
