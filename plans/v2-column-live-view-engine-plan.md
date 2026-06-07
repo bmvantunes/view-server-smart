@@ -1457,15 +1457,19 @@ VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp 
 VIEW_SERVER_ENGINE_BENCH_ROWS=100000 VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS=50 vp run --no-cache column-live-view-engine#bench:raw-live-fanout:ten-window
 ```
 
-Active raw queries retain the row-change journal while the active query is leased. Retained insert
-batches can update the shared base window incrementally by merging the previous base window with
+Active raw queries retain the row-change journal while the active query is leased. Finite non-zero
+active windows retain one extra lookahead row beyond the shared visible base window. Retained insert
+batches can update the shared base window incrementally by merging the previous retained window with
 matching inserted rows, sorting that retained candidate window, and preserving `totalRows`. Retained
-updates/deletes that provably do not match the predicate are ignored without rescanning. For
-`limit: 0` count-only subscriptions, retained inserts, updates, and deletes adjust `totalRows`
-directly because there is no visible window to refill. Visible updates/deletes, unavailable retained
-changes, and base-window shape changes still fall back to a full raw window scan. This keeps
-correctness local while making append-heavy live top-k deltas and count-only retained changes avoid
-full 10M-row re-evaluation.
+updates/deletes that provably do not match the predicate are ignored without rescanning. Retained
+deletes or predicate-leaving updates can refill visible windows from the lookahead row when one
+changed row leaves the retained window. Matching deletes outside the retained window update
+`totalRows` without touching the visible window. For `limit: 0` count-only subscriptions, retained
+inserts, updates, and deletes adjust `totalRows` directly because there is no visible window to
+refill. Visible match-to-match updates, unavailable retained changes, exhausted lookahead, and
+base-window shape changes still fall back to a full raw window scan. This keeps correctness local
+while making append-heavy live top-k deltas, simple retained deletes/leaves, and count-only retained
+changes avoid full 10M-row re-evaluation.
 
 Current directional result after the insert-only path:
 

@@ -75,7 +75,9 @@ const updateBaseEvaluationFromRetainedChanges = (
   }
 
   let totalRows = evaluation.totalRows;
-  const insertedWindowEntries: Array<{ readonly key: string; readonly row: object }> = [];
+  let windowEntries = evaluation.window;
+  let removedRetainedEntry = false;
+  const insertedWindowEntries = new Map<string, { readonly key: string; readonly row: object }>();
   for (const batch of batches) {
     for (const change of batch.changes) {
       const previousMatches =
@@ -92,14 +94,31 @@ const updateBaseEvaluationFromRetainedChanges = (
       }
 
       if (change.previous !== undefined) {
-        if (previousMatches || nextMatches) {
+        if (previousMatches && nextMatches) {
           return undefined;
+        }
+        if (previousMatches) {
+          totalRows -= 1;
+          insertedWindowEntries.delete(change.key);
+          const removedWindowEntries = windowEntries.filter((entry) => entry.key !== change.key);
+          if (removedWindowEntries.length !== windowEntries.length) {
+            windowEntries = removedWindowEntries;
+            removedRetainedEntry = true;
+          }
+          continue;
+        }
+        if (nextMatches) {
+          totalRows += 1;
+          insertedWindowEntries.set(change.key, {
+            key: change.key,
+            row: change.next,
+          });
         }
         continue;
       }
       if (change.next !== undefined && nextMatches) {
         totalRows += 1;
-        insertedWindowEntries.push({
+        insertedWindowEntries.set(change.key, {
           key: change.key,
           row: change.next,
         });
@@ -116,16 +135,37 @@ const updateBaseEvaluationFromRetainedChanges = (
     };
   }
 
-  if (insertedWindowEntries.length === 0) {
+  const requiredWindowEntries =
+    queryWindow.limit === undefined ? undefined : Math.max(0, queryWindow.limit - 1);
+  if (
+    requiredWindowEntries !== undefined &&
+    windowEntries.length < Math.min(totalRows, requiredWindowEntries)
+  ) {
+    return undefined;
+  }
+
+  if (insertedWindowEntries.size === 0) {
+    if (windowEntries === evaluation.window && totalRows === evaluation.totalRows) {
+      return {
+        ...evaluation,
+        version: currentVersion,
+      };
+    }
     return {
       ...evaluation,
+      keys: windowEntries.map((entry) => entry.key),
+      totalRows,
       version: currentVersion,
+      window: windowEntries,
     };
   }
 
-  const window = [...evaluation.window, ...insertedWindowEntries].sort(compiled.plan.compare);
-  const limitedWindow =
-    queryWindow.limit === undefined ? window : window.slice(0, queryWindow.limit);
+  const window = [...windowEntries, ...insertedWindowEntries.values()].sort(compiled.plan.compare);
+  const retainedLimit =
+    removedRetainedEntry && requiredWindowEntries !== undefined
+      ? requiredWindowEntries
+      : queryWindow.limit;
+  const limitedWindow = retainedLimit === undefined ? window : window.slice(0, retainedLimit);
   return {
     keys: limitedWindow.map((entry) => entry.key),
     totalRows,
@@ -221,6 +261,13 @@ const baseWindowForActiveWindows = (
   return rawQueryPlanWindow(0, limit);
 };
 
+const retainedWindowForBaseWindow = (window: RawQueryPlanWindow): RawQueryPlanWindow => {
+  if (window.limit === undefined || window.limit === 0) {
+    return window;
+  }
+  return rawQueryPlanWindow(window.offset, window.limit + 1);
+};
+
 const acquireRawQueryWindow = (
   windows: Map<string, RawQueryExecutionWindowSlot>,
   window: RawQueryPlanWindow,
@@ -262,8 +309,9 @@ const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.raw.ma
   ) =>
     Effect.sync(() => {
       let baseWindow = baseWindowForActiveWindows(windows);
+      let retainedWindow = retainedWindowForBaseWindow(baseWindow);
       let snapshot = {
-        evaluation: evaluateBaseQuery(store, canonicalCompiled, baseWindow),
+        evaluation: evaluateBaseQuery(store, canonicalCompiled, retainedWindow),
         version: store.version(),
       };
 
@@ -274,8 +322,9 @@ const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.raw.ma
           nextBaseWindow.offset !== baseWindow.offset || nextBaseWindow.limit !== baseWindow.limit;
         if (windowChanged) {
           baseWindow = nextBaseWindow;
+          retainedWindow = retainedWindowForBaseWindow(baseWindow);
           snapshot = {
-            evaluation: evaluateBaseQuery(store, canonicalCompiled, baseWindow),
+            evaluation: evaluateBaseQuery(store, canonicalCompiled, retainedWindow),
             version: storeVersion,
           };
           return snapshot.evaluation;
@@ -285,11 +334,11 @@ const makeRawQueryExecution = Effect.fn("ColumnLiveViewEngine.activeQuery.raw.ma
             store,
             canonicalCompiled,
             snapshot.evaluation,
-            baseWindow,
+            retainedWindow,
           );
           snapshot = {
             evaluation:
-              incrementalEvaluation ?? evaluateBaseQuery(store, canonicalCompiled, baseWindow),
+              incrementalEvaluation ?? evaluateBaseQuery(store, canonicalCompiled, retainedWindow),
             version: storeVersion,
           };
         }
