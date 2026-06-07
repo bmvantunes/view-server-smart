@@ -15,6 +15,18 @@ const commonReactSmokeEnv = {
   VIEW_SERVER_REACT_BENCH_WARMUP_TIME_MS: "0",
 };
 
+const retainedDeltaSmokeEnv = {
+  ...commonEngineSmokeEnv,
+  VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
+};
+
+const retainedDeltaReleaseEnv = {
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "100",
+  VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
+};
+
 const task = (label, vpTask, env) => ({
   args: ["run", "--no-cache", vpTask],
   command: "vp",
@@ -57,6 +69,17 @@ const rawLiveFanoutTask = (fanoutCase, rowCount, subscriberCount, env = {}) =>
     },
   );
 
+const rawActiveRetainedDeltaTask = (retainedCase, rowCount, env = {}) =>
+  task(
+    `raw active retained delta ${retainedCase} ${rowCount} rows`,
+    "column-live-view-engine#bench:raw-active-retained-delta",
+    {
+      VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE: retainedCase,
+      VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
+      ...env,
+    },
+  );
+
 const reactInMemoryTask = (browser, rowCount, env = {}) =>
   task(`React in-memory ${browser} ${rowCount} rows`, "react#bench:in-memory-live-query", {
     VIEW_SERVER_REACT_BENCH_BROWSER: browser,
@@ -89,6 +112,11 @@ const profiles = new Map([
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
         ...commonEngineSmokeEnv,
       }),
+      rawActiveRetainedDeltaTask("noop", 101, retainedDeltaSmokeEnv),
+      rawActiveRetainedDeltaTask("predicate-enter", 101, retainedDeltaSmokeEnv),
+      rawActiveRetainedDeltaTask("visible-delete", 101, retainedDeltaSmokeEnv),
+      rawActiveRetainedDeltaTask("exhausted-lookahead", 101, retainedDeltaSmokeEnv),
+      rawActiveRetainedDeltaTask("count-only", 101, retainedDeltaSmokeEnv),
       reactInMemoryTask("chromium", 20, {
         VIEW_SERVER_REACT_BENCH_BATCH_SIZE: "10",
         ...commonReactSmokeEnv,
@@ -114,6 +142,11 @@ const profiles = new Map([
       rawLiveFanoutTask("ten-window", 100_000, 50),
       rawLiveFanoutTask("same-window", 1_000_000, 250),
       rawLiveFanoutTask("ten-window", 1_000_000, 250),
+      rawActiveRetainedDeltaTask("noop", 100_000, retainedDeltaReleaseEnv),
+      rawActiveRetainedDeltaTask("predicate-enter", 100_000, retainedDeltaReleaseEnv),
+      rawActiveRetainedDeltaTask("visible-delete", 100_000, retainedDeltaReleaseEnv),
+      rawActiveRetainedDeltaTask("exhausted-lookahead", 100_000, retainedDeltaReleaseEnv),
+      rawActiveRetainedDeltaTask("count-only", 100_000, retainedDeltaReleaseEnv),
       reactInMemoryTask("chromium", 10_000),
       reactInMemoryTask("firefox", 10_000),
       reactInMemoryTask("webkit", 10_000),

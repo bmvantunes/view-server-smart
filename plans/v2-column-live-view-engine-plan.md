@@ -1260,11 +1260,12 @@ pnpm run bench:baseline:release
 ```
 
 `bench:baseline` and `bench:baseline:smoke` run one small Chromium/browser profile plus small
-engine profiles with one-iteration / 1ms Vitest benchmark smoke settings. Use them as the PR
-sanity check for benchmark wiring. `bench:baseline:release` is the release-quality serial profile
-and runs the documented row counts/browser profiles in separate processes. It intentionally
-executes one benchmark process at a time so GC, RSS, browser state, and artifact files are not
-polluted by competing benchmark suites.
+engine profiles with smoke-sized Vitest benchmark settings. Most smoke tasks use one iteration / 1ms;
+stateful retained-delta smoke tasks use one iteration / 0ms so Tinybench runs the configured
+iteration count exactly. Use them as the PR sanity check for benchmark wiring.
+`bench:baseline:release` is the release-quality serial profile and runs the documented row
+counts/browser profiles in separate processes. It intentionally executes one benchmark process at a
+time so GC, RSS, browser state, and artifact files are not polluted by competing benchmark suites.
 
 The serial runner is `scripts/run-benchmark-baseline.mjs`. It supports
 `VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|release` or `--profile=smoke|release`; an explicit
@@ -1487,6 +1488,62 @@ Raw live fanout knobs:
 - `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: benchmark time budget per case.
 - `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: warmup iterations per case.
 - `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: warmup time budget per case.
+
+Current raw active retained delta benchmark harness:
+
+```bash
+vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta
+```
+
+This harness uses Vitest `bench()` against the public `ColumnLiveViewEngine` subscribe and mutation
+path. It seeds one topic, opens one active raw subscription, drains the initial snapshot, then runs
+one retained-change case per process so subscription queues and mutable engine state do not
+cross-contaminate cases:
+
+- `noop`: insert, update, and delete a nonmatching closed row while asserting no queued event.
+- `predicate-enter`: insert a closed row, patch it into the predicate, and read the retained delta.
+- `visible-delete`: repeatedly delete the current visible top row and read the refill/fallback
+  delta sequence.
+- `exhausted-lookahead`: delete two visible rows before reading, measuring one lookahead refill
+  followed by the exhausted-lookahead fallback path.
+- `count-only`: publish one matching row into a `limit: 0` count-only subscription.
+
+It writes case-specific artifacts under `packages/column-live-view-engine/.artifacts/`, such as
+`raw-active-retained-delta-visible-delete-100000rows.json` and matching `.summary.json` sidecars.
+Run each case and row count in a separate process, and do not run competing benchmark suites in
+parallel:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE=noop VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta
+VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE=predicate-enter VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta
+VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE=visible-delete VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta
+VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE=exhausted-lookahead VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta
+VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE=count-only VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta
+```
+
+For the default case-specific scripts:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta:noop
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta:predicate-enter
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta:visible-delete
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta:exhausted-lookahead
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:raw-active-retained-delta:count-only
+```
+
+Raw active retained delta knobs:
+
+- `VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE`: `noop`, `predicate-enter`, `visible-delete`,
+  `exhausted-lookahead`, or `count-only`.
+- `VIEW_SERVER_ENGINE_BENCH_ROWS`: seeded row count for this benchmark process; minimum 101.
+- `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding.
+- `VIEW_SERVER_ENGINE_BENCH_ITERATIONS`: exact benchmark iterations per case.
+- `VIEW_SERVER_ENGINE_BENCH_TIME_MS`: must remain `0`; this stateful benchmark is iteration-bound
+  so timed loops cannot silently exhaust finite retained windows.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS`: must remain `0`; this benchmark mutates shared
+  engine state.
+- `VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS`: must remain `0`; this benchmark mutates shared engine
+  state.
 
 Current browser in-memory React benchmark harness:
 
