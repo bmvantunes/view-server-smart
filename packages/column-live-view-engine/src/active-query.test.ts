@@ -467,7 +467,7 @@ describe("column-live-view-engine active query execution", () => {
         ],
         totalRows: 4,
       });
-      expect(scanLimits).toStrictEqual([2]);
+      expect(scanLimits).toStrictEqual([3]);
 
       yield* releaseRawQueryExecution(observedReadModel, compiled);
       expect(readModel.changesSince(3)).toBeUndefined();
@@ -529,7 +529,7 @@ describe("column-live-view-engine active query execution", () => {
         operations: [],
         totalRows: 4,
       });
-      expect(scanLimits).toStrictEqual([2]);
+      expect(scanLimits).toStrictEqual([3]);
 
       yield* releaseRawQueryExecution(observedReadModel, compiled);
     }),
@@ -648,7 +648,7 @@ describe("column-live-view-engine active query execution", () => {
         ],
         totalRows: 3,
       });
-      expect(scanLimits).toStrictEqual([2, 2]);
+      expect(scanLimits).toStrictEqual([3, 3]);
 
       yield* releaseRawQueryExecution(observedReadModel, compiled);
     }),
@@ -715,7 +715,7 @@ describe("column-live-view-engine active query execution", () => {
           index: 0,
         },
       ]);
-      expect(scanLimits).toStrictEqual([2, 2]);
+      expect(scanLimits).toStrictEqual([3, 3]);
 
       yield* releaseRawQueryExecution(observedReadModel, compiled);
     }),
@@ -788,7 +788,7 @@ describe("column-live-view-engine active query execution", () => {
           index: 0,
         },
       ]);
-      expect(scanLimits).toStrictEqual([2]);
+      expect(scanLimits).toStrictEqual([3]);
 
       yield* releaseRawQueryExecution(observedReadModel, compiled);
     }),
@@ -933,7 +933,7 @@ describe("column-live-view-engine active query execution", () => {
 
       const delta = yield* execution.next("query", cursor);
       expect(Option.isNone(delta)).toBe(true);
-      expect(scanLimits).toStrictEqual([2]);
+      expect(scanLimits).toStrictEqual([3]);
       expect(compareCount).toBe(0);
 
       yield* releaseRawQueryExecution(observedReadModel, observedCompiled);
@@ -1023,6 +1023,305 @@ describe("column-live-view-engine active query execution", () => {
       }),
   );
 
+  it.effect("adds predicate-entering retained raw updates without rescanning", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-retained-update-enters-predicate",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "d", status: "closed", score: 4 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-retained-update-enters-predicate",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["c", "b"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-retained-update-enters-predicate",
+        queryId: "query",
+        fromVersion: 4,
+        toVersion: 5,
+        operations: [
+          {
+            type: "remove",
+            key: "b",
+          },
+          {
+            type: "insert",
+            key: "d",
+            row: {
+              id: "d",
+              score: 4,
+            },
+            index: 0,
+          },
+        ],
+        totalRows: 4,
+      });
+      expect(scanLimits).toStrictEqual([3]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect("removes same-key pending raw insert candidates before merging retained changes", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-same-key-pending-insert-removed",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-same-key-pending-insert-removed",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["c", "b"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+      yield* deleteTopicStoreRow(store, "d");
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.isNone(delta)).toBe(true);
+      expect(scanLimits).toStrictEqual([3]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect("falls back after a retained removal consumes lookahead before a later delete", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-retained-removal-consumes-lookahead",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 100 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 90 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 80 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 70 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-retained-removal-consumes-lookahead",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["a", "b"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "a", status: "closed", score: 100 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "low", status: "open", score: 0 }, invalidRow);
+
+      const firstDelta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(firstDelta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-retained-removal-consumes-lookahead",
+        queryId: "query",
+        fromVersion: 4,
+        toVersion: 6,
+        operations: [
+          {
+            type: "remove",
+            key: "a",
+          },
+          {
+            type: "insert",
+            key: "c",
+            row: {
+              id: "c",
+              score: 80,
+            },
+            index: 1,
+          },
+        ],
+        totalRows: 4,
+      });
+      expect(scanLimits).toStrictEqual([3]);
+
+      yield* deleteTopicStoreRow(store, "b");
+
+      const secondDelta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(secondDelta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-retained-removal-consumes-lookahead",
+        queryId: "query",
+        fromVersion: 6,
+        toVersion: 7,
+        operations: [
+          {
+            type: "remove",
+            key: "b",
+          },
+          {
+            type: "insert",
+            key: "d",
+            row: {
+              id: "d",
+              score: 70,
+            },
+            index: 1,
+          },
+        ],
+        totalRows: 3,
+      });
+      expect(scanLimits).toStrictEqual([3, 3]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect(
+    "updates total rows for matching deletes outside retained raw windows without rescanning",
+    () =>
+      Effect.gen(function* () {
+        const store = new TopicStore(
+          "raw-delete-outside-retained-window",
+          Schema.Struct({
+            id: Schema.String,
+            status: Schema.String,
+            score: Schema.Number,
+          }),
+          "id",
+          () => {},
+        );
+        yield* publishTopicStoreRow(store, { id: "low", status: "open", score: 0 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+        const scanLimits: Array<number | undefined> = [];
+        const readModel = topicStoreReadModel(store);
+        const observedReadModel = {
+          ...readModel,
+          scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+            scanLimits.push(plan.limit);
+            return readModel.scanRawWindow(plan);
+          },
+        };
+
+        const compiled = yield* prepareRawQuery(
+          "raw-delete-outside-retained-window",
+          topicStoreRawQueryMetadata(store),
+          {
+            select: ["id", "score"],
+            where: {
+              status: "open",
+            },
+            orderBy: [{ field: "score", direction: "desc" }],
+            limit: 2,
+          },
+        );
+
+        const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+        expect(execution.initial("query").keys).toStrictEqual(["c", "b"]);
+        const cursor = execution.createCursor();
+
+        yield* deleteTopicStoreRow(store, "low");
+
+        const delta = yield* execution.next("query", cursor);
+        expect(Option.getOrThrow(delta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-delete-outside-retained-window",
+          queryId: "query",
+          fromVersion: 4,
+          toVersion: 5,
+          operations: [],
+          totalRows: 3,
+        });
+        expect(scanLimits).toStrictEqual([3]);
+
+        yield* releaseRawQueryExecution(observedReadModel, compiled);
+      }),
+  );
+
   it.effect(
     "updates zero-limit raw active counts from retained updates and deletes without rescanning",
     () =>
@@ -1096,7 +1395,7 @@ describe("column-live-view-engine active query execution", () => {
       }),
   );
 
-  it.effect("falls back to a raw window scan when retained deletes remove matching rows", () =>
+  it.effect("refills retained visible raw deletes from lookahead without rescanning", () =>
     Effect.gen(function* () {
       const store = new TopicStore(
         "raw-visible-delete-fallback",
@@ -1165,7 +1464,97 @@ describe("column-live-view-engine active query execution", () => {
         ],
         totalRows: 2,
       });
-      expect(scanLimits).toStrictEqual([2, 2]);
+      expect(scanLimits).toStrictEqual([3]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
+  it.effect("falls back to a raw window scan when retained deletes exhaust lookahead", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-visible-delete-exhausted-lookahead",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "d", status: "open", score: 4 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-visible-delete-exhausted-lookahead",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["d", "c"]);
+      const cursor = execution.createCursor();
+
+      yield* deleteTopicStoreRow(store, "d");
+      yield* deleteTopicStoreRow(store, "c");
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-visible-delete-exhausted-lookahead",
+        queryId: "query",
+        fromVersion: 4,
+        toVersion: 6,
+        operations: [
+          {
+            type: "remove",
+            key: "d",
+          },
+          {
+            type: "remove",
+            key: "c",
+          },
+          {
+            type: "insert",
+            key: "b",
+            row: {
+              id: "b",
+              score: 2,
+            },
+            index: 0,
+          },
+          {
+            type: "insert",
+            key: "a",
+            row: {
+              id: "a",
+              score: 1,
+            },
+            index: 1,
+          },
+        ],
+        totalRows: 2,
+      });
+      expect(scanLimits).toStrictEqual([3, 3]);
 
       yield* releaseRawQueryExecution(observedReadModel, compiled);
     }),
@@ -1232,7 +1621,7 @@ describe("column-live-view-engine active query execution", () => {
       expect(narrowExecution.initial("narrow").keys).toStrictEqual(["c"]);
 
       yield* releaseRawQueryExecution(observedReadModel, wideWindow);
-      expect(scanLimits).toStrictEqual([3, 2]);
+      expect(scanLimits).toStrictEqual([4, 3]);
       expect(narrowExecution.initial("narrow-after-shrink").keys).toStrictEqual(["c"]);
 
       yield* releaseRawQueryExecution(observedReadModel, narrowWindow);
@@ -1300,7 +1689,7 @@ describe("column-live-view-engine active query execution", () => {
       expect(unboundedExecution.initial("unbounded").keys).toStrictEqual(["c", "b", "a"]);
 
       yield* releaseRawQueryExecution(observedReadModel, unboundedWindow);
-      expect(scanLimits).toStrictEqual([2, undefined, 2]);
+      expect(scanLimits).toStrictEqual([3, undefined, 3]);
       expect(boundedExecution.initial("bounded-after-compact").keys).toStrictEqual(["b"]);
 
       yield* releaseRawQueryExecution(observedReadModel, boundedWindow);
