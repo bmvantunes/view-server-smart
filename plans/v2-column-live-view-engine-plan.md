@@ -264,24 +264,29 @@ import {
   ordersBufProtoValue,
   tradesBufProtoValue,
 } from "@buf/generated_code/orders_buf_proto";
+import { kafka } from "@view-server/config";
 import { viewServer } from "./view-server.config";
+
+const kafkaRegions = {
+  usa: "broker-a:9092,broker-b:9092",
+  london: "broker-c:9092,broker-d:9092",
+};
+
+const kafkaTopic = viewServer.kafkaTopic<typeof kafkaRegions>();
 
 export const runtime = viewServer.createRuntime({
   websocketPort: 8080,
   tcpPublishPort: 8081,
 
   kafka: {
-    regions: {
-      usa: "broker-a:9092,broker-b:9092",
-      london: "broker-c:9092,broker-d:9092",
-    },
+    regions: kafkaRegions,
 
     topics: {
-      orders: {
+      orders: kafkaTopic({
         regions: ["usa", "london"],
 
-        protoValue: ordersBufProtoValue,
-        protoKey: ordersBufProtoKey,
+        value: kafka.protobuf(ordersBufProtoValue),
+        key: kafka.protobuf(ordersBufProtoKey),
 
         viewServerTopic: "orders",
 
@@ -295,12 +300,12 @@ export const runtime = viewServer.createRuntime({
             updatedAt: value.updatedAt,
           };
         },
-      },
+      }),
 
-      trades: {
+      trades: kafkaTopic({
         regions: ["usa"],
 
-        protoValue: tradesBufProtoValue,
+        value: kafka.protobuf(tradesBufProtoValue),
 
         viewServerTopic: "trades",
 
@@ -313,7 +318,7 @@ export const runtime = viewServer.createRuntime({
             region,
           };
         },
-      },
+      }),
     },
   },
 });
@@ -665,8 +670,8 @@ Use:
 websocketPort;
 tcpPublishPort;
 viewServerTopic;
-protoValue;
-protoKey;
+value;
+key;
 ```
 
 Avoid:
@@ -686,17 +691,22 @@ protoSchemaKey;
 The runtime API should enforce these at compile time:
 
 - `kafka.regions` values are bootstrap strings, not arrays.
+- Kafka source topic definitions must be created with `viewServer.kafkaTopic<typeof kafkaRegions>()(...)`; direct unwrapped objects are rejected so nested topic contracts cannot widen.
 - `topics[...].regions` only accepts keys from `kafka.regions`.
 - `regions: ["usa", "london"]` passes.
 - `regions: ["USA"]` fails.
 - `viewServerTopic` only accepts topic keys from `defineViewServerConfig`.
-- If `protoKey` is provided, `mapping({ key })` is inferred from that protobuf key type.
-- If `protoKey` is omitted, `mapping({ key })` is a string.
-- `mapping({ value })` is inferred from `protoValue`.
+- `value` must be an explicit Kafka source codec such as `kafka.protobuf(...)`, `kafka.json(...)`, `kafka.string()`, `kafka.bytes()`, or `kafka.codec(...)`.
+- If `key` is provided, `mapping({ key })` is inferred from that Kafka key codec.
+- If `key` is omitted, `mapping({ key })` is a UTF-8 string.
+- `mapping({ value })` is inferred from the Kafka value codec.
 - `mapping({ region })` is narrowed to the configured region literals for that Kafka topic.
 - `mapping` return value must match the target `viewServerTopic` row schema.
 - `schema` in `mapping` should be the Effect Schema from the target View Server topic.
 - `metadata` should leave room for Kafka headers, partition, offset, timestamp, source topic, and source region.
+- Protobuf source codecs should accept the direct generated Buf descriptor/code.
+- JSON source codecs should validate decoded JSON through the provided Effect Schema.
+- Custom source codecs should keep arbitrary formats behind one typed decoder seam.
 
 The mapping function should receive one object argument, not positional arguments. Positional arguments will age badly once metadata, tracing, validation, or decode context is added.
 

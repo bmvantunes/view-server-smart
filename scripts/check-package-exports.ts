@@ -50,13 +50,13 @@ const requireModule = (moduleName: string, moduleValue: unknown) => {
 };
 
 requireExport("@view-server/config", configPackage, "defineViewServerConfig");
-requireExport("@view-server/config", configPackage, "defineProto");
 requireExport("@view-server/config", configPackage, "defineKafkaTopic");
+requireExport("@view-server/config", configPackage, "kafka");
 requireModule("@view-server/config/query", queryPackage);
 requireModule("@view-server/config/health", healthPackage);
 requireModule("@view-server/config/live-protocol", liveProtocolPackage);
-requireExport("@view-server/config/kafka", kafkaPackage, "defineProto");
 requireExport("@view-server/config/kafka", kafkaPackage, "defineKafkaTopic");
+requireExport("@view-server/config/kafka", kafkaPackage, "kafka");
 requireExport("@view-server/config/runtime", runtimePackage, "runtimeConfig");
 requireExport("@view-server/config/runtime", runtimePackage, "runtimeEnvironmentConfig");
 requireExport("@view-server/client", clientPackage, "stableQueryKey");

@@ -1,12 +1,14 @@
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
+import { create, toBinary } from "@bufbuild/protobuf";
+import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
-import type { Effect } from "effect";
+import { FieldDescriptorProto_Type, FileDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
 import type * as BigDecimal from "effect/BigDecimal";
-import { Config, Schema } from "effect";
+import { Config, Effect, Schema } from "effect";
 import {
-  defineProto,
   defineViewServerConfig,
+  kafka,
   VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
   VIEW_SERVER_HEALTH_TOPIC,
   viewServerReservedTopicNames,
@@ -15,8 +17,12 @@ import {
   viewServerHealthSummaryFromHealth,
   viewServerHealthSummaryRowFromHealth,
   viewServerHealthTopicRowsFromHealth,
+  type KafkaCodec,
   type KafkaMappingInput,
   type KafkaMessageMetadata,
+  type KafkaCodecError,
+  type KafkaCodecType,
+  type KafkaDecodeError,
   type KafkaTopicDefinition,
   type ExactGroupedQuery,
   type ExactRawQuery,
@@ -25,7 +31,6 @@ import {
   type LiveQueryRow,
   type LiveSubscription,
   type LiveTransportAdapter,
-  type ProtobufEsGeneratedMessageDescriptor,
   type RawQuery,
   type SnapshotEvent,
   type StatusEvent,
@@ -73,41 +78,82 @@ const Position = Schema.Struct({
   optionalNotional: Schema.Union([Schema.Number, Schema.Undefined]),
 });
 
+const OrderWithExtraSourceField = Schema.Struct({
+  id: Schema.String,
+  customerId: Schema.String,
+  status: Schema.Literals(["open", "closed", "cancelled"]),
+  price: Schema.Number,
+  region: Schema.String,
+  updatedAt: Schema.Number,
+  ze: Schema.Boolean,
+});
+
 declare const decimal: (value: string) => BigDecimal.BigDecimal;
 
-const ordersValueProto = defineProto<{
+type OrdersValueMessage = Message<"viewserver.test.OrderValue"> & {
   readonly customerId: string;
   readonly status: "open" | "closed" | "cancelled";
   readonly price: number;
   readonly updatedAt: number;
-}>();
-const ordersKeyProto = defineProto<{
+};
+
+type OrdersKeyMessage = Message<"viewserver.test.OrderKey"> & {
   readonly orderId: string;
-}>();
-const tradesValueProto = defineProto<{
+};
+
+type TradesValueMessage = Message<"viewserver.test.TradeValue"> & {
   readonly symbol: string;
   readonly quantity: number;
   readonly price: number;
-}>();
-
-const ordersValueSchema: ProtobufEsGeneratedMessageDescriptor<{
-  readonly customerId: string;
-  readonly status: "open" | "closed" | "cancelled";
-  readonly price: number;
-  readonly updatedAt: number;
-}> = {
-  typeName: "viewserver.test.OrderValue",
-  fields: {},
-  _viewServerProtoType: (value) => value,
 };
 
-const ordersKeySchema: ProtobufEsGeneratedMessageDescriptor<{
-  readonly orderId: string;
-}> = {
-  typeName: "viewserver.test.OrderKey",
-  fields: {},
-  _viewServerProtoType: (value) => value,
+type CustomKafkaCodecError = {
+  readonly _tag: "CustomKafkaCodecError";
+  readonly message: string;
 };
+
+const base64FromBytes = (bytes: Uint8Array) =>
+  globalThis.btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
+
+const testProtoFile = fileDesc(
+  base64FromBytes(
+    toBinary(
+      FileDescriptorProtoSchema,
+      create(FileDescriptorProtoSchema, {
+        name: "viewserver/test.proto",
+        package: "viewserver.test",
+        syntax: "proto3",
+        messageType: [
+          {
+            name: "OrderValue",
+            field: [
+              { name: "customer_id", number: 1, type: FieldDescriptorProto_Type.STRING },
+              { name: "status", number: 2, type: FieldDescriptorProto_Type.STRING },
+              { name: "price", number: 3, type: FieldDescriptorProto_Type.DOUBLE },
+              { name: "updated_at", number: 4, type: FieldDescriptorProto_Type.DOUBLE },
+            ],
+          },
+          {
+            name: "OrderKey",
+            field: [{ name: "order_id", number: 1, type: FieldDescriptorProto_Type.STRING }],
+          },
+          {
+            name: "TradeValue",
+            field: [
+              { name: "symbol", number: 1, type: FieldDescriptorProto_Type.STRING },
+              { name: "quantity", number: 2, type: FieldDescriptorProto_Type.DOUBLE },
+              { name: "price", number: 3, type: FieldDescriptorProto_Type.DOUBLE },
+            ],
+          },
+        ],
+      }),
+    ),
+  ),
+);
+
+const ordersValueSchema = messageDesc<OrdersValueMessage>(testProtoFile, 0);
+const ordersKeySchema = messageDesc<OrdersKeyMessage>(testProtoFile, 1);
+const tradesValueSchema = messageDesc<TradesValueMessage>(testProtoFile, 2);
 
 declare const generatedOrdersValueSchema: GenMessage<
   Message<"viewserver.test.OrderValue"> & {
@@ -192,6 +238,9 @@ const kafkaRegions = {
 };
 
 const kafkaTopic = viewServer.kafkaTopic<typeof kafkaRegions>();
+const ordersValueKafkaCodec = kafka.protobuf(ordersValueSchema);
+const ordersKeyKafkaCodec = kafka.protobuf(ordersKeySchema);
+const tradesValueKafkaCodec = kafka.protobuf(tradesValueSchema);
 
 describe("defineViewServerConfig", () => {
   it("derives schema field metadata for query validation", () => {
@@ -369,17 +418,12 @@ describe("defineViewServerConfig", () => {
         topics: {
           orders: kafkaTopic({
             regions: ["usa", "london"],
-            protoValue: ordersValueProto,
-            protoKey: ordersKeyProto,
+            value: kafka.protobuf(ordersValueSchema),
+            key: kafka.protobuf(ordersKeySchema),
             viewServerTopic: "orders",
             mapping: ({ key, value, region }) => {
-              expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
-              expectTypeOf(value).toEqualTypeOf<{
-                readonly customerId: string;
-                readonly status: "open" | "closed" | "cancelled";
-                readonly price: number;
-                readonly updatedAt: number;
-              }>();
+              expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
+              expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
               expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
               return {
                 id: key.orderId,
@@ -393,15 +437,11 @@ describe("defineViewServerConfig", () => {
           }),
           trades: kafkaTopic({
             regions: ["usa"],
-            protoValue: tradesValueProto,
+            value: kafka.protobuf(tradesValueSchema),
             viewServerTopic: "trades",
             mapping: ({ key, value, region }) => {
               expectTypeOf(key).toEqualTypeOf<string>();
-              expectTypeOf(value).toEqualTypeOf<{
-                readonly symbol: string;
-                readonly quantity: number;
-                readonly price: number;
-              }>();
+              expectTypeOf(value).toEqualTypeOf<TradesValueMessage>();
               expectTypeOf(region).toEqualTypeOf<"usa">();
               return {
                 id: key,
@@ -421,6 +461,66 @@ describe("defineViewServerConfig", () => {
     expect(runtimeOptions.websocketPort).toBe(runtimeEnvironmentConfig.websocketPort);
     expect(Config.isConfig(runtimeEnvironmentConfig.tcpPublishPort)).toBe(true);
     expect(Config.isConfig(runtimeConfig.port("VIEW_SERVER_TCP_PUBLISH_PORT"))).toBe(true);
+  });
+
+  it("defines typed Kafka source codecs", () => {
+    const bytesCodec = kafka.bytes();
+    const stringCodec = kafka.string();
+    const stringKeyCodec = kafka.stringKey();
+    const jsonCodec = kafka.json(Order);
+    const protobufCodec = kafka.protobuf(ordersValueSchema);
+    const customCodec = kafka.codec({
+      name: "custom-order-value",
+      decode: ({ bytes }): Effect.Effect<{ readonly byteLength: number }, never> =>
+        Effect.succeed({
+          byteLength: bytes.byteLength,
+        }),
+    });
+    const customErrorCodec = kafka.codec({
+      name: "custom-order-value-with-error",
+      decode: (): Effect.Effect<{ readonly id: string }, CustomKafkaCodecError> =>
+        Effect.fail({
+          _tag: "CustomKafkaCodecError",
+          message: "decode failed",
+        }),
+    });
+
+    expect(bytesCodec.format).toBe("bytes");
+    expect(stringCodec.format).toBe("string");
+    expect(stringKeyCodec.format).toBe("string");
+    expect(jsonCodec.schema).toBe(Order);
+    expect(protobufCodec.descriptor).toBe(ordersValueSchema);
+    expect(customCodec.name).toBe("custom-order-value");
+    expect(
+      Effect.runSync(
+        customCodec.decode({
+          bytes: new Uint8Array([1, 2, 3]),
+          metadata: {
+            sourceTopic: "orders-source",
+            sourceRegion: "usa",
+            partition: 0,
+            offset: "1",
+            timestamp: null,
+            headers: {},
+          },
+        }),
+      ),
+    ).toStrictEqual({
+      byteLength: 3,
+    });
+
+    expectTypeOf<KafkaCodecType<typeof bytesCodec>>().toEqualTypeOf<Uint8Array>();
+    expectTypeOf<KafkaCodecType<typeof stringCodec>>().toEqualTypeOf<string>();
+    expectTypeOf<KafkaCodecType<typeof stringKeyCodec>>().toEqualTypeOf<string>();
+    expectTypeOf<KafkaCodecType<typeof jsonCodec>>().toEqualTypeOf<typeof Order.Type>();
+    expectTypeOf<KafkaCodecType<typeof protobufCodec>>().toEqualTypeOf<OrdersValueMessage>();
+    expectTypeOf<KafkaCodecType<typeof customCodec>>().toEqualTypeOf<{
+      readonly byteLength: number;
+    }>();
+    expectTypeOf<KafkaCodecError<typeof jsonCodec>>().toEqualTypeOf<KafkaDecodeError>();
+    expectTypeOf<KafkaCodecError<typeof protobufCodec>>().toEqualTypeOf<KafkaDecodeError>();
+    expectTypeOf<KafkaCodecError<typeof customCodec>>().toEqualTypeOf<never>();
+    expectTypeOf<KafkaCodecError<typeof customErrorCodec>>().toEqualTypeOf<CustomKafkaCodecError>();
   });
 
   it("does not expose executable React or runtime placeholders from config", () => {
@@ -941,16 +1041,11 @@ describe("public type surface", () => {
   it("infers unannotated Kafka mapping callback parameters through the topic helper", () => {
     const topic = kafkaTopic({
       regions: ["usa", "london"],
-      protoValue: ordersValueSchema,
+      value: kafka.protobuf(ordersValueSchema),
       viewServerTopic: "orders",
       mapping: ({ key, value, region }) => {
         expectTypeOf(key).toEqualTypeOf<string>();
-        expectTypeOf(value).toEqualTypeOf<{
-          readonly customerId: string;
-          readonly status: "open" | "closed" | "cancelled";
-          readonly price: number;
-          readonly updatedAt: number;
-        }>();
+        expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
         expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
         return {
           id: key,
@@ -967,17 +1062,12 @@ describe("public type surface", () => {
 
     const keyedTopic = kafkaTopic({
       regions: ["usa"],
-      protoValue: ordersValueSchema,
-      protoKey: ordersKeySchema,
+      value: kafka.protobuf(ordersValueSchema),
+      key: kafka.protobuf(ordersKeySchema),
       viewServerTopic: "orders",
       mapping: ({ key, value, region }) => {
-        expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
-        expectTypeOf(value).toEqualTypeOf<{
-          readonly customerId: string;
-          readonly status: "open" | "closed" | "cancelled";
-          readonly price: number;
-          readonly updatedAt: number;
-        }>();
+        expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
+        expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
         expectTypeOf(region).toEqualTypeOf<"usa">();
         return {
           id: key.orderId,
@@ -990,7 +1080,64 @@ describe("public type surface", () => {
       },
     });
 
-    expect(keyedTopic.protoKey).toBe(ordersKeySchema);
+    expect(keyedTopic.key.descriptor).toBe(ordersKeySchema);
+  });
+
+  it("supports json and custom Kafka source codecs without weakening mapping exactness", () => {
+    const jsonTopic = kafkaTopic({
+      regions: ["usa"],
+      value: kafka.json(Order),
+      viewServerTopic: "orders",
+      mapping: ({ key, value, region }) => {
+        expectTypeOf(key).toEqualTypeOf<string>();
+        expectTypeOf(value).toEqualTypeOf<typeof Order.Type>();
+        expectTypeOf(region).toEqualTypeOf<"usa">();
+        return value;
+      },
+    });
+
+    const customTopic = kafkaTopic({
+      regions: ["london"],
+      value: kafka.codec({
+        name: "trade-json-lines",
+        decode: (): Effect.Effect<
+          {
+            readonly tradeId: string;
+            readonly symbol: string;
+            readonly quantity: number;
+            readonly price: number;
+          },
+          never
+        > =>
+          Effect.succeed({
+            tradeId: "trade-1",
+            symbol: "AAPL",
+            quantity: 10,
+            price: 42,
+          }),
+      }),
+      viewServerTopic: "trades",
+      mapping: ({ key, value, region }) => {
+        expectTypeOf(key).toEqualTypeOf<string>();
+        expectTypeOf(value).toEqualTypeOf<{
+          readonly tradeId: string;
+          readonly symbol: string;
+          readonly quantity: number;
+          readonly price: number;
+        }>();
+        expectTypeOf(region).toEqualTypeOf<"london">();
+        return {
+          id: value.tradeId,
+          symbol: value.symbol,
+          quantity: value.quantity,
+          price: value.price,
+          region,
+        };
+      },
+    });
+
+    expect(jsonTopic.value.format).toBe("json");
+    expect(customTopic.value.format).toBe("custom");
   });
 
   it("keeps real Protobuf-ES v2 generated schema inference typechecked", () => {
@@ -1001,8 +1148,8 @@ describe("public type surface", () => {
 const assertGeneratedSchemaContracts = () => {
   const keyedTopic = kafkaTopic({
     regions: ["usa", "london"],
-    protoValue: generatedOrdersValueSchema,
-    protoKey: generatedOrdersKeySchema,
+    value: kafka.protobuf(generatedOrdersValueSchema),
+    key: kafka.protobuf(generatedOrdersKeySchema),
     viewServerTopic: "orders",
     mapping: ({ key, value, region }) => {
       expectTypeOf(key).toEqualTypeOf<
@@ -1028,17 +1175,15 @@ const assertGeneratedSchemaContracts = () => {
     },
   });
 
-  expectTypeOf(keyedTopic.protoKey).toEqualTypeOf<
-    GenMessage<
-      Message<"viewserver.test.OrderKey"> & {
-        readonly orderId: string;
-      }
-    >
+  expectTypeOf<KafkaCodecType<typeof keyedTopic.key>>().toEqualTypeOf<
+    Message<"viewserver.test.OrderKey"> & {
+      readonly orderId: string;
+    }
   >();
 
   kafkaTopic({
     regions: ["usa", "london"],
-    protoValue: generatedOrdersValueSchema,
+    value: kafka.protobuf(generatedOrdersValueSchema),
     viewServerTopic: "orders",
     mapping: ({ key, value, region }) => {
       expectTypeOf(key).toEqualTypeOf<string>();
@@ -1068,37 +1213,195 @@ const assertCompileTimeContracts = () => {
     usa: "broker-a:9092",
   };
   const localKafkaTopic = viewServer.kafkaTopic<typeof localKafkaRegions>();
+  const londonKafkaRegions = {
+    london: "broker-b:9092",
+  };
+  const londonKafkaTopic = viewServer.kafkaTopic<typeof londonKafkaRegions>()({
+    regions: ["london"],
+    value: kafka.protobuf(ordersValueSchema),
+    viewServerTopic: "orders",
+    mapping: ({ key, value, region }) => ({
+      id: key,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
+      updatedAt: value.updatedAt,
+    }),
+  });
+  const validLocalOrdersTopic = localKafkaTopic({
+    regions: ["usa"],
+    value: kafka.protobuf(ordersValueSchema),
+    viewServerTopic: "orders",
+    mapping: ({ key, value, region }) => ({
+      id: key,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
+      updatedAt: value.updatedAt,
+    }),
+  });
+  const validKeyedLocalOrdersTopic = localKafkaTopic({
+    regions: ["usa"],
+    value: kafka.protobuf(ordersValueSchema),
+    key: kafka.protobuf(ordersKeySchema),
+    viewServerTopic: "orders",
+    mapping: ({ key, value, region }) => ({
+      id: key.orderId,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region,
+      updatedAt: value.updatedAt,
+    }),
+  });
+  const spreadValueMismatchTopic = {
+    ...validLocalOrdersTopic,
+    value: kafka.string(),
+  };
+  const spreadKeyMismatchTopic = {
+    ...validKeyedLocalOrdersTopic,
+    key: kafka.stringKey(),
+  };
+  const spreadMappingMismatchTopic = {
+    ...validLocalOrdersTopic,
+    mapping: (): typeof Trade.Type => ({
+      id: "trade-1",
+      symbol: "AAPL",
+      quantity: 1,
+      price: 42,
+      region: "usa",
+    }),
+  };
+  const spreadTargetMismatchTopic = {
+    ...validLocalOrdersTopic,
+    viewServerTopic: "trades",
+  };
+  type UnsafeJsonParseResult = ReturnType<typeof JSON.parse>;
+  const unsafeValueCodec: KafkaCodec<UnsafeJsonParseResult> = kafka.bytes();
+  const unsafeErrorCodec: KafkaCodec<string, UnsafeJsonParseResult> = kafka.string();
+  const unknownErrorCodec: KafkaCodec<string, unknown> = kafka.string();
+
+  // @ts-expect-error protobuf descriptors cannot be inferred from any
+  kafka.protobuf(JSON.parse("{}"));
+
+  // @ts-expect-error json schemas cannot be inferred from any
+  kafka.json(JSON.parse("{}"));
+
+  // @ts-expect-error custom Kafka codec values cannot infer any
+  kafka.codec({
+    name: "unsafe-effect-json-parse",
+    decode: () => Effect.succeed(JSON.parse("{}")),
+  });
+
+  // @ts-expect-error custom Kafka codec errors cannot infer any
+  kafka.codec({
+    name: "unsafe-effect-json-parse-error",
+    decode: () => Effect.fail(JSON.parse("{}")),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    // @ts-expect-error Kafka value codecs cannot be inferred from any
+    value: JSON.parse("{}"),
+    viewServerTopic: "orders",
+    mapping: (): typeof Order.Type => ({
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      updatedAt: 1,
+    }),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    value: kafka.protobuf(ordersValueSchema),
+    // @ts-expect-error Kafka key codecs cannot be inferred from any
+    key: JSON.parse("{}"),
+    viewServerTopic: "orders",
+    mapping: (): typeof Order.Type => ({
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      updatedAt: 1,
+    }),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    // @ts-expect-error Kafka value codecs cannot be widened to KafkaCodec<any>
+    value: unsafeValueCodec,
+    viewServerTopic: "orders",
+    mapping: (): typeof Order.Type => ({
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      updatedAt: 1,
+    }),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    // @ts-expect-error Kafka codec error channels cannot be widened to any
+    value: unsafeErrorCodec,
+    viewServerTopic: "orders",
+    mapping: (): typeof Order.Type => ({
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      updatedAt: 1,
+    }),
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    // @ts-expect-error Kafka codec error channels cannot be widened to unknown
+    value: unknownErrorCodec,
+    viewServerTopic: "orders",
+    mapping: (): typeof Order.Type => ({
+      id: "order-1",
+      customerId: "customer-1",
+      status: "open",
+      price: 42,
+      region: "usa",
+      updatedAt: 1,
+    }),
+  });
 
   expectTypeOf<
     KafkaMappingInput<
       typeof viewServer.topics,
       "orders",
       "usa" | "london",
-      typeof ordersValueProto,
-      typeof ordersKeyProto
+      typeof ordersValueKafkaCodec,
+      typeof ordersKeyKafkaCodec
     >["key"]
-  >().toEqualTypeOf<{ readonly orderId: string }>();
+  >().toEqualTypeOf<OrdersKeyMessage>();
   expectTypeOf<
     KafkaMappingInput<
       typeof viewServer.topics,
       "orders",
       "usa" | "london",
-      typeof ordersValueProto,
-      typeof ordersKeyProto
+      typeof ordersValueKafkaCodec,
+      typeof ordersKeyKafkaCodec
     >["value"]
-  >().toEqualTypeOf<{
-    readonly customerId: string;
-    readonly status: "open" | "closed" | "cancelled";
-    readonly price: number;
-    readonly updatedAt: number;
-  }>();
+  >().toEqualTypeOf<OrdersValueMessage>();
   expectTypeOf<
     KafkaMappingInput<
       typeof viewServer.topics,
       "orders",
       "usa" | "london",
-      typeof ordersValueProto,
-      typeof ordersKeyProto
+      typeof ordersValueKafkaCodec,
+      typeof ordersKeyKafkaCodec
     >["region"]
   >().toEqualTypeOf<"usa" | "london">();
   expectTypeOf<
@@ -1106,8 +1409,8 @@ const assertCompileTimeContracts = () => {
       typeof viewServer.topics,
       "orders",
       "usa" | "london",
-      typeof ordersValueProto,
-      typeof ordersKeyProto
+      typeof ordersValueKafkaCodec,
+      typeof ordersKeyKafkaCodec
     >["schema"]
   >().toEqualTypeOf<typeof Order>();
   expectTypeOf<
@@ -1115,8 +1418,8 @@ const assertCompileTimeContracts = () => {
       typeof viewServer.topics,
       "orders",
       "usa" | "london",
-      typeof ordersValueProto,
-      typeof ordersKeyProto
+      typeof ordersValueKafkaCodec,
+      typeof ordersKeyKafkaCodec
     >["metadata"]["sourceRegion"]
   >().toEqualTypeOf<"usa" | "london">();
   expectTypeOf<
@@ -1124,7 +1427,7 @@ const assertCompileTimeContracts = () => {
       typeof viewServer.topics,
       "trades",
       "usa",
-      typeof tradesValueProto,
+      typeof tradesValueKafkaCodec,
       undefined
     >["key"]
   >().toEqualTypeOf<string>();
@@ -1133,20 +1436,16 @@ const assertCompileTimeContracts = () => {
       typeof viewServer.topics,
       "trades",
       "usa",
-      typeof tradesValueProto,
+      typeof tradesValueKafkaCodec,
       undefined
     >["value"]
-  >().toEqualTypeOf<{
-    readonly symbol: string;
-    readonly quantity: number;
-    readonly price: number;
-  }>();
+  >().toEqualTypeOf<TradesValueMessage>();
   expectTypeOf<
     KafkaMappingInput<
       typeof viewServer.topics,
       "trades",
       "usa",
-      typeof tradesValueProto,
+      typeof tradesValueKafkaCodec,
       undefined
     >["region"]
   >().toEqualTypeOf<"usa">();
@@ -1155,7 +1454,7 @@ const assertCompileTimeContracts = () => {
       typeof viewServer.topics,
       "trades",
       "usa",
-      typeof tradesValueProto,
+      typeof tradesValueKafkaCodec,
       undefined
     >["schema"]
   >().toEqualTypeOf<typeof Trade>();
@@ -1325,10 +1624,94 @@ const assertCompileTimeContracts = () => {
     },
   });
 
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
+    kafka: {
+      regions: localKafkaRegions,
+      topics: {
+        // @ts-expect-error Kafka source topics must be created with viewServer.kafkaTopic
+        orders: {
+          regions: ["usa"],
+          value: kafka.protobuf(ordersValueSchema),
+          viewServerTopic: "orders",
+          mapping: () => ({
+            id: "order-1",
+            customerId: "customer-1",
+            status: "open",
+            price: 42,
+            region: "usa",
+            updatedAt: 1,
+          }),
+        },
+      },
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
+    kafka: {
+      regions: localKafkaRegions,
+      topics: {
+        // @ts-expect-error spread-mutated Kafka topic values must still match mapping input types
+        orders: spreadValueMismatchTopic,
+      },
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
+    kafka: {
+      regions: localKafkaRegions,
+      topics: {
+        // @ts-expect-error spread-mutated Kafka topic keys must still match mapping input types
+        orders: spreadKeyMismatchTopic,
+      },
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
+    kafka: {
+      regions: localKafkaRegions,
+      topics: {
+        // @ts-expect-error spread-mutated Kafka mappings must still return the target topic row
+        orders: spreadMappingMismatchTopic,
+      },
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
+    kafka: {
+      regions: localKafkaRegions,
+      topics: {
+        // @ts-expect-error spread-mutated Kafka target topics must still match the mapping row
+        orders: spreadTargetMismatchTopic,
+      },
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
+    kafka: {
+      regions: localKafkaRegions,
+      topics: {
+        // @ts-expect-error Kafka topic helper regions must match runtime kafka.regions
+        orders: londonKafkaTopic,
+      },
+    },
+  });
+
   localKafkaTopic({
     // @ts-expect-error Kafka topic regions are constrained to kafka.regions keys
     regions: ["USA"],
-    protoValue: ordersValueProto,
+    value: kafka.protobuf(ordersValueSchema),
     viewServerTopic: "orders",
     mapping: ({ key, value }) => ({
       id: key,
@@ -1343,7 +1726,7 @@ const assertCompileTimeContracts = () => {
   localKafkaTopic({
     // @ts-expect-error Kafka topic regions must be non-empty
     regions: [],
-    protoValue: ordersValueProto,
+    value: kafka.protobuf(ordersValueSchema),
     viewServerTopic: "orders",
     mapping: ({ key, value }) => ({
       id: key,
@@ -1357,7 +1740,7 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    protoValue: ordersValueProto,
+    value: kafka.protobuf(ordersValueSchema),
     // @ts-expect-error Kafka mappings must target a configured View Server topic
     viewServerTopic: "customers",
     mapping: ({ key, value, region }) => ({
@@ -1374,12 +1757,12 @@ const assertCompileTimeContracts = () => {
     typeof viewServer.topics,
     typeof localKafkaRegions,
     "orders",
-    typeof ordersValueProto,
+    typeof ordersValueKafkaCodec,
     undefined,
     readonly ["usa"]
   > = {
     regions: ["usa"],
-    protoValue: ordersValueProto,
+    value: kafka.protobuf(ordersValueSchema),
     viewServerTopic: "orders",
     // @ts-expect-error Kafka topic definitions reject unknown topic contract fields
     extraTopicField: true,
@@ -1397,9 +1780,9 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    protoValue: ordersValueProto,
-    // @ts-expect-error unsupported proto key descriptors must fail instead of inferring unknown
-    protoKey: {},
+    value: kafka.protobuf(ordersValueSchema),
+    // @ts-expect-error unsupported Kafka key codecs must fail instead of inferring unknown
+    key: {},
     viewServerTopic: "orders",
     mapping: ({ key, value, region }) => ({
       id: key,
@@ -1413,8 +1796,16 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    protoValue: ordersValueProto,
-    protoKey: ordersKeyProto,
+    value: kafka.json(OrderWithExtraSourceField),
+    viewServerTopic: "orders",
+    // @ts-expect-error returning source JSON value directly rejects fields outside the target row
+    mapping: ({ value }) => value,
+  });
+
+  localKafkaTopic({
+    regions: ["usa"],
+    value: kafka.protobuf(ordersValueSchema),
+    key: kafka.protobuf(ordersKeySchema),
     viewServerTopic: "orders",
     // @ts-expect-error unannotated mapping returns must match the target View Server topic row
     mapping: ({ key, value, region }) => ({
@@ -1428,8 +1819,8 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    protoValue: ordersValueProto,
-    protoKey: ordersKeyProto,
+    value: kafka.protobuf(ordersValueSchema),
+    key: kafka.protobuf(ordersKeySchema),
     viewServerTopic: "orders",
     // @ts-expect-error unannotated mapping returns reject extra fields outside the target row
     mapping: ({ key, value, region }) => ({
@@ -1445,17 +1836,12 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    protoValue: ordersValueProto,
-    protoKey: ordersKeyProto,
+    value: kafka.protobuf(ordersValueSchema),
+    key: kafka.protobuf(ordersKeySchema),
     viewServerTopic: "orders",
     mapping: ({ key, value, schema, metadata }) => {
-      expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
-      expectTypeOf(value).toEqualTypeOf<{
-        readonly customerId: string;
-        readonly status: "open" | "closed" | "cancelled";
-        readonly price: number;
-        readonly updatedAt: number;
-      }>();
+      expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
+      expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
       expectTypeOf(schema).toEqualTypeOf<typeof Order>();
       expectTypeOf(metadata.sourceRegion).toEqualTypeOf<"usa">();
       expectTypeOf(metadata.headers).toEqualTypeOf<
@@ -1482,8 +1868,8 @@ const assertCompileTimeContracts = () => {
       topics: {
         orders: localKafkaTopic({
           regions: ["usa"],
-          protoValue: ordersValueProto,
-          protoKey: ordersKeyProto,
+          value: kafka.protobuf(ordersValueSchema),
+          key: kafka.protobuf(ordersKeySchema),
           viewServerTopic: "orders",
           // @ts-expect-error mapping return must match the target View Server topic row type
           mapping: ({ key, value, region }) => ({
@@ -1508,8 +1894,8 @@ const assertCompileTimeContracts = () => {
       topics: {
         orders: localKafkaTopic({
           regions: ["usa"],
-          protoValue: ordersValueProto,
-          protoKey: ordersKeyProto,
+          value: kafka.protobuf(ordersValueSchema),
+          key: kafka.protobuf(ordersKeySchema),
           viewServerTopic: "orders",
           // @ts-expect-error raw runtime topic mappings must return the target topic row
           mapping: ({ key, value, region }) => ({
@@ -2177,17 +2563,12 @@ const assertCompileTimeContracts = () => {
       topics: {
         orders: localKafkaTopic({
           regions: ["usa"],
-          protoValue: ordersValueProto,
-          protoKey: ordersKeyProto,
+          value: kafka.protobuf(ordersValueSchema),
+          key: kafka.protobuf(ordersKeySchema),
           viewServerTopic: "orders",
           mapping: ({ key, value, region }) => {
-            expectTypeOf(key).toEqualTypeOf<{ readonly orderId: string }>();
-            expectTypeOf(value).toEqualTypeOf<{
-              readonly customerId: string;
-              readonly status: "open" | "closed" | "cancelled";
-              readonly price: number;
-              readonly updatedAt: number;
-            }>();
+            expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
+            expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
             expectTypeOf(region).toEqualTypeOf<"usa">();
             return {
               id: key.orderId,
@@ -2201,15 +2582,11 @@ const assertCompileTimeContracts = () => {
         }),
         trades: localKafkaTopic({
           regions: ["usa"],
-          protoValue: tradesValueProto,
+          value: kafka.protobuf(tradesValueSchema),
           viewServerTopic: "trades",
           mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<string>();
-            expectTypeOf(value).toEqualTypeOf<{
-              readonly symbol: string;
-              readonly quantity: number;
-              readonly price: number;
-            }>();
+            expectTypeOf(value).toEqualTypeOf<TradesValueMessage>();
             expectTypeOf(region).toEqualTypeOf<"usa">();
             return {
               id: key,
@@ -2226,8 +2603,8 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    // @ts-expect-error unsupported proto descriptors must fail instead of inferring unknown
-    protoValue: {},
+    // @ts-expect-error unsupported Kafka value codecs must fail instead of inferring unknown
+    value: {},
     viewServerTopic: "orders",
     mapping: ({ key }) => ({
       id: key,
@@ -2241,8 +2618,8 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    // @ts-expect-error $typeName-only objects are message instances, not generated schemas
-    protoValue: { $typeName: "viewserver.test.OrderValue" },
+    // @ts-expect-error $typeName-only objects are message instances, not generated schemas/codecs
+    value: { $typeName: "viewserver.test.OrderValue" },
     viewServerTopic: "orders",
     mapping: ({ key }) => ({
       id: key,
@@ -2256,8 +2633,8 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    // @ts-expect-error arbitrary decoder shapes are not accepted as generated proto schemas
-    protoValue: {
+    // @ts-expect-error arbitrary decoder shapes are not accepted as Kafka codecs
+    value: {
       fromBinary: (_bytes: Uint8Array) => ({
         customerId: "customer-1",
         status: "open",
@@ -2278,8 +2655,8 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
-    // @ts-expect-error row Effect schemas are not Kafka proto descriptors
-    protoValue: Order,
+    // @ts-expect-error row Effect schemas are not Kafka codecs unless wrapped with kafka.json
+    value: Order,
     viewServerTopic: "orders",
     mapping: ({ key }) => ({
       id: key,

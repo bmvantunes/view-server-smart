@@ -100,17 +100,20 @@ export type {
   StatusEvent,
   StatusEventCode,
 } from "./live-protocol";
-export { defineKafkaTopic, defineProto } from "./kafka-contract";
+export { defineKafkaTopic, kafka } from "./kafka-contract";
 export type {
   ExactRuntimeOptions,
+  KafkaCodec,
+  KafkaCodecDecodeInput,
+  KafkaCodecError,
+  KafkaCodecType,
+  KafkaDecodeError,
   KafkaMappingInput,
   KafkaMessageMetadata,
+  KafkaProtobufType,
   KafkaTopicDefinition,
   KafkaTopicHelper,
   NonEmptyReadonlyArray,
-  ProtoCodec,
-  ProtoType,
-  ProtobufEsGeneratedMessageDescriptor,
   RuntimeOptions,
   RuntimeOptionsCandidate,
   RuntimeOptionsDefinition,

@@ -162,6 +162,10 @@ _Avoid_: Seed provider, mock provider
 An external Kafka topic or future server-side source that provides messages to be mapped into a View Server Topic.
 _Avoid_: View Server Topic
 
+**Kafka Source Codec**:
+A typed decoder contract for Kafka message keys and values before Mapping, such as protobuf, JSON, string, bytes, or a custom Effectful decoder. It is the source-format Seam; the View Server Topic schema remains the target truth.
+_Avoid_: Topic schema, row schema, serializer
+
 **Region**:
 A named Kafka/source deployment location configured for ingestion.
 _Avoid_: Location string, environment, cluster unless discussing infrastructure
@@ -204,6 +208,7 @@ _Avoid_: Browser write, send, emit
 - A **View Server Provider** supplies a **Live Client** to React hooks.
 - A **View Server In-Memory Provider** supplies the same hook behavior through an **In-Memory View Server**.
 - A **Real View Server** and **In-Memory View Server** differ only by transport and ingress **Adapters**, not by query, storage, health, or subscription logic.
+- A **Source Topic** uses one **Kafka Source Codec** for its value and optionally one **Kafka Source Codec** for its key.
 - A **Source Topic** is mapped into a **View Server Topic** through a **Mapping**.
 - **Health Ledger** state feeds engine health, runtime health, transport health, and React health.
 
