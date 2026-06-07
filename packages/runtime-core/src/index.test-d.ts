@@ -58,6 +58,18 @@ describe("runtime-core type contracts", () => {
         };
       },
     });
+    const invalidGroupedAdmissionLimitKey = createViewServerRuntimeCore(viewServer, {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limit keys are exact.
+        maxGroupz: 1,
+      },
+    });
+    const invalidGroupedAdmissionLimitValue = createViewServerRuntimeCore(viewServer, {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limits must be numeric.
+        maxGroups: "1",
+      },
+    });
 
     expectTypeOf<Effect.Error<typeof publish>>().toEqualTypeOf<ViewServerRuntimeError>();
     expectTypeOf<Effect.Success<typeof subscription>>().toEqualTypeOf<
@@ -70,5 +82,7 @@ describe("runtime-core type contracts", () => {
     expectTypeOf(runtimeCoreWithGroupedAdmissionLimits.client).toEqualTypeOf<
       typeof runtimeCore.client
     >();
+    expectTypeOf(invalidGroupedAdmissionLimitKey).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitValue).not.toBeAny();
   });
 });

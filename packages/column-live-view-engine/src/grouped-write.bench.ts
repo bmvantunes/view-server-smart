@@ -164,10 +164,12 @@ const groupedWriteModeFromEnv = (): GroupedWriteMode => {
   throw new Error("VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE must be fallback or incremental.");
 };
 
-const expectedGroupedAdmissionFromEnv = (): ExpectedGroupedAdmission | undefined => {
+const expectedGroupedAdmissionFromEnv = (
+  defaultAdmission: ExpectedGroupedAdmission,
+): ExpectedGroupedAdmission => {
   const raw = process.env["VIEW_SERVER_ENGINE_BENCH_EXPECTED_GROUPED_ADMISSION"];
   if (raw === undefined || raw.trim() === "") {
-    return undefined;
+    return defaultAdmission;
   }
   const trimmed = raw.trim();
   if (trimmed === "fallback" || trimmed === "incremental") {
@@ -180,7 +182,7 @@ const expectedGroupedAdmissionFromEnv = (): ExpectedGroupedAdmission | undefined
 
 const benchmarkRowCount = rowCountFromEnv();
 const groupedWriteMode = groupedWriteModeFromEnv();
-const expectedGroupedAdmission = expectedGroupedAdmissionFromEnv();
+const expectedGroupedAdmission = expectedGroupedAdmissionFromEnv(groupedWriteMode);
 const seedBatchSize = positiveIntegerFromEnv(
   "VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE",
   defaultSeedBatchSize,
@@ -591,17 +593,11 @@ const activeGroupedViewCounts = (
   };
 };
 
-const expectGroupedAdmission = (
-  label: string,
-  counts: {
-    readonly activeFallbackGroupedViews: number;
-    readonly activeIncrementalGroupedViews: number;
-    readonly activeViews: number;
-  },
-): void => {
-  if (expectedGroupedAdmission === undefined) {
-    return;
-  }
+const expectGroupedAdmission = (counts: {
+  readonly activeFallbackGroupedViews: number;
+  readonly activeIncrementalGroupedViews: number;
+  readonly activeViews: number;
+}): void => {
   expect(counts.activeViews).toBe(2);
   if (expectedGroupedAdmission === "incremental") {
     expect(counts.activeFallbackGroupedViews).toBe(0);
@@ -648,7 +644,7 @@ beforeAll(async () => {
 
   const setupHealth = await Effect.runPromise(engine.health());
   const setupCounts = activeGroupedViewCounts(setupHealth, "after setup");
-  expectGroupedAdmission("after setup", setupCounts);
+  expectGroupedAdmission(setupCounts);
 
   profile.deleteKeys = matchingSeedKeysForStatus(
     Math.floor(benchmarkRowCount * 0.66),
@@ -704,7 +700,7 @@ afterAll(async () => {
   if (profile.engine !== undefined) {
     preCleanupHealth = await Effect.runPromise(profile.engine.health());
     const preCleanupCounts = activeGroupedViewCounts(preCleanupHealth, "before cleanup");
-    expectGroupedAdmission("before cleanup", preCleanupCounts);
+    expectGroupedAdmission(preCleanupCounts);
     activeFallbackGroupedViewsBeforeCleanup = preCleanupCounts.activeFallbackGroupedViews;
     activeIncrementalGroupedViewsBeforeCleanup = preCleanupCounts.activeIncrementalGroupedViews;
     activeViewsBeforeCleanup = preCleanupCounts.activeViews;
@@ -764,7 +760,7 @@ afterAll(async () => {
       activeViewsAfterSetup: profile.setupActiveViews,
       activeViewsBeforeCleanup,
       configuredMode: groupedWriteMode,
-      expectedAdmission: expectedGroupedAdmission ?? null,
+      expectedAdmission: expectedGroupedAdmission,
       incrementalAdmissionLimits: groupedIncrementalAdmissionLimits,
       priceThreshold:
         groupedWriteMode === "incremental" ? incrementalPriceThreshold(benchmarkRowCount) : null,
@@ -790,7 +786,7 @@ afterAll(async () => {
       "The benchmark keeps two grouped live subscriptions open: primary region/status aggregates and secondary status/region aggregates.",
       `Seed mutation count: ${profile.rowCount}. Timed mutation count: ${profile.rowMutationCount - profile.rowCount}. Configured write batch size: ${mutationBatchSize}.`,
       `Grouped write mode: ${groupedWriteMode}.`,
-      `Expected grouped admission: ${expectedGroupedAdmission ?? "not asserted"}.`,
+      `Expected grouped admission: ${expectedGroupedAdmission}.`,
       groupedWriteMode === "incremental"
         ? `Incremental mode price threshold: ${incrementalPriceThreshold(benchmarkRowCount)}.`
         : "Fallback mode has no selective price threshold.",

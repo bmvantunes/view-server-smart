@@ -206,6 +206,38 @@ describe("benchmark artifact helpers", () => {
         },
       }),
     ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: Number.NaN,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: Number.POSITIVE_INFINITY,
+        maxQueueDepth: 999,
+        queuedEvents: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: Number.NEGATIVE_INFINITY,
+        queuedEvents: 3,
+      }),
+    ).toBe(false);
+    expect(
+      isBenchmarkEngineHealth({
+        activeSubscriptions: 2,
+        backpressureEvents: 5,
+        maxQueueDepth: 999,
+        queuedEvents: Number.NaN,
+      }),
+    ).toBe(false);
     expect(cleanupLeakCountFromEngineHealth({})).toBe(0);
     expect(backpressureCountFromEngineHealth({})).toBe(0);
     expect(queuedEventCountFromEngineHealth({})).toBe(0);

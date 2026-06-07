@@ -112,6 +112,18 @@ describe("runtime type contracts", () => {
       // @ts-expect-error runtime health path must be a concrete slash-prefixed client URL path.
       healthPath: "*",
     });
+    const invalidGroupedAdmissionLimitKey = makeViewServerRuntime(viewServer, {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limit keys are exact.
+        maxGroupz: 1,
+      },
+    });
+    const invalidGroupedAdmissionLimitValue = makeViewServerRuntime(viewServer, {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limits must be numeric.
+        maxGroups: "1",
+      },
+    });
     expectTypeOf(invalidPublish).not.toBeAny();
     expectTypeOf(invalidSubscribe).not.toBeAny();
     expectTypeOf(invalidTopicPublish).not.toBeAny();
@@ -121,6 +133,8 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidHealthPathOptions).not.toBeAny();
     expectTypeOf(invalidWildcardRpcPathOptions).not.toBeAny();
     expectTypeOf(invalidWildcardHealthPathOptions).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitKey).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitValue).not.toBeAny();
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("port");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("path");
   });

@@ -41,6 +41,18 @@ const invalidTransportHealthOption = createInMemoryViewServer(viewServer, {
     lastError: null,
   }),
 });
+const invalidGroupedAdmissionLimitKey = createInMemoryViewServer(viewServer, {
+  groupedIncrementalAdmissionLimits: {
+    // @ts-expect-error grouped admission limit keys are exact.
+    maxGroupz: 1,
+  },
+});
+const invalidGroupedAdmissionLimitValue = createInMemoryViewServer(viewServer, {
+  groupedIncrementalAdmissionLimits: {
+    // @ts-expect-error grouped admission limits must be numeric.
+    maxGroups: "1",
+  },
+});
 
 describe("in-memory type contracts", () => {
   it("preserves runtime and live client topic types", () => {
@@ -67,5 +79,7 @@ describe("in-memory type contracts", () => {
     expectTypeOf(inMemoryWithGroupedAdmissionLimits.client).toEqualTypeOf<typeof inMemory.client>();
     expectTypeOf(invalidPatch).not.toBeAny();
     expectTypeOf(invalidTransportHealthOption).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitKey).not.toBeAny();
+    expectTypeOf(invalidGroupedAdmissionLimitValue).not.toBeAny();
   });
 });

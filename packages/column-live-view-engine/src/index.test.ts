@@ -10057,6 +10057,7 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const read = yield* makeEventReader(subscription);
       const initial = firstEvent(yield* read(1));
       expectSnapshotEvent(initial);
+      const initialState = stateFromSnapshot(initial);
 
       const admitted = yield* engine.health();
       expect(admitted.topics["orders"].activeFallbackGroupedViews).toBe(0);
@@ -10065,8 +10066,7 @@ describe("ColumnLiveViewEngine validation and health", () => {
       yield* engine.publish("orders", order("3", "open", 5, 3));
       const delta = firstEvent(yield* read(1));
       expectDeltaEvent(delta);
-      const snapshot = yield* engine.snapshot("orders", query);
-      expect(normalizeDecimalFields(snapshot.rows)).toStrictEqual([
+      const expectedRows = [
         {
           rowCount: 1n,
           status: "closed",
@@ -10077,7 +10077,11 @@ describe("ColumnLiveViewEngine validation and health", () => {
           status: "open",
           totalPrice: "15",
         },
-      ]);
+      ];
+      const convergedState = applyDelta(initialState, delta);
+      expect(normalizeDecimalFields(convergedState.rows)).toStrictEqual(expectedRows);
+      const snapshot = yield* engine.snapshot("orders", query);
+      expect(normalizeDecimalFields(snapshot.rows)).toStrictEqual(expectedRows);
 
       const demoted = yield* engine.health();
       expect(demoted.topics["orders"].activeFallbackGroupedViews).toBe(1);
@@ -10085,6 +10089,70 @@ describe("ColumnLiveViewEngine validation and health", () => {
 
       yield* subscription.close();
     }),
+  );
+
+  it.effect(
+    "demotes active grouped execution when retained value entries exceed admission limits",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* createColumnLiveViewEngine({
+          groupedIncrementalAdmissionLimits: {
+            maxGroups: 10,
+            maxMembers: 10,
+            maxMembersPerGroup: 10,
+            maxRetainedValueEntries: 2,
+          },
+          topics: viewServer.topics,
+        });
+        yield* engine.publishMany("orders", [
+          order("1", "open", 10, 1),
+          order("2", "closed", 20, 2),
+        ]);
+        const query = {
+          groupBy: ["status"],
+          aggregates: {
+            minimumPrice: { aggFunc: "min", field: "price" },
+            rowCount: { aggFunc: "count" },
+          },
+          orderBy: [{ field: "status", direction: "asc" }],
+          limit: 10,
+        } satisfies GroupedQuery<OrderRow>;
+        const subscription = yield* engine.subscribe("orders", query);
+        const read = yield* makeEventReader(subscription);
+        const initial = firstEvent(yield* read(1));
+        expectSnapshotEvent(initial);
+        const initialState = stateFromSnapshot(initial);
+
+        const admitted = yield* engine.health();
+        expect(admitted.topics["orders"].activeFallbackGroupedViews).toBe(0);
+        expect(admitted.topics["orders"].activeIncrementalGroupedViews).toBe(1);
+
+        yield* engine.publish("orders", order("3", "open", 5, 3));
+        const delta = firstEvent(yield* read(1));
+        expectDeltaEvent(delta);
+        const expectedRows = [
+          {
+            minimumPrice: 20,
+            rowCount: 1n,
+            status: "closed",
+          },
+          {
+            minimumPrice: 5,
+            rowCount: 2n,
+            status: "open",
+          },
+        ];
+        const convergedState = applyDelta(initialState, delta);
+        expect(convergedState.rows).toStrictEqual(expectedRows);
+        const snapshot = yield* engine.snapshot("orders", query);
+        expect(snapshot.rows).toStrictEqual(expectedRows);
+
+        const demoted = yield* engine.health();
+        expect(demoted.topics["orders"].activeFallbackGroupedViews).toBe(1);
+        expect(demoted.topics["orders"].activeIncrementalGroupedViews).toBe(0);
+
+        yield* subscription.close();
+      }),
   );
 
   it.effect("subscribes through the runtime-validated entrypoint", () =>

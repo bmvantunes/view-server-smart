@@ -363,6 +363,26 @@ describe("ColumnLiveViewEngine type contract", () => {
     void _invalidKeyConfig;
   });
 
+  it("rejects invalid grouped incremental admission limit options", () => {
+    const _invalidGroupedAdmissionLimitKey: ColumnLiveViewEngineConfig<Topics> = {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limit keys are exact.
+        maxGroupz: 1,
+      },
+      topics: viewServer.topics,
+    };
+    const _invalidGroupedAdmissionLimitValue: ColumnLiveViewEngineConfig<Topics> = {
+      groupedIncrementalAdmissionLimits: {
+        // @ts-expect-error grouped admission limits must be numeric.
+        maxGroups: "1",
+      },
+      topics: viewServer.topics,
+    };
+
+    void _invalidGroupedAdmissionLimitKey;
+    void _invalidGroupedAdmissionLimitValue;
+  });
+
   it("types grouped aggregate snapshots and subscriptions", () => {
     const groupedSnapshot = engine.snapshot("orders", {
       groupBy: ["status"],

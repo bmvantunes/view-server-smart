@@ -51,7 +51,7 @@ export type BenchmarkGroupedWriteAdmission = {
   readonly activeViewsAfterSetup: number;
   readonly activeViewsBeforeCleanup: number;
   readonly configuredMode: "fallback" | "incremental";
-  readonly expectedAdmission: "fallback" | "incremental" | null;
+  readonly expectedAdmission: "fallback" | "incremental";
   readonly incrementalAdmissionLimits: {
     readonly maxGroups: number;
     readonly maxMembers: number;
@@ -174,10 +174,10 @@ export const isBenchmarkEngineHealth = (value: unknown): value is BenchmarkEngin
     return false;
   }
   const hasEngineCounters =
-    typeof value.activeSubscriptions === "number" &&
-    typeof value.backpressureEvents === "number" &&
-    typeof value.maxQueueDepth === "number" &&
-    typeof value.queuedEvents === "number";
+    isFiniteNumber(value.activeSubscriptions) &&
+    isFiniteNumber(value.backpressureEvents) &&
+    isFiniteNumber(value.maxQueueDepth) &&
+    isFiniteNumber(value.queuedEvents);
 
   if (!hasEngineCounters) {
     return false;
