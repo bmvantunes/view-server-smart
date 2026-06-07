@@ -106,24 +106,19 @@ describe("@view-server/runtime", () => {
         activeClients: 1,
         activeStreams: 1,
       });
-      expect({
-        liveClientActiveStreams: runtime.liveClient.health.value.transport.activeStreams,
-        connectedTransport,
-      }).toStrictEqual({
-        liveClientActiveStreams: 1,
-        connectedTransport: {
-          activeClients: 1,
-          activeStreams: 1,
-          activeSubscriptions: 1,
-          messagesPerSecond: 0,
-          bytesPerSecond: 0,
-          queuedMessages: 0,
-          queuedBytes: 0,
-          droppedClients: 0,
-          backpressureEvents: 0,
-          reconnects: 0,
-          lastError: null,
-        },
+      expect(runtime.liveClient.health.value.transport.activeStreams).toBe(1);
+      expect(connectedTransport).toStrictEqual({
+        activeClients: 1,
+        activeStreams: 1,
+        activeSubscriptions: 1,
+        messagesPerSecond: 0,
+        bytesPerSecond: 0,
+        queuedMessages: 0,
+        queuedBytes: 0,
+        droppedClients: 0,
+        backpressureEvents: 0,
+        reconnects: 0,
+        lastError: null,
       });
 
       yield* runtime.client.publish("orders", order("a", 10));
@@ -149,17 +144,10 @@ describe("@view-server/runtime", () => {
       });
 
       const health = yield* fetchHealth(runtime.healthUrl);
-      expect({
-        runtimeUrlUsesConfiguredPath: runtime.url.endsWith("/runtime-rpc"),
-        healthUrlUsesConfiguredPath: runtime.healthUrl.endsWith("/runtime-health"),
-        healthResponseStatus: health.response.status,
-        healthRowCount: health.health.engine.topics.orders.rowCount,
-      }).toStrictEqual({
-        runtimeUrlUsesConfiguredPath: true,
-        healthUrlUsesConfiguredPath: true,
-        healthResponseStatus: 200,
-        healthRowCount: 1,
-      });
+      expect(runtime.url.endsWith("/runtime-rpc")).toBe(true);
+      expect(runtime.healthUrl.endsWith("/runtime-health")).toBe(true);
+      expect(health.response.status).toBe(200);
+      expect(health.health.engine.topics.orders.rowCount).toBe(1);
 
       yield* subscription.close();
       yield* remoteClient.close;
@@ -187,28 +175,17 @@ describe("@view-server/runtime", () => {
   it.live("supports default paths and queue capacity options", () =>
     Effect.gen(function* () {
       const defaultRuntime = yield* makeViewServerRuntime(viewServer);
-      expect({
-        runtimeUrlUsesDefaultPath: defaultRuntime.url.endsWith("/rpc"),
-        healthUrlUsesDefaultPath: defaultRuntime.healthUrl.endsWith("/health"),
-        exposesInternalRuntimeSubscription: "subscribeRuntime" in defaultRuntime.liveClient,
-      }).toStrictEqual({
-        runtimeUrlUsesDefaultPath: true,
-        healthUrlUsesDefaultPath: true,
-        exposesInternalRuntimeSubscription: false,
-      });
+      expect(defaultRuntime.url.endsWith("/rpc")).toBe(true);
+      expect(defaultRuntime.healthUrl.endsWith("/health")).toBe(true);
+      expect("subscribeRuntime" in defaultRuntime.liveClient).toBe(false);
       yield* defaultRuntime.close;
 
       const configuredRuntime = yield* makeViewServerRuntime(viewServer, {
         websocketPort: 0,
         subscriptionQueueCapacity: 1,
       });
-      expect({
-        runtimeUrlUsesDefaultPath: configuredRuntime.url.endsWith("/rpc"),
-        healthUrlUsesDefaultPath: configuredRuntime.healthUrl.endsWith("/health"),
-      }).toStrictEqual({
-        runtimeUrlUsesDefaultPath: true,
-        healthUrlUsesDefaultPath: true,
-      });
+      expect(configuredRuntime.url.endsWith("/rpc")).toBe(true);
+      expect(configuredRuntime.healthUrl.endsWith("/health")).toBe(true);
       yield* configuredRuntime.close;
     }),
   );
@@ -458,15 +435,9 @@ describe("@view-server/runtime", () => {
           Effect.gen(function* () {
             const health = yield* fetchHealth(runtime.healthUrl);
 
-            expect({
-              responseStatus: health.response.status,
-              runtimeStatus: health.health.status,
-              ordersRowCount: health.health.engine.topics.orders.rowCount,
-            }).toStrictEqual({
-              responseStatus: 503,
-              runtimeStatus: "degraded",
-              ordersRowCount: 0,
-            });
+            expect(health.response.status).toBe(503);
+            expect(health.health.status).toBe("degraded");
+            expect(health.health.engine.topics.orders.rowCount).toBe(0);
           }),
         (runtime) => runtime.close.pipe(Effect.ignore),
       );
@@ -493,13 +464,8 @@ describe("@view-server/runtime", () => {
       yield* runtime.liveClient.close;
       const health = yield* runtime.client.health();
 
-      expect({
-        serverCloseCount,
-        runtimeStatus: health.status,
-      }).toStrictEqual({
-        serverCloseCount: 1,
-        runtimeStatus: "stopping",
-      });
+      expect(serverCloseCount).toBe(1);
+      expect(health.status).toBe("stopping");
     }),
   );
 
@@ -527,10 +493,10 @@ describe("@view-server/runtime", () => {
       );
       yield* Deferred.await(serverStarted);
       yield* Effect.sleep("10 millis");
-      expect({ serverCloseCount }).toStrictEqual({ serverCloseCount: 0 });
+      expect(serverCloseCount).toBe(0);
 
       yield* Fiber.interrupt(fiber);
-      expect({ serverCloseCount }).toStrictEqual({ serverCloseCount: 1 });
+      expect(serverCloseCount).toBe(1);
     }),
   );
 
@@ -582,13 +548,8 @@ describe("@view-server/runtime", () => {
         makeViewServerRuntimeWithDependencies(dependencies, viewServer),
       );
 
-      expect({
-        startupFailed: Exit.isFailure(startupExit),
-        runtimeCoreClosed: closed,
-      }).toStrictEqual({
-        startupFailed: true,
-        runtimeCoreClosed: true,
-      });
+      expect(Exit.isFailure(startupExit)).toBe(true);
+      expect(closed).toBe(true);
     }),
   );
 
@@ -652,15 +613,9 @@ describe("@view-server/runtime", () => {
         }),
       );
 
-      expect({
-        startupFailed: Exit.isFailure(startupExit),
-        serverClosed,
-        runtimeCoreClosed,
-      }).toStrictEqual({
-        startupFailed: true,
-        serverClosed: true,
-        runtimeCoreClosed: true,
-      });
+      expect(Exit.isFailure(startupExit)).toBe(true);
+      expect(serverClosed).toBe(true);
+      expect(runtimeCoreClosed).toBe(true);
     }),
   );
 });

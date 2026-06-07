@@ -79,7 +79,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Use `@effect/vitest` for tests. Do not import directly from `vitest` unless there is no equivalent and the exception is documented.
 - Use `expect` / `expectTypeOf` assertions, not `assert.*`. This intentionally overrides the Effect skill preference so server, engine, React, and type tests use one assertion style.
 - Use `toStrictEqual`, not `toEqual`, for structural equality. Exact shape matters for public contracts and wire/runtime events.
-- Prefer full-object `toStrictEqual` assertions over field-by-field assertions when the value shape is stable. Field-by-field checks can hide extra keys, missing keys, and stale contract drift.
+- Prefer full-object `toStrictEqual` assertions when the value under test is already an object and its shape is stable. Do not manufacture wrapper objects just to assert unrelated scalar values; use direct scalar assertions for scalars.
 - Use the Vitest skill before changing type tests, browser tests, coverage, or Vite/Vite+ config.
 - Tests should be dumb and explicit. Avoid branching assertions such as `if (_tag === ...) { expect(...) }`.
 - Do not use `try` / `catch` / `finally` in tests. Keep tests linear; put explicit cleanup at the end or use fixtures/helpers.

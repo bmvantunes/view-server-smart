@@ -469,19 +469,11 @@ describe("defineViewServerConfig", () => {
       },
     });
 
-    expect({
-      kafkaUsaRegion: runtimeOptions.kafka.regions["usa"],
-      ordersKey: viewServer.topics.orders.key,
-      websocketPort: runtimeOptions.websocketPort,
-      tcpPublishPortIsConfig: Config.isConfig(runtimeEnvironmentConfig.tcpPublishPort),
-      runtimePortIsConfig: Config.isConfig(runtimeConfig.port("VIEW_SERVER_TCP_PUBLISH_PORT")),
-    }).toStrictEqual({
-      kafkaUsaRegion: kafkaRegions.usa,
-      ordersKey: "id",
-      websocketPort: runtimeEnvironmentConfig.websocketPort,
-      tcpPublishPortIsConfig: true,
-      runtimePortIsConfig: true,
-    });
+    expect(runtimeOptions.kafka.regions["usa"]).toBe(kafkaRegions.usa);
+    expect(viewServer.topics.orders.key).toBe("id");
+    expect(runtimeOptions.websocketPort).toBe(runtimeEnvironmentConfig.websocketPort);
+    expect(Config.isConfig(runtimeEnvironmentConfig.tcpPublishPort)).toBe(true);
+    expect(Config.isConfig(runtimeConfig.port("VIEW_SERVER_TCP_PUBLISH_PORT"))).toBe(true);
   });
 
   it.effect("defines typed Kafka source codecs", () =>
@@ -507,40 +499,30 @@ describe("defineViewServerConfig", () => {
           }),
       });
 
-      expect({
-        bytesFormat: bytesCodec.format,
-        stringFormat: stringCodec.format,
-        stringKeyFormat: stringKeyCodec.format,
-        jsonSchema: jsonCodec.schema,
-        protobufDescriptor: protobufCodec.descriptor,
-        customCodecName: customCodec.name,
-      }).toStrictEqual({
-        bytesFormat: "bytes",
-        stringFormat: "string",
-        stringKeyFormat: "string",
-        jsonSchema: Order,
-        protobufDescriptor: ordersValueSchema,
-        customCodecName: "custom-order-value",
-      });
+      expect(bytesCodec.format).toBe("bytes");
+      expect(stringCodec.format).toBe("string");
+      expect(stringKeyCodec.format).toBe("string");
+      expect(jsonCodec.schema).toBe(Order);
+      expect(protobufCodec.descriptor).toBe(ordersValueSchema);
+      expect(customCodec.name).toBe("custom-order-value");
       expect(
         yield* decodeKafkaCodec(bytesCodec, {
           bytes: new Uint8Array([1, 2, 3]),
           metadata: kafkaTestMetadata("usa"),
         }),
       ).toStrictEqual(new Uint8Array([1, 2, 3]));
-      expect({
-        stringValue: yield* decodeKafkaCodec(stringCodec, {
+      expect(
+        yield* decodeKafkaCodec(stringCodec, {
           bytes: textEncoder.encode("order-value"),
           metadata: kafkaTestMetadata("usa"),
         }),
-        stringKey: yield* decodeKafkaCodec(stringKeyCodec, {
+      ).toBe("order-value");
+      expect(
+        yield* decodeKafkaCodec(stringKeyCodec, {
           bytes: textEncoder.encode("order-key"),
           metadata: kafkaTestMetadata("usa"),
         }),
-      }).toStrictEqual({
-        stringValue: "order-value",
-        stringKey: "order-key",
-      });
+      ).toBe("order-key");
       expect(
         yield* decodeKafkaCodec(jsonCodec, {
           bytes: textEncoder.encode(
@@ -620,17 +602,10 @@ describe("defineViewServerConfig", () => {
           metadata: kafkaTestMetadata("usa"),
         }),
       );
-      expect({
-        jsonParseFailure: Exit.isFailure(jsonParseFailure),
-        jsonSchemaFailure: Exit.isFailure(jsonSchemaFailure),
-        protobufFailure: Exit.isFailure(protobufFailure),
-        customFailure: Exit.isFailure(customFailure),
-      }).toStrictEqual({
-        jsonParseFailure: true,
-        jsonSchemaFailure: true,
-        protobufFailure: true,
-        customFailure: true,
-      });
+      expect(Exit.isFailure(jsonParseFailure)).toBe(true);
+      expect(Exit.isFailure(jsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(protobufFailure)).toBe(true);
+      expect(Exit.isFailure(customFailure)).toBe(true);
 
       expectTypeOf<KafkaCodecType<typeof bytesCodec>>().toEqualTypeOf<Uint8Array>();
       expectTypeOf<KafkaCodecType<typeof stringCodec>>().toEqualTypeOf<string>();
@@ -732,25 +707,18 @@ describe("public type surface", () => {
       message: "client queue exceeded configured limits",
     };
 
-    expect({
-      firstSnapshotRow: snapshot.rows[0],
-      sourceRegion: metadata.sourceRegion,
-      ordersRowCount: health.engine.topics["orders"].rowCount,
-      backpressure,
-    }).toStrictEqual({
-      firstSnapshotRow: {
-        id: "order-1",
-      },
-      sourceRegion: "usa",
-      ordersRowCount: 1,
-      backpressure: {
-        type: "status",
-        topic: "orders",
-        queryId: "query-1",
-        status: "error",
-        code: "BackpressureExceeded",
-        message: "client queue exceeded configured limits",
-      },
+    expect(snapshot.rows[0]).toStrictEqual({
+      id: "order-1",
+    });
+    expect(metadata.sourceRegion).toBe("usa");
+    expect(health.engine.topics["orders"].rowCount).toBe(1);
+    expect(backpressure).toStrictEqual({
+      type: "status",
+      topic: "orders",
+      queryId: "query-1",
+      status: "error",
+      code: "BackpressureExceeded",
+      message: "client queue exceeded configured limits",
     });
     expectTypeOf<LiveTransportAdapter>().toHaveProperty("subscribe");
     expectTypeOf<Effect.Success<ReturnType<LiveTransportAdapter["subscribe"]>>>().toEqualTypeOf<
@@ -905,27 +873,24 @@ describe("public type surface", () => {
       ["trades", 11n, "degraded"],
       ["positions", 0n, "starting"],
     ]);
+    expect(viewServerHealthSummaryFromHealth(healthWithoutKafka, 123n).maxKafkaLag).toBe(0n);
+    expect(stoppingRows.map((row) => row.status)).toStrictEqual([
+      "stopping",
+      "stopping",
+      "stopping",
+    ]);
     expect({
-      healthWithoutKafkaMaxLag: viewServerHealthSummaryFromHealth(healthWithoutKafka, 123n)
-        .maxKafkaLag,
-      stoppingStatuses: stoppingRows.map((row) => row.status),
-      reservedTopics: {
-        summary: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
-        detailed: VIEW_SERVER_HEALTH_TOPIC,
-        detailedIsReserved: viewServerTopicNameIsReserved(VIEW_SERVER_HEALTH_TOPIC),
-        ordersIsReserved: viewServerTopicNameIsReserved("orders"),
-        all: viewServerReservedTopicNames,
-      },
+      summary: VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
+      detailed: VIEW_SERVER_HEALTH_TOPIC,
+      detailedIsReserved: viewServerTopicNameIsReserved(VIEW_SERVER_HEALTH_TOPIC),
+      ordersIsReserved: viewServerTopicNameIsReserved("orders"),
+      all: viewServerReservedTopicNames,
     }).toStrictEqual({
-      healthWithoutKafkaMaxLag: 0n,
-      stoppingStatuses: ["stopping", "stopping", "stopping"],
-      reservedTopics: {
-        summary: "__view_server_health_summary",
-        detailed: "__view_server_health",
-        detailedIsReserved: true,
-        ordersIsReserved: false,
-        all: [VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC],
-      },
+      summary: "__view_server_health_summary",
+      detailed: "__view_server_health",
+      detailedIsReserved: true,
+      ordersIsReserved: false,
+      all: [VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC],
     });
     expectTypeOf(summary).toEqualTypeOf<ViewServerHealthSummary<typeof viewServer.topics>>();
     expectTypeOf(summaryRow).toEqualTypeOf<ViewServerHealthSummaryRow<typeof viewServer.topics>>();
@@ -1212,11 +1177,7 @@ describe("public type surface", () => {
         },
       });
 
-      expect({
-        viewServerTopic: topic.viewServerTopic,
-      }).toStrictEqual({
-        viewServerTopic: "orders",
-      });
+      expect(topic.viewServerTopic).toBe("orders");
       expect(
         yield* decodeKafkaTopicMessage(topic, {
           keyBytes: textEncoder.encode("order-1"),
@@ -1264,11 +1225,7 @@ describe("public type surface", () => {
         },
       });
 
-      expect({
-        keyedTopicDescriptor: keyedTopic.key.descriptor,
-      }).toStrictEqual({
-        keyedTopicDescriptor: ordersKeySchema,
-      });
+      expect(keyedTopic.key.descriptor).toBe(ordersKeySchema);
       expect(
         yield* decodeKafkaTopicMessage(keyedTopic, {
           keyBytes: toBinary(
@@ -1325,11 +1282,7 @@ describe("public type surface", () => {
           metadata: kafkaTestMetadata("usa"),
         }),
       );
-      expect({
-        mappingFailed: Exit.isFailure(mappingFailure),
-      }).toStrictEqual({
-        mappingFailed: true,
-      });
+      expect(Exit.isFailure(mappingFailure)).toBe(true);
     }),
   );
 
@@ -1386,13 +1339,8 @@ describe("public type surface", () => {
       },
     });
 
-    expect({
-      jsonTopicValueFormat: jsonTopic.value.format,
-      customTopicValueFormat: customTopic.value.format,
-    }).toStrictEqual({
-      jsonTopicValueFormat: "json",
-      customTopicValueFormat: "custom",
-    });
+    expect(jsonTopic.value.format).toBe("json");
+    expect(customTopic.value.format).toBe("custom");
   });
 
   it("keeps real Protobuf-ES v2 generated schema inference typechecked", () => {

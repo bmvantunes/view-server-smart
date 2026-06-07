@@ -436,68 +436,63 @@ describe("@view-server/runtime-core", () => {
       const summaryEvents = yield* summary.events.pipe(Stream.take(1), Stream.runCollect);
       const detailEvents = yield* detail.events.pipe(Stream.take(1), Stream.runCollect);
 
-      expect({
-        summaryEvents: Array.from(summaryEvents),
-        detailEvents: Array.from(detailEvents),
-      }).toStrictEqual({
-        summaryEvents: [
-          {
-            type: "snapshot",
-            topic: "__view_server_health_summary",
-            queryId: "health-summary",
-            version: 0,
-            keys: ["summary"],
-            rows: [
-              {
-                id: "summary",
-                status: "degraded",
-                runtimeStatus: "degraded",
-                connectionStatus: "connected",
-                unhealthyTopics: [],
-                updatedAtNanos: expect.anything(),
-                maxKafkaLag: 7n,
-              },
-            ],
-            totalRows: 1,
-          },
-        ],
-        detailEvents: [
-          {
-            type: "snapshot",
-            topic: "__view_server_health",
-            queryId: "health",
-            version: 0,
-            keys: ["orders"],
-            rows: [
-              {
-                id: "orders",
-                status: "ready",
-                rowCount: 0,
-                liveRowCount: 0,
-                deletedRowCount: 0,
-                version: 0,
-                lastMutationAt: null,
-                mutationsPerSecond: 0,
-                rowsPerSecond: 0,
-                pendingMutationBatches: 0,
-                activeFallbackGroupedViews: 0,
-                activeIncrementalGroupedViews: 0,
-                activeViews: 0,
-                activeSubscriptions: 0,
-                queuedEvents: 0,
-                maxQueueDepth: 0,
-                backpressureEvents: 0,
-                memoryBytes: 0,
-                tombstoneCount: 0,
-                compactionPending: false,
-                kafkaLag: 7n,
-                updatedAtNanos: expect.anything(),
-              },
-            ],
-            totalRows: 1,
-          },
-        ],
-      });
+      expect(Array.from(summaryEvents)).toStrictEqual([
+        {
+          type: "snapshot",
+          topic: "__view_server_health_summary",
+          queryId: "health-summary",
+          version: 0,
+          keys: ["summary"],
+          rows: [
+            {
+              id: "summary",
+              status: "degraded",
+              runtimeStatus: "degraded",
+              connectionStatus: "connected",
+              unhealthyTopics: [],
+              updatedAtNanos: expect.anything(),
+              maxKafkaLag: 7n,
+            },
+          ],
+          totalRows: 1,
+        },
+      ]);
+      expect(Array.from(detailEvents)).toStrictEqual([
+        {
+          type: "snapshot",
+          topic: "__view_server_health",
+          queryId: "health",
+          version: 0,
+          keys: ["orders"],
+          rows: [
+            {
+              id: "orders",
+              status: "ready",
+              rowCount: 0,
+              liveRowCount: 0,
+              deletedRowCount: 0,
+              version: 0,
+              lastMutationAt: null,
+              mutationsPerSecond: 0,
+              rowsPerSecond: 0,
+              pendingMutationBatches: 0,
+              activeFallbackGroupedViews: 0,
+              activeIncrementalGroupedViews: 0,
+              activeViews: 0,
+              activeSubscriptions: 0,
+              queuedEvents: 0,
+              maxQueueDepth: 0,
+              backpressureEvents: 0,
+              memoryBytes: 0,
+              tombstoneCount: 0,
+              compactionPending: false,
+              kafkaLag: 7n,
+              updatedAtNanos: expect.anything(),
+            },
+          ],
+          totalRows: 1,
+        },
+      ]);
 
       yield* summary.close();
       yield* detail.close();
