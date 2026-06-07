@@ -3,6 +3,7 @@ import {
   fromBigInt,
   fromNumberUnsafe,
   isBigDecimal,
+  subtract as subtractBigDecimal,
   sum as sumBigDecimal,
   type BigDecimal,
 } from "effect/BigDecimal";
@@ -26,36 +27,63 @@ export type RuntimeGroupedAggregate =
       readonly resultKind: "bigint" | "bigDecimal";
     };
 
+type CountAggregateState = {
+  readonly aggFunc: "count";
+  count: bigint;
+};
+
+type CountDistinctAggregateState = {
+  readonly aggFunc: "countDistinct";
+  readonly values: Map<string, number>;
+  count: bigint;
+};
+
+type BigIntSumAggregateState = {
+  readonly aggFunc: "sum";
+  readonly resultKind: "bigint";
+  bigintTotal: bigint;
+};
+
+type BigDecimalSumAggregateState = {
+  readonly aggFunc: "sum";
+  readonly resultKind: "bigDecimal";
+  decimalTotal: BigDecimal;
+};
+
+type AverageAggregateState = {
+  readonly aggFunc: "avg";
+  count: bigint;
+  total: BigDecimal;
+};
+
+type MinMaxAggregateValueState = {
+  count: number;
+  value: unknown;
+};
+
+type BaseMinMaxAggregateState = {
+  readonly aggFunc: "min" | "max";
+  value: unknown;
+  hasValue: boolean;
+};
+
+export type RetainedMinMaxAggregateState = BaseMinMaxAggregateState & {
+  readonly values: Map<string, MinMaxAggregateValueState>;
+};
+
+type NonMinMaxAggregateState =
+  | CountAggregateState
+  | CountDistinctAggregateState
+  | BigIntSumAggregateState
+  | BigDecimalSumAggregateState
+  | AverageAggregateState;
+
 type AggregateState =
-  | {
-      readonly aggFunc: "count";
-      count: bigint;
-    }
-  | {
-      readonly aggFunc: "countDistinct";
-      readonly values: Set<string>;
-      count: bigint;
-    }
-  | {
-      readonly aggFunc: "sum";
-      readonly resultKind: "bigint";
-      bigintTotal: bigint;
-    }
-  | {
-      readonly aggFunc: "sum";
-      readonly resultKind: "bigDecimal";
-      decimalTotal: BigDecimal;
-    }
-  | {
-      readonly aggFunc: "avg";
-      count: bigint;
-      total: BigDecimal;
-    }
-  | {
-      readonly aggFunc: "min" | "max";
-      value: unknown;
-      hasValue: boolean;
-    };
+  | NonMinMaxAggregateState
+  | BaseMinMaxAggregateState
+  | RetainedMinMaxAggregateState;
+
+export type ReversibleAggregateState = NonMinMaxAggregateState | RetainedMinMaxAggregateState;
 
 export type GroupState = {
   readonly key: string;
@@ -63,7 +91,8 @@ export type GroupState = {
   readonly aggregates: Record<string, AggregateState>;
 };
 
-export type MaterializedIncrementalGroupState = GroupState & {
+export type MaterializedIncrementalGroupState = Omit<GroupState, "aggregates"> & {
+  readonly aggregates: Record<string, ReversibleAggregateState>;
   readonly members: Map<string, RowObject>;
 };
 
@@ -94,7 +123,7 @@ const emptyAggregateState = (aggregate: RuntimeGroupedAggregate): AggregateState
   if (aggregate.aggFunc === "countDistinct") {
     return {
       aggFunc: "countDistinct",
-      values: new Set<string>(),
+      values: new Map<string, number>(),
       count: 0n,
     };
   }
@@ -125,6 +154,50 @@ const emptyAggregateState = (aggregate: RuntimeGroupedAggregate): AggregateState
   };
 };
 
+const emptyReversibleAggregateState = (
+  aggregate: RuntimeGroupedAggregate,
+): ReversibleAggregateState => {
+  if (aggregate.aggFunc === "count") {
+    return {
+      aggFunc: "count",
+      count: 0n,
+    };
+  }
+  if (aggregate.aggFunc === "countDistinct") {
+    return {
+      aggFunc: "countDistinct",
+      values: new Map<string, number>(),
+      count: 0n,
+    };
+  }
+  if (aggregate.aggFunc === "sum") {
+    return aggregate.resultKind === "bigint"
+      ? {
+          aggFunc: "sum",
+          resultKind: "bigint",
+          bigintTotal: 0n,
+        }
+      : {
+          aggFunc: "sum",
+          resultKind: "bigDecimal",
+          decimalTotal: fromBigInt(0n),
+        };
+  }
+  if (aggregate.aggFunc === "avg") {
+    return {
+      aggFunc: "avg",
+      count: 0n,
+      total: fromBigInt(0n),
+    };
+  }
+  return {
+    aggFunc: aggregate.aggFunc,
+    values: new Map<string, MinMaxAggregateValueState>(),
+    value: undefined,
+    hasValue: false,
+  };
+};
+
 const aggregateFieldValue = (row: RowObject, aggregate: RuntimeGroupedAggregate): unknown =>
   "field" in aggregate ? fieldValue(row, aggregate.field) : undefined;
 
@@ -139,10 +212,13 @@ export const updateAggregateState = (
     return;
   }
   if (state.aggFunc === "countDistinct") {
-    const sizeBefore = state.values.size;
-    state.values.add(stableQueryValueString(value));
-    if (state.values.size !== sizeBefore) {
+    const key = stableQueryValueString(value);
+    const count = state.values.get(key);
+    if (count === undefined) {
+      state.values.set(key, 1);
       state.count += 1n;
+    } else {
+      state.values.set(key, count + 1);
     }
     return;
   }
@@ -167,6 +243,19 @@ export const updateAggregateState = (
     }
     return;
   }
+  if ("values" in state) {
+    const values = state.values;
+    const key = stableQueryValueString(value);
+    const entry = values.get(key);
+    if (entry === undefined) {
+      values.set(key, {
+        count: 1,
+        value: cloneUnknown(value),
+      });
+    } else {
+      entry.count += 1;
+    }
+  }
   if (!state.hasValue) {
     state.value = cloneUnknown(value);
     state.hasValue = true;
@@ -179,6 +268,87 @@ export const updateAggregateState = (
   if ((state.aggFunc === "min" && comparison < 0) || (state.aggFunc === "max" && comparison > 0)) {
     state.value = cloneUnknown(value);
   }
+};
+
+const recomputeMinMaxAggregateState = (state: RetainedMinMaxAggregateState): void => {
+  let nextValue: unknown;
+  let hasValue = false;
+  for (const entry of state.values.values()) {
+    if (!hasValue) {
+      nextValue = cloneUnknown(entry.value);
+      hasValue = true;
+      continue;
+    }
+    const comparison = compareQueryValue(entry.value, nextValue);
+    const isBetterValue = state.aggFunc === "min" ? comparison < 0 : comparison > 0;
+    if (isBetterValue) {
+      nextValue = cloneUnknown(entry.value);
+    }
+  }
+  state.value = nextValue;
+  state.hasValue = hasValue;
+};
+
+export const removeAggregateState = (
+  state: ReversibleAggregateState,
+  aggregate: RuntimeGroupedAggregate,
+  row: RowObject,
+): RetainedMinMaxAggregateState | undefined => {
+  const value = aggregateFieldValue(row, aggregate);
+  if (state.aggFunc === "count") {
+    state.count -= 1n;
+    return undefined;
+  }
+  if (state.aggFunc === "countDistinct") {
+    const key = stableQueryValueString(value);
+    const count = state.values.get(key)!;
+    if (count === 1) {
+      state.values.delete(key);
+      state.count -= 1n;
+    } else {
+      state.values.set(key, count - 1);
+    }
+    return undefined;
+  }
+  if (state.aggFunc === "sum") {
+    if (state.resultKind === "bigint") {
+      if (typeof value === "bigint") {
+        state.bigintTotal -= value;
+      }
+      return undefined;
+    }
+    const decimal = runtimeValueToDecimal(value);
+    if (decimal !== undefined) {
+      state.decimalTotal = subtractBigDecimal(state.decimalTotal, decimal);
+    }
+    return undefined;
+  }
+  if (state.aggFunc === "avg") {
+    const decimal = runtimeValueToDecimal(value);
+    if (decimal !== undefined) {
+      state.count -= 1n;
+      state.total = subtractBigDecimal(state.total, decimal);
+    }
+    return undefined;
+  }
+  const key = stableQueryValueString(value);
+  const values = state.values;
+  const entry = values.get(key)!;
+  if (entry.count > 1) {
+    entry.count -= 1;
+    return undefined;
+  }
+  values.delete(key);
+  if (state.hasValue && stableQueryValueString(state.value) === key) {
+    return state;
+  }
+  return undefined;
+};
+
+export const recomputeRetainedMinMaxAggregateState = (
+  state: RetainedMinMaxAggregateState,
+): void => {
+  recomputeMinMaxAggregateState(state);
 };
 
 const aggregateStateValue = (state: AggregateState): unknown => {
@@ -239,33 +409,21 @@ export const newIncrementalGroupState = (
   groupBy: ReadonlyArray<string>,
   aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
   row: RowObject,
-): MaterializedIncrementalGroupState => ({
-  ...newGroupState(key, groupBy, aggregates, row),
-  members: new Map(),
-});
-
-const resetAggregateStates = (
-  group: GroupState,
-  aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
-): void => {
-  for (const key of Object.keys(group.aggregates)) {
-    delete group.aggregates[key];
+): MaterializedIncrementalGroupState => {
+  const resultRow: Record<string, unknown> = {};
+  for (const field of groupBy) {
+    resultRow[field] = cloneUnknown(fieldValue(row, field));
   }
+  const aggregateStates: Record<string, ReversibleAggregateState> = {};
   for (const [alias, aggregate] of Object.entries(aggregates)) {
-    group.aggregates[alias] = emptyAggregateState(aggregate);
+    aggregateStates[alias] = emptyReversibleAggregateState(aggregate);
   }
-};
-
-export const recomputeIncrementalGroupState = (
-  group: MaterializedIncrementalGroupState,
-  aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
-): void => {
-  resetAggregateStates(group, aggregates);
-  for (const row of group.members.values()) {
-    for (const [alias, aggregate] of Object.entries(aggregates)) {
-      updateAggregateState(group.aggregates[alias]!, aggregate, row);
-    }
-  }
+  return {
+    key,
+    row: resultRow,
+    aggregates: aggregateStates,
+    members: new Map(),
+  };
 };
 
 export const finalizeGroup = (group: GroupState): StoredRowOf<RowObject> => {
