@@ -117,6 +117,10 @@ describe("runtime type contracts", () => {
       // @ts-expect-error runtime options reject string ports.
       websocketPort: "8080",
     });
+    const invalidTcpPublishPortOptions = makeViewServerRuntime(viewServer, {
+      // @ts-expect-error TCP publish ingress is not wired by the runtime package yet.
+      tcpPublishPort: 8081,
+    });
     const invalidPathOptions = makeViewServerRuntime(viewServer, {
       // @ts-expect-error runtime paths must be absolute HTTP paths.
       rpcPath: "runtime-rpc",
@@ -162,6 +166,25 @@ describe("runtime type contracts", () => {
         },
       },
     });
+    const invalidKafkaOptionKey = makeViewServerRuntime(viewServer, {
+      kafka: {
+        // @ts-expect-error runtime Kafka options reject misspelled consumer group keys.
+        consumerGroupID: "view-server-typo",
+        regions: usaKafkaRegions,
+        topics: {
+          orders: usaKafkaTopic({
+            regions: ["usa"],
+            value: kafka.json(Order),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              price: value.price,
+            }),
+          }),
+        },
+      },
+    });
     const invalidKafkaRegionRuntime = makeViewServerRuntime(viewServer, {
       kafka: {
         regions: usaKafkaRegions,
@@ -176,6 +199,7 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidTopicPublish).not.toBeAny();
     expectTypeOf(invalidSnapshot).not.toBeAny();
     expectTypeOf(invalidOptions).not.toBeAny();
+    expectTypeOf(invalidTcpPublishPortOptions).not.toBeAny();
     expectTypeOf(invalidPathOptions).not.toBeAny();
     expectTypeOf(invalidHealthPathOptions).not.toBeAny();
     expectTypeOf(invalidWildcardRpcPathOptions).not.toBeAny();
@@ -185,8 +209,10 @@ describe("runtime type contracts", () => {
     expectTypeOf<Effect.Success<typeof runtimeWithKafka>>().toMatchTypeOf<
       ViewServerRuntime<typeof viewServer.topics>
     >();
+    expectTypeOf(invalidKafkaOptionKey).not.toBeAny();
     expectTypeOf(invalidKafkaRegionRuntime).not.toBeAny();
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("port");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("path");
+    expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("tcpPublishPort");
   });
 });

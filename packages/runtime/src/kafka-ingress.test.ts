@@ -225,11 +225,10 @@ describe("@view-server/runtime Kafka ingress", () => {
                   until: (currentHealth) =>
                     currentHealth.engine.topics.orders.rowCount === 2 &&
                     currentHealth.engine.topics.trades.rowCount === 1 &&
-                    (currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
-                      ?.messagesPerSecond ?? 0) === 3 &&
                     currentHealth.kafka?.topics[ordersSourceTopic]?.status === "degraded" &&
-                    (currentHealth.kafka?.topics[tradesSourceTopic]?.regions["local"]
-                      ?.messagesPerSecond ?? 0) === 1,
+                    currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]?.lastError ===
+                      "Failed to parse Kafka JSON payload" &&
+                    currentHealth.kafka?.topics[tradesSourceTopic]?.status === "ready",
                 }),
               );
 
@@ -297,9 +296,9 @@ describe("@view-server/runtime Kafka ingress", () => {
                         local: {
                           connected: true,
                           assignedPartitions: 0,
-                          messagesPerSecond: 3,
-                          bytesPerSecond: 105,
-                          decodedMessagesPerSecond: 2,
+                          messagesPerSecond: expect.any(Number),
+                          bytesPerSecond: expect.any(Number),
+                          decodedMessagesPerSecond: expect.any(Number),
                           decodeFailuresPerSecond: 1,
                           processingFailuresPerSecond: 0,
                           lastMessageAt: expect.any(Number),

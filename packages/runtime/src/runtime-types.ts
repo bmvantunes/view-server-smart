@@ -37,13 +37,28 @@ export type ViewServerRuntimeOptions<
 > = {
   readonly host?: string;
   readonly websocketPort?: number;
-  readonly tcpPublishPort?: number;
   readonly rpcPath?: RuntimeHttpPath;
   readonly healthPath?: RuntimeHttpPath;
   readonly kafka?: ViewServerKafkaRuntimeOptions<Topics, Regions>;
   readonly groupedIncrementalAdmissionLimits?: Partial<GroupedIncrementalAdmissionLimits>;
   readonly subscriptionQueueCapacity?: number;
 };
+
+type RejectExtraKeys<Candidate, Shape> = {
+  readonly [Key in Exclude<keyof Candidate, keyof Shape>]: never;
+};
+
+type RuntimeKafkaExactKeysConstraint<Options> = Options extends {
+  readonly kafka: infer CandidateKafka;
+}
+  ? {
+      readonly kafka: CandidateKafka &
+        RejectExtraKeys<
+          CandidateKafka,
+          ViewServerKafkaRuntimeOptions<ViewServerRuntimeTopicDefinitions>
+        >;
+    }
+  : unknown;
 
 type RuntimeKafkaRegionConstraint<
   Topics extends ViewServerRuntimeTopicDefinitions,
@@ -71,7 +86,10 @@ type RuntimeKafkaRegionConstraint<
 export type ViewServerRuntimeOptionsInput<
   Topics extends ViewServerRuntimeTopicDefinitions,
   Options extends ViewServerRuntimeOptions<Topics> = ViewServerRuntimeOptions<Topics>,
-> = Options & RuntimeKafkaRegionConstraint<Topics, Options>;
+> = Options &
+  RejectExtraKeys<Options, ViewServerRuntimeOptions<Topics>> &
+  RuntimeKafkaExactKeysConstraint<Options> &
+  RuntimeKafkaRegionConstraint<Topics, Options>;
 
 export type ViewServerRuntime<Topics extends ViewServerRuntimeTopicDefinitions> = {
   readonly url: string;

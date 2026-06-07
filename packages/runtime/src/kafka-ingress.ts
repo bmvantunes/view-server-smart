@@ -31,7 +31,10 @@ export type StartedKafkaRegionConsumer = {
 };
 
 type KafkaConsumer = Consumer<Buffer, Buffer, Buffer, Buffer>;
-type KafkaConsumerMessage = Message<Buffer, Buffer, Buffer, Buffer>;
+type KafkaMessageBytes = Buffer | null | undefined;
+type KafkaConsumerMessage = Message<KafkaMessageBytes, KafkaMessageBytes, Buffer, Buffer>;
+
+const emptyMessageBytes = Buffer.alloc(0);
 
 export const messageFromUnknown = (error: unknown): string => {
   if (error instanceof Error) {
@@ -142,7 +145,7 @@ const makeKafkaConsumer = Effect.fn("ViewServerRuntime.kafka.consumer.make")(fun
   consumerGroupId: string,
 ) {
   const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
-    autocreateTopics: true,
+    autocreateTopics: false,
     bootstrapBrokers: [...bootstrapBrokers(brokers)],
     clientId: `view-server-${region}`,
     groupId: consumerGroupId,
@@ -193,8 +196,8 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
     return;
   }
   const nowMillis = yield* Clock.currentTimeMillis;
-  const keyBytes = message.key;
-  const valueBytes = message.value;
+  const keyBytes = message.key ?? emptyMessageBytes;
+  const valueBytes = message.value ?? emptyMessageBytes;
   const messageBytes = valueBytes.byteLength + keyBytes.byteLength;
   const metadata: KafkaMessageMetadata = {
     sourceTopic,

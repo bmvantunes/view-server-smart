@@ -226,14 +226,23 @@ export const makeViewServerKafkaHealthLedger = <
 }): ViewServerKafkaHealthLedger<Topics> => {
   const regions = new Map<string, KafkaRegionLedger>();
   const topics = new Map<string, KafkaTopicLedger>();
+  const activeRegions = new Set<string>();
+
+  for (const topic of Object.values(input.topics)) {
+    for (const region of topic.regions) {
+      activeRegions.add(region);
+    }
+  }
 
   for (const [region, brokers] of Object.entries(input.regions)) {
-    regions.set(region, {
-      status: "starting",
-      brokers,
-      lastConnectedAt: null,
-      lastError: null,
-    });
+    if (activeRegions.has(region)) {
+      regions.set(region, {
+        status: "starting",
+        brokers,
+        lastConnectedAt: null,
+        lastError: null,
+      });
+    }
   }
 
   for (const [sourceTopic, topic] of Object.entries(input.topics)) {
@@ -325,7 +334,8 @@ export const makeViewServerKafkaHealthLedger = <
     messageDecoded: (sourceTopic, region, input) =>
       Effect.sync(() => {
         const ledger = getTopicRegion(topics, sourceTopic, region);
-        if (ledger !== undefined) {
+        const topic = topics.get(sourceTopic);
+        if (ledger !== undefined && topic !== undefined) {
           incrementWindow(ledger, input.nowMillis, {
             bytes: input.bytes,
             decoded: 1,
@@ -338,6 +348,7 @@ export const makeViewServerKafkaHealthLedger = <
           ledger.highWatermarkOffset = input.offset;
           ledger.committedOffset = input.offset;
           ledger.lastError = null;
+          refreshTopicStatus(topic);
         }
       }),
     decodeFailed: (sourceTopic, region, input) =>
