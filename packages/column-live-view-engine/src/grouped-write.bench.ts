@@ -66,10 +66,12 @@ type BenchmarkProfile = {
   deltaVersionCount: number;
   deleteKeys: ReadonlyArray<string>;
   engine: Engine | undefined;
+  extremeReplaceIndexes: ReadonlyArray<number>;
   groupMoveKeys: ReadonlyArray<string>;
   memoryAfterSetup: BenchmarkMemorySnapshot | undefined;
   nextAppendIndex: number;
   nextDeleteKeyIndex: number;
+  nextExtremeReplaceIndex: number;
   nextGroupMoveKeyIndex: number;
   nextSameGroupPatchKeyIndex: number;
   regionStatusReader: GroupedEventReader | undefined;
@@ -204,10 +206,12 @@ const profile: BenchmarkProfile = {
   deltaVersionCount: 0,
   deleteKeys: [],
   engine: undefined,
+  extremeReplaceIndexes: [],
   groupMoveKeys: [],
   memoryAfterSetup: undefined,
   nextAppendIndex: benchmarkRowCount,
   nextDeleteKeyIndex: 0,
+  nextExtremeReplaceIndex: 0,
   nextGroupMoveKeyIndex: 0,
   nextSameGroupPatchKeyIndex: 0,
   regionStatusReader: undefined,
@@ -283,6 +287,7 @@ const appendedRows = (startIndex: number, generation: number): ReadonlyArray<Ord
       ? {
           ...generatedOrder("grouped-append", startIndex + offset, generation),
           price: incrementalPriceThreshold(benchmarkRowCount) + offset,
+          region: "synthetic-append",
           status: "open",
         }
       : generatedOrder("grouped-append", startIndex + offset, generation),
@@ -309,11 +314,52 @@ const matchingSeedKeysForStatus = (
   return keys;
 };
 
+const matchingSeedIndexesForGroup = (
+  requiredCount: number,
+  status: OrderStatus,
+  requiredRegion: string,
+): ReadonlyArray<number> => {
+  const rows: Array<OrderRow> = [];
+  let index = 0;
+  while (index < benchmarkRowCount) {
+    const row = seedOrder(index);
+    if (
+      row.status === status &&
+      row.region === requiredRegion &&
+      rowMatchesGroupedWriteMode(index)
+    ) {
+      rows.push(row);
+    }
+    index += 1;
+  }
+  rows.sort((left, right) => left.price - right.price || left.updatedAt - right.updatedAt);
+  if (rows.length < requiredCount) {
+    throw new Error(
+      `Expected ${requiredCount} seeded ${requiredRegion}/${status} row(s) for grouped write benchmark, found ${rows.length}.`,
+    );
+  }
+  return rows
+    .slice(0, requiredCount)
+    .map((row) => Number.parseInt(row.id.slice("order-".length), 10));
+};
+
+const extremeReplacementRows = (
+  indexes: ReadonlyArray<number>,
+  generation: number,
+): ReadonlyArray<OrderRow> =>
+  indexes.map((index, offset) => ({
+    ...seedOrder(index),
+    price: 5_000_000 + generation + offset,
+    quantity: BigInt(20_000 + offset),
+    updatedAt: 5_000_000_000 + generation + offset,
+  }));
+
 const primaryGroupedAggregateQuery = () => {
   const base = {
     groupBy: ["region", "status"],
     aggregates: {
       averagePrice: { aggFunc: "avg", field: "price" },
+      distinctOrders: { aggFunc: "countDistinct", field: "id" },
       maxPrice: { aggFunc: "max", field: "price" },
       minPrice: { aggFunc: "min", field: "price" },
       rowCount: { aggFunc: "count" },
@@ -342,6 +388,7 @@ const secondaryGroupedAggregateQuery = () => {
     groupBy: ["status", "region"],
     aggregates: {
       averagePrice: { aggFunc: "avg", field: "price" },
+      distinctOrders: { aggFunc: "countDistinct", field: "id" },
       maxUpdatedAt: { aggFunc: "max", field: "updatedAt" },
       rowCount: { aggFunc: "count" },
       totalPrice: { aggFunc: "sum", field: "price" },
@@ -499,6 +546,7 @@ beforeAll(async () => {
     "open",
   );
   profile.engine = engine;
+  profile.extremeReplaceIndexes = matchingSeedIndexesForGroup(requiredMutationKeys, "open", "emea");
   profile.groupMoveKeys = matchingSeedKeysForStatus(
     Math.floor(benchmarkRowCount * 0.33),
     requiredMutationKeys,
@@ -574,6 +622,7 @@ afterAll(async () => {
   profile.memoryAfterSetup = undefined;
   profile.regionStatusReader = undefined;
   profile.deleteKeys = [];
+  profile.extremeReplaceIndexes = [];
   profile.groupMoveKeys = [];
   profile.sameGroupPatchKeys = [];
   profile.statusReader = undefined;
@@ -584,6 +633,7 @@ afterAll(async () => {
     backpressureCount: backpressureCountFromEngineHealth(health),
     benchmarkCases: [
       "grouped publishMany append batch",
+      "grouped publishMany replace extrema batch",
       "grouped patch aggregate values",
       "grouped patch group moves",
       "grouped delete existing rows",
@@ -635,6 +685,26 @@ describe(`grouped write engine benchmark: ${profile.rowCount} rows`, () => {
       profile.rowMutationCount += rows.length;
       await Effect.runPromise(engine.publishMany("orders", rows));
       await drainDeltas(profile, "grouped publishMany append batch");
+    },
+    benchOptions,
+  );
+
+  bench(
+    "grouped publishMany replace extrema batch",
+    async () => {
+      const engine = profileEngine(profile);
+      const start = profile.nextExtremeReplaceIndex;
+      const indexes = profile.extremeReplaceIndexes.slice(start, start + mutationBatchSize);
+      if (indexes.length !== mutationBatchSize) {
+        throw new Error("Grouped write benchmark exhausted extrema replacement indexes.");
+      }
+      profile.nextExtremeReplaceIndex += indexes.length;
+      profile.deltaVersionCount += 1;
+      profile.rowMutationCount += indexes.length;
+      await Effect.runPromise(
+        engine.publishMany("orders", extremeReplacementRows(indexes, profile.rowMutationCount)),
+      );
+      await drainDeltas(profile, "grouped publishMany replace extrema batch");
     },
     benchOptions,
   );

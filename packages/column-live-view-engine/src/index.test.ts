@@ -1569,6 +1569,8 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         aggregates: {
           totalQuantity: { aggFunc: "sum", field: "quantity" },
           averageQuantity: { aggFunc: "avg", field: "quantity" },
+          totalPrice: { aggFunc: "sum", field: "price" },
+          averagePrice: { aggFunc: "avg", field: "price" },
           minQuantity: { aggFunc: "min", field: "quantity" },
           maxQuantity: { aggFunc: "max", field: "quantity" },
         },
@@ -1579,6 +1581,8 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
           symbol: "AAPL",
           totalQuantity: "30",
           averageQuantity: "15",
+          totalPrice: "3",
+          averagePrice: "1.5",
           minQuantity: "10",
           maxQuantity: "20",
         },
@@ -1586,10 +1590,147 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
           symbol: "MSFT",
           totalQuantity: "5",
           averageQuantity: "5",
+          totalPrice: "3",
+          averagePrice: "3",
           minQuantity: "5",
           maxQuantity: "5",
         },
       ]);
+    }),
+  );
+
+  it.effect("updates grouped bigint sums incrementally through live subscriptions", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("positions", [
+        position("1", "AAPL", 10n, "1.00"),
+        position("2", "AAPL", 20n, "2.00"),
+        position("3", "MSFT", 5n, "3.00"),
+      ]);
+      const query = {
+        groupBy: ["symbol"],
+        aggregates: {
+          totalQuantity: { aggFunc: "sum", field: "quantity" },
+          averageQuantity: { aggFunc: "avg", field: "quantity" },
+          totalPrice: { aggFunc: "sum", field: "price" },
+          averagePrice: { aggFunc: "avg", field: "price" },
+          minQuantity: { aggFunc: "min", field: "quantity" },
+          maxQuantity: { aggFunc: "max", field: "quantity" },
+        },
+        orderBy: [{ field: "symbol", direction: "asc" }],
+      } satisfies {
+        readonly groupBy: readonly ["symbol"];
+        readonly aggregates: {
+          readonly totalQuantity: { readonly aggFunc: "sum"; readonly field: "quantity" };
+          readonly averageQuantity: { readonly aggFunc: "avg"; readonly field: "quantity" };
+          readonly totalPrice: { readonly aggFunc: "sum"; readonly field: "price" };
+          readonly averagePrice: { readonly aggFunc: "avg"; readonly field: "price" };
+          readonly minQuantity: { readonly aggFunc: "min"; readonly field: "quantity" };
+          readonly maxQuantity: { readonly aggFunc: "max"; readonly field: "quantity" };
+        };
+        readonly orderBy: readonly [{ readonly field: "symbol"; readonly direction: "asc" }];
+      };
+
+      const subscription = yield* engine.subscribe("positions", query);
+      const read = yield* makeEventReader(subscription);
+      const snapshot = firstEvent(yield* read(1));
+      expectSnapshotEvent(snapshot);
+      let state = stateFromSnapshot(snapshot);
+      expect(normalizeDecimalAndBigIntFields(state.rows)).toStrictEqual([
+        {
+          symbol: "AAPL",
+          totalQuantity: "30",
+          averageQuantity: "15",
+          totalPrice: "3",
+          averagePrice: "1.5",
+          minQuantity: "10",
+          maxQuantity: "20",
+        },
+        {
+          symbol: "MSFT",
+          totalQuantity: "5",
+          averageQuantity: "5",
+          totalPrice: "3",
+          averagePrice: "3",
+          minQuantity: "5",
+          maxQuantity: "5",
+        },
+      ]);
+
+      yield* engine.patch("positions", "2", {
+        price: fromStringUnsafe("4.00"),
+        quantity: 30n,
+      });
+      const patchedDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(patchedDelta);
+      state = applyDelta(state, patchedDelta);
+      expect(normalizeDecimalAndBigIntFields(state.rows)).toStrictEqual([
+        {
+          symbol: "AAPL",
+          totalQuantity: "40",
+          averageQuantity: "20",
+          totalPrice: "5",
+          averagePrice: "2.5",
+          minQuantity: "10",
+          maxQuantity: "30",
+        },
+        {
+          symbol: "MSFT",
+          totalQuantity: "5",
+          averageQuantity: "5",
+          totalPrice: "3",
+          averagePrice: "3",
+          minQuantity: "5",
+          maxQuantity: "5",
+        },
+      ]);
+
+      yield* engine.delete("positions", "1");
+      const deletedDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(deletedDelta);
+      state = applyDelta(state, deletedDelta);
+      expect(normalizeDecimalAndBigIntFields(state.rows)).toStrictEqual([
+        {
+          symbol: "AAPL",
+          totalQuantity: "30",
+          averageQuantity: "30",
+          totalPrice: "4",
+          averagePrice: "4",
+          minQuantity: "30",
+          maxQuantity: "30",
+        },
+        {
+          symbol: "MSFT",
+          totalQuantity: "5",
+          averageQuantity: "5",
+          totalPrice: "3",
+          averagePrice: "3",
+          minQuantity: "5",
+          maxQuantity: "5",
+        },
+      ]);
+
+      yield* engine.patch("positions", "2", {
+        price: fromStringUnsafe("5.00"),
+        quantity: 25n,
+        symbol: "MSFT",
+      });
+      const movedDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(movedDelta);
+      state = applyDelta(state, movedDelta);
+      expect(normalizeDecimalAndBigIntFields(state.rows)).toStrictEqual([
+        {
+          symbol: "MSFT",
+          totalQuantity: "30",
+          averageQuantity: "15",
+          totalPrice: "8",
+          averagePrice: "4",
+          minQuantity: "5",
+          maxQuantity: "25",
+        },
+      ]);
+
+      yield* subscription.close();
     }),
   );
 
@@ -2092,6 +2233,16 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
               next: undefined,
             },
             {
+              key: "missing-replace-member",
+              previous: order("missing-replace-member", "open", 6, 6, "emea"),
+              next: order("missing-replace-member", "open", 7, 7, "emea"),
+            },
+            {
+              key: "missing-replace-group",
+              previous: order("missing-replace-group", "cancelled", 8, 8, "emea"),
+              next: order("missing-replace-group", "cancelled", 9, 9, "emea"),
+            },
+            {
               key: "1",
               previous: undefined,
               next: order("1", "open", 15, 6, "emea"),
@@ -2103,8 +2254,9 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       ];
 
       expect(execution.latest().rows).toStrictEqual([
+        { status: "cancelled", rowCount: 1n },
         { status: "closed", rowCount: 1n },
-        { status: "open", rowCount: 1n },
+        { status: "open", rowCount: 2n },
       ]);
       expect(scanCount).toBe(1);
     }),
@@ -2281,6 +2433,127 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(8_195);
       expect(execution.incremental).toBe(false);
+      expect(scanCount).toBe(2);
+    }),
+  );
+
+  it.effect("ignores malformed runtime aggregate values while removing grouped members", () =>
+    Effect.gen(function* () {
+      let version = 0;
+      let scanCount = 0;
+      let batches: ReadonlyArray<TopicRowChangeBatch<object>> = [];
+      const malformedPosition = {
+        id: "bad",
+        accountId: "account-bad",
+        symbol: "AAPL",
+        active: true,
+        quantity: "bad",
+        price: "bad",
+      };
+      const validPosition = position("good", "AAPL", 10n, "2.00");
+      const rows = new Map<string, object>([
+        ["bad", malformedPosition],
+        ["good", validPosition],
+      ]);
+      const store = {
+        changesSince: () => batches,
+        scanRows: (visitor: (key: string, row: object) => void) => {
+          scanCount += 1;
+          for (const [key, row] of rows) {
+            visitor(key, row);
+          }
+        },
+        version: () => version,
+      };
+      const compiled = yield* prepareGroupedQuery<object, object>(
+        "positions",
+        rawQueryCompilerMetadata(Position),
+        {
+          groupBy: ["symbol"],
+          aggregates: {
+            rowCount: { aggFunc: "count" },
+            totalQuantity: { aggFunc: "sum", field: "quantity" },
+            averageQuantity: { aggFunc: "avg", field: "quantity" },
+            totalPrice: { aggFunc: "sum", field: "price" },
+            averagePrice: { aggFunc: "avg", field: "price" },
+          },
+          orderBy: [{ field: "symbol", direction: "asc" }],
+        },
+      );
+      const execution = makeIncrementalGroupedQueryExecution(store, compiled, () => {});
+
+      expect(normalizeDecimalAndBigIntFields(execution.latest().rows)).toStrictEqual([
+        {
+          symbol: "AAPL",
+          rowCount: "2",
+          totalQuantity: "10",
+          averageQuantity: "10",
+          totalPrice: "2",
+          averagePrice: "2",
+        },
+      ]);
+      expect(scanCount).toBe(1);
+
+      rows.delete("bad");
+      version = 1;
+      batches = [
+        {
+          version,
+          changes: [{ key: "bad", previous: malformedPosition, next: undefined }],
+        },
+      ];
+
+      expect(normalizeDecimalAndBigIntFields(execution.latest().rows)).toStrictEqual([
+        {
+          symbol: "AAPL",
+          rowCount: "1",
+          totalQuantity: "10",
+          averageQuantity: "10",
+          totalPrice: "2",
+          averagePrice: "2",
+        },
+      ]);
+      expect(scanCount).toBe(1);
+    }),
+  );
+
+  it.effect("falls back when grouped retained aggregate state exceeds admission", () =>
+    Effect.gen(function* () {
+      let scanCount = 0;
+      const rows = new Map<string, object>(
+        Array.from({ length: 4_096 }, (_value, index) => [
+          `row-${index}`,
+          order(`row-${index}`, "open", index, index),
+        ]),
+      );
+      const store = {
+        changesSince: () => [],
+        scanRows: (visitor: (key: string, row: object) => false | void) => {
+          scanCount += 1;
+          for (const [key, row] of rows) {
+            visitor(key, row);
+          }
+        },
+        version: () => 0,
+      };
+      const retainedAggregates = Object.fromEntries(
+        Array.from({ length: 17 }, (_value, index) => [
+          `maxUpdatedAt${index}`,
+          { aggFunc: "max", field: "updatedAt" },
+        ]),
+      );
+      const compiled = yield* prepareGroupedQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          groupBy: ["status"],
+          aggregates: retainedAggregates,
+        },
+      );
+      const execution = makeIncrementalGroupedQueryExecution(store, compiled, () => {});
+
+      expect(execution.incremental).toBe(false);
+      expect(execution.latest().totalRows).toBe(1);
       expect(scanCount).toBe(2);
     }),
   );
@@ -3767,6 +4040,203 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
           averagePrice: "17.5",
           minUpdatedAt: 3,
           maxUpdatedAt: 4,
+        },
+      ]);
+
+      yield* subscription.close();
+    }),
+  );
+
+  it.effect("keeps grouped aggregate state exact across duplicate removals", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [
+        order("1", "open", 10, 1, "emea"),
+        order("2", "open", 20, 6, "emea"),
+        order("3", "open", 30, 5, "amer"),
+      ]);
+      const query = {
+        groupBy: ["status"],
+        aggregates: {
+          rowCount: { aggFunc: "count" },
+          distinctRegions: { aggFunc: "countDistinct", field: "region" },
+          totalPrice: { aggFunc: "sum", field: "price" },
+          averagePrice: { aggFunc: "avg", field: "price" },
+          minUpdatedAt: { aggFunc: "min", field: "updatedAt" },
+          maxUpdatedAt: { aggFunc: "max", field: "updatedAt" },
+        },
+        orderBy: [{ field: "status", direction: "asc" }],
+      } satisfies {
+        readonly groupBy: readonly ["status"];
+        readonly aggregates: {
+          readonly rowCount: { readonly aggFunc: "count" };
+          readonly distinctRegions: {
+            readonly aggFunc: "countDistinct";
+            readonly field: "region";
+          };
+          readonly totalPrice: { readonly aggFunc: "sum"; readonly field: "price" };
+          readonly averagePrice: { readonly aggFunc: "avg"; readonly field: "price" };
+          readonly minUpdatedAt: { readonly aggFunc: "min"; readonly field: "updatedAt" };
+          readonly maxUpdatedAt: { readonly aggFunc: "max"; readonly field: "updatedAt" };
+        };
+        readonly orderBy: readonly [{ readonly field: "status"; readonly direction: "asc" }];
+      };
+
+      const subscription = yield* engine.subscribe("orders", query);
+      const read = yield* makeEventReader(subscription);
+      const snapshot = firstEvent(yield* read(1));
+      expectSnapshotEvent(snapshot);
+      let state = stateFromSnapshot(snapshot);
+      expect(normalizeDecimalFields(state.rows)).toStrictEqual([
+        {
+          status: "open",
+          rowCount: 3n,
+          distinctRegions: 2n,
+          totalPrice: "60",
+          averagePrice: "20",
+          minUpdatedAt: 1,
+          maxUpdatedAt: 6,
+        },
+      ]);
+
+      yield* engine.patch("orders", "2", {
+        price: 50,
+      });
+      const patchedDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(patchedDelta);
+      state = applyDelta(state, patchedDelta);
+      expect(normalizeDecimalFields(state.rows)).toStrictEqual([
+        {
+          status: "open",
+          rowCount: 3n,
+          distinctRegions: 2n,
+          totalPrice: "90",
+          averagePrice: "30",
+          minUpdatedAt: 1,
+          maxUpdatedAt: 6,
+        },
+      ]);
+
+      yield* engine.delete("orders", "1");
+      const deletedDuplicateDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(deletedDuplicateDelta);
+      state = applyDelta(state, deletedDuplicateDelta);
+      expect(normalizeDecimalFields(state.rows)).toStrictEqual([
+        {
+          status: "open",
+          rowCount: 2n,
+          distinctRegions: 2n,
+          totalPrice: "80",
+          averagePrice: "40",
+          minUpdatedAt: 5,
+          maxUpdatedAt: 6,
+        },
+      ]);
+
+      yield* engine.delete("orders", "3");
+      const deletedDistinctDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(deletedDistinctDelta);
+      state = applyDelta(state, deletedDistinctDelta);
+      expect(normalizeDecimalFields(state.rows)).toStrictEqual([
+        {
+          status: "open",
+          rowCount: 1n,
+          distinctRegions: 1n,
+          totalPrice: "50",
+          averagePrice: "50",
+          minUpdatedAt: 6,
+          maxUpdatedAt: 6,
+        },
+      ]);
+
+      yield* engine.patch("orders", "2", {
+        status: "closed",
+        price: 25,
+        region: "amer",
+        updatedAt: 2,
+      });
+      const movedDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(movedDelta);
+      state = applyDelta(state, movedDelta);
+      expect(normalizeDecimalFields(state.rows)).toStrictEqual([
+        {
+          status: "closed",
+          rowCount: 1n,
+          distinctRegions: 1n,
+          totalPrice: "25",
+          averagePrice: "25",
+          minUpdatedAt: 2,
+          maxUpdatedAt: 2,
+        },
+      ]);
+
+      yield* subscription.close();
+    }),
+  );
+
+  it.effect("keeps duplicate grouped min max values after deleting one duplicate", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [
+        order("1", "open", 10, 6, "emea"),
+        order("2", "open", 20, 6, "amer"),
+        order("3", "open", 30, 1, "amer"),
+        order("4", "open", 40, 3, "emea"),
+        order("5", "open", 50, 2, "emea"),
+      ]);
+      const query = {
+        groupBy: ["status"],
+        aggregates: {
+          rowCount: { aggFunc: "count" },
+          minUpdatedAt: { aggFunc: "min", field: "updatedAt" },
+          maxUpdatedAt: { aggFunc: "max", field: "updatedAt" },
+        },
+        orderBy: [{ field: "status", direction: "asc" }],
+      } satisfies {
+        readonly groupBy: readonly ["status"];
+        readonly aggregates: {
+          readonly rowCount: { readonly aggFunc: "count" };
+          readonly minUpdatedAt: { readonly aggFunc: "min"; readonly field: "updatedAt" };
+          readonly maxUpdatedAt: { readonly aggFunc: "max"; readonly field: "updatedAt" };
+        };
+        readonly orderBy: readonly [{ readonly field: "status"; readonly direction: "asc" }];
+      };
+
+      const subscription = yield* engine.subscribe("orders", query);
+      const read = yield* makeEventReader(subscription);
+      let state = stateFromSnapshot(firstEvent(yield* read(1)));
+      expect(state.rows).toStrictEqual([
+        {
+          status: "open",
+          rowCount: 5n,
+          minUpdatedAt: 1,
+          maxUpdatedAt: 6,
+        },
+      ]);
+
+      yield* engine.delete("orders", "1");
+      const delta = firstEvent(yield* read(1));
+      expectDeltaEvent(delta);
+      state = applyDelta(state, delta);
+      expect(state.rows).toStrictEqual([
+        {
+          status: "open",
+          rowCount: 4n,
+          minUpdatedAt: 1,
+          maxUpdatedAt: 6,
+        },
+      ]);
+
+      yield* engine.delete("orders", "2");
+      const maxDelta = firstEvent(yield* read(1));
+      expectDeltaEvent(maxDelta);
+      state = applyDelta(state, maxDelta);
+      expect(state.rows).toStrictEqual([
+        {
+          status: "open",
+          rowCount: 3n,
+          minUpdatedAt: 1,
+          maxUpdatedAt: 3,
         },
       ]);
 

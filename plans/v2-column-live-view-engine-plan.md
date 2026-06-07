@@ -1517,6 +1517,7 @@ patch/delete/group-move costs can become very expensive at high row counts.
 Grouped write benchmark cases:
 
 - `grouped publishMany append batch`
+- `grouped publishMany replace extrema batch`
 - `grouped patch aggregate values`
 - `grouped patch group moves`
 - `grouped delete existing rows`
@@ -1542,6 +1543,15 @@ Interpretation notes:
   subscriptions.
 - Incremental mode covers admitted grouped insert/update/move/delete write pressure. Fallback mode
   covers broad grouped rebuild pressure and is intentionally a different signal.
+- Current incremental grouped write maintenance updates aggregate states reversibly for inserts,
+  removals, same-group patches, and group moves. Count, count-distinct, sum, avg, min, and max are
+  adjusted from the changed row instead of recomputing every dirty group from its member map.
+- Retained `min`/`max` removals can invalidate the current extremum. The incremental executor batches
+  those invalidations and recomputes each dirty `{group, aggregate}` once after the mutation batch,
+  avoiding repeated retained-map scans when a single `publishMany` replaces or deletes many extrema.
+- Incremental grouped admission also budgets retained value state for `countDistinct`, `min`, and
+  `max`. Queries that would retain too many alias/member reverse entries demote to fallback rather
+  than keeping high-cardinality reversible state alive between writes.
 - The benchmark does not prove a future grouped materialized index is worthwhile by itself; compare
   it with grouped read benchmarks before adopting storage that adds write maintenance.
 - Keep grouped write and grouped aggregate benchmarks together when evaluating grouped engine
