@@ -52,3 +52,36 @@ jobs:
 
       - name: Ready gate
         run: pnpm run ready
+
+  smoke-benchmarks:
+    name: Smoke Benchmark Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.2.2
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.2.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium benchmark dependencies
+        run: pnpm --filter @view-server/react exec playwright install --with-deps chromium
+
+      - name: Smoke benchmark regression gate
+        run: pnpm run bench:baseline:smoke

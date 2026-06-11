@@ -115,6 +115,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Hot paths should avoid unnecessary allocations, schema decoding, object spreading, and health snapshots.
 - Health counters should update cheaply and publish at a bounded cadence.
 - Benchmarks must state whether they are localhost CPU/GC stress, browser stress, network-shaped, or production-like.
+- `pnpm run bench:baseline:smoke` is the smoke performance-regression gate. It must compare fresh Vitest benchmark artifacts against `benchmarks/baselines/smoke.json`; use `pnpm run bench:baseline:smoke:update` only when an accepted performance change intentionally moves the baseline.
 - Do not run competing benchmark suites in parallel when comparing results.
 
 ## Package And Architecture Rules

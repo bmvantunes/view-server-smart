@@ -1270,19 +1270,29 @@ pnpm run bench:baseline:release
 ```
 
 `bench:baseline` and `bench:baseline:smoke` run one small Chromium/browser profile plus small
-engine profiles with smoke-sized Vitest benchmark settings. Most smoke tasks use one iteration / 1ms;
-stateful retained-delta smoke tasks use one iteration / 0ms so Tinybench runs the configured
-iteration count exactly. Use them as the PR sanity check for benchmark wiring.
+engine profiles with smoke-sized Vitest benchmark settings. Engine smoke tasks use five iterations
+to avoid one-sample write/read noise; browser smoke stays intentionally tiny so CI remains practical.
+The smoke profile is the committed performance-regression gate: it compares fresh Vitest benchmark
+artifacts against `benchmarks/baselines/smoke.json` and fails on cleanup, backpressure, queued-event,
+RSS, mean-latency, or p99-latency regressions beyond the configured thresholds. Refresh the smoke
+baseline intentionally with `pnpm run bench:baseline:smoke:update` when a performance change is
+accepted.
+
 `bench:baseline:release` is the release-quality serial profile and runs the documented row
 counts/browser profiles in separate processes. It intentionally executes one benchmark process at a
 time so GC, RSS, browser state, and artifact files are not polluted by competing benchmark suites.
+The release and grouped-admission profiles currently run without comparison by default; use their
+`:update` scripts when committing dedicated release baseline manifests.
 
 The serial runner is `scripts/run-benchmark-baseline.mjs`. It supports
-`VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|release` or `--profile=smoke|release`; an explicit
+`VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|release|grouped-admission` or
+`--profile=smoke|release|grouped-admission`; an explicit
 `--profile` argument wins over the environment variable, so the root package scripts always run the
 profile they name. Use the environment variable only when invoking the Node script directly. The
 runner scrubs benchmark-specific environment variables before each child process so stale local
-tuning cannot pollute baseline runs.
+tuning cannot pollute baseline runs. Pass `--update-baseline` to write
+`benchmarks/baselines/<profile>.json` from the fresh artifacts, or `--no-compare` to run a profile as
+serial benchmarks only.
 
 Current engine raw benchmark harness:
 

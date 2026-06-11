@@ -1,0 +1,798 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "smoke",
+  "tasks": [
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.4099579999999605,
+          "meanMs": 0.2771084000000087,
+          "minMs": 0.22100000000000364,
+          "name": "equality filter + top-k sort",
+          "p99Ms": 0.4099579999999605,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.45637500000003683,
+          "meanMs": 0.17565283333332596,
+          "minMs": 0.09325000000001182,
+          "name": "selective equality filter + fallback top-k sort",
+          "p99Ms": 0.45637500000003683,
+          "sampleCount": 6
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.3722500000000082,
+          "meanMs": 0.11561577777778591,
+          "minMs": 0.07129200000002811,
+          "name": "ordered equality filter + indexed seek",
+          "p99Ms": 0.3722500000000082,
+          "sampleCount": 9
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.20266700000001947,
+          "meanMs": 0.09706445454545784,
+          "minMs": 0.07883400000002894,
+          "name": "ordered in filter + indexed seek",
+          "p99Ms": 0.20266700000001947,
+          "sampleCount": 11
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.144333999999958,
+          "meanMs": 0.0723959285714305,
+          "minMs": 0.05841599999996561,
+          "name": "range filter + top-k sort",
+          "p99Ms": 0.144333999999958,
+          "sampleCount": 14
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.2993329999999901,
+          "meanMs": 0.1781596666666682,
+          "minMs": 0.1263749999999959,
+          "name": "selective range filter + fallback top-k sort",
+          "p99Ms": 0.2993329999999901,
+          "sampleCount": 6
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.44216699999998355,
+          "meanMs": 0.14708328571429416,
+          "minMs": 0.08695799999998144,
+          "name": "compound filter + top-k sort",
+          "p99Ms": 0.44216699999998355,
+          "sampleCount": 7
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.1468749999999659,
+          "meanMs": 0.0720030714285664,
+          "minMs": 0.05929199999997081,
+          "name": "filtered totalRows via zero-row window",
+          "p99Ms": 0.1468749999999659,
+          "sampleCount": 14
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.7073750000000132,
+          "meanMs": 0.30885000000000673,
+          "minMs": 0.19904100000002245,
+          "name": "live subscription delta after publish",
+          "p99Ms": 0.7073750000000132,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "equality filter + top-k sort",
+        "selective equality filter + fallback top-k sort",
+        "ordered equality filter + indexed seek",
+        "ordered in filter + indexed seek",
+        "range filter + top-k sort",
+        "selective range filter + fallback top-k sort",
+        "compound filter + top-k sort",
+        "filtered totalRows via zero-row window",
+        "live subscription delta after publish"
+      ],
+      "benchmarkName": "raw snapshot and delta engine benchmark",
+      "benchmarkScope": "engine-raw-snapshot",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 41451520,
+      "minimumSampleCount": 5,
+      "mutationCount": 1005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-snapshot-1000rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-snapshot-1000rows.summary.json",
+      "taskLabel": "raw snapshot 1000 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.07304199999998673,
+          "meanMs": 0.06447137500000188,
+          "minMs": 0.05850000000000932,
+          "name": "full scan callback baseline: selective customer + fallback sort",
+          "p99Ms": 0.07304199999998673,
+          "sampleCount": 16
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.0372910000000104,
+          "meanMs": 0.02742110810810714,
+          "minMs": 0.024374999999992042,
+          "name": "exact scalar candidate: selective customer + fallback sort",
+          "p99Ms": 0.0372910000000104,
+          "sampleCount": 37
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.0454159999999888,
+          "meanMs": 0.02464329268292847,
+          "minMs": 0.019750000000016144,
+          "name": "exact scalar candidate: selective customer without callback",
+          "p99Ms": 0.0454159999999888,
+          "sampleCount": 41
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.04795799999999417,
+          "meanMs": 0.028954657142856735,
+          "minMs": 0.02349999999998431,
+          "name": "exact multi-key in candidate: three customers + fallback sort",
+          "p99Ms": 0.04795799999999417,
+          "sampleCount": 35
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.11887500000000273,
+          "meanMs": 0.1023791999999986,
+          "minMs": 0.08475000000001387,
+          "name": "exact range candidate: upper price tail + fallback sort",
+          "p99Ms": 0.11887500000000273,
+          "sampleCount": 10
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.08066599999997948,
+          "meanMs": 0.07183606666667022,
+          "minMs": 0.06933300000000031,
+          "name": "full scan callback baseline: upper price tail + fallback sort",
+          "p99Ms": 0.08066599999997948,
+          "sampleCount": 15
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.03583299999999667,
+          "meanMs": 0.026518578947369514,
+          "minMs": 0.021250000000009095,
+          "name": "ordered equality seek: customer storage order",
+          "p99Ms": 0.03583299999999667,
+          "sampleCount": 38
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.4006660000000011,
+          "meanMs": 0.3719331999999952,
+          "minMs": 0.334541999999999,
+          "name": "failed broad scalar candidate build + full scan",
+          "p99Ms": 0.4006660000000011,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "full scan callback baseline: selective customer + fallback sort",
+        "exact scalar candidate: selective customer + fallback sort",
+        "exact scalar candidate: selective customer without callback",
+        "exact multi-key in candidate: three customers + fallback sort",
+        "exact range candidate: upper price tail + fallback sort",
+        "full scan callback baseline: upper price tail + fallback sort",
+        "ordered equality seek: customer storage order",
+        "failed broad scalar candidate build + full scan"
+      ],
+      "benchmarkName": "raw predicate candidate index benchmark",
+      "benchmarkScope": "engine-raw-predicate-index",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 12828672,
+      "minimumSampleCount": 5,
+      "mutationCount": 0,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-predicate-index-1000rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 0,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-predicate-index-1000rows.summary.json",
+      "taskLabel": "raw predicate index 1000 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 0.20541700000001129,
+          "meanMs": 0.116370444444442,
+          "minMs": 0.09208300000000236,
+          "name": "publish append single row",
+          "p99Ms": 0.20541700000001129,
+          "sampleCount": 9
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 2.5168750000000273,
+          "meanMs": 2.1469167999999854,
+          "minMs": 1.8587089999999762,
+          "name": "publishMany append batch",
+          "p99Ms": 2.5168750000000273,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 2.163749999999993,
+          "meanMs": 1.9007833999999888,
+          "minMs": 1.7527499999999918,
+          "name": "publishMany replace existing batch",
+          "p99Ms": 2.163749999999993,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 7.106291999999996,
+          "meanMs": 6.666541599999993,
+          "minMs": 6.349874999999997,
+          "name": "patch existing rows one by one",
+          "p99Ms": 7.106291999999996,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 6.367457999999999,
+          "meanMs": 5.549374999999998,
+          "minMs": 5.047416999999996,
+          "name": "append then delete batch",
+          "p99Ms": 6.367457999999999,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "publish append single row",
+        "publishMany append batch",
+        "publishMany replace existing batch",
+        "patch existing rows one by one",
+        "append then delete batch"
+      ],
+      "benchmarkName": "raw write engine benchmark (base)",
+      "benchmarkScope": "engine-raw-write",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 56000512,
+      "minimumSampleCount": 5,
+      "mutationCount": 3509,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-write-base-1000rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 0,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-write-base-1000rows.summary.json",
+      "taskLabel": "raw write base 1000 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 0.2524999999999977,
+          "meanMs": 0.1443394285714216,
+          "minMs": 0.10954199999997627,
+          "name": "publish append single row",
+          "p99Ms": 0.2524999999999977,
+          "sampleCount": 7
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 2.7873329999999896,
+          "meanMs": 2.2979498000000036,
+          "minMs": 1.974375000000009,
+          "name": "publishMany append batch",
+          "p99Ms": 2.7873329999999896,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 2.3665829999999914,
+          "meanMs": 2.087041399999998,
+          "minMs": 1.934582999999975,
+          "name": "publishMany replace existing batch",
+          "p99Ms": 2.3665829999999914,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 7.225082999999984,
+          "meanMs": 6.786949800000002,
+          "minMs": 6.497833000000014,
+          "name": "patch existing rows one by one",
+          "p99Ms": 7.225082999999984,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 6.571708000000001,
+          "meanMs": 5.734558200000004,
+          "minMs": 5.227958000000001,
+          "name": "append then delete batch",
+          "p99Ms": 6.571708000000001,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "publish append single row",
+        "publishMany append batch",
+        "publishMany replace existing batch",
+        "patch existing rows one by one",
+        "append then delete batch"
+      ],
+      "benchmarkName": "raw write engine benchmark (indexed)",
+      "benchmarkScope": "engine-raw-write",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 57147392,
+      "minimumSampleCount": 5,
+      "mutationCount": 3507,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-write-indexed-1000rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 0,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-write-indexed-1000rows.summary.json",
+      "taskLabel": "raw write indexed 1000 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 1000 rows, 5 subscribers, same-window",
+          "maxMs": 1.9100830000000428,
+          "meanMs": 0.8832916000000068,
+          "minMs": 0.5634999999999764,
+          "name": "same-window subscribers publish + delta fanout",
+          "p99Ms": 1.9100830000000428,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["same-window subscribers publish + delta fanout"],
+      "benchmarkName": "raw live fanout benchmark",
+      "benchmarkScope": "engine-raw-live-fanout",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 37797888,
+      "minimumSampleCount": 5,
+      "mutationCount": 1005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-same-window-1000rows-5subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 5,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-same-window-1000rows-5subs.summary.json",
+      "taskLabel": "raw live fanout same-window 1000 rows 5 subscribers",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 1000 rows, 5 subscribers, ten-window",
+          "maxMs": 1.8807499999999777,
+          "meanMs": 0.8847585999999865,
+          "minMs": 0.5617500000000177,
+          "name": "ten-window subscribers publish + delta fanout",
+          "p99Ms": 1.8807499999999777,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["ten-window subscribers publish + delta fanout"],
+      "benchmarkName": "raw live fanout benchmark",
+      "benchmarkScope": "engine-raw-live-fanout",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 39239680,
+      "minimumSampleCount": 5,
+      "mutationCount": 1005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-ten-window-1000rows-5subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 5,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-ten-window-1000rows-5subs.summary.json",
+      "taskLabel": "raw live fanout ten-window 1000 rows 5 subscribers",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
+          "maxMs": 3.0251250000000027,
+          "meanMs": 2.526483200000007,
+          "minMs": 2.1397080000000415,
+          "name": "status grouped count/sum/min/max/avg",
+          "p99Ms": 3.0251250000000027,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
+          "maxMs": 1.7710420000000227,
+          "meanMs": 1.5517500000000155,
+          "minMs": 1.44583300000005,
+          "name": "region+status grouped count/sum/min/max/avg",
+          "p99Ms": 1.7710420000000227,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
+          "maxMs": 1.440040999999951,
+          "meanMs": 1.3807249999999727,
+          "minMs": 1.3034169999999676,
+          "name": "high-cardinality desk grouped aggregates",
+          "p99Ms": 1.440040999999951,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
+          "maxMs": 0.4793329999999969,
+          "meanMs": 0.45074180000000297,
+          "minMs": 0.4262499999999818,
+          "name": "high-cardinality desk group count via zero-row window",
+          "p99Ms": 0.4793329999999969,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
+          "maxMs": 0.7431670000000281,
+          "meanMs": 0.7140584000000103,
+          "minMs": 0.6927080000000387,
+          "name": "filtered status grouped aggregates",
+          "p99Ms": 0.7431670000000281,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
+          "maxMs": 0.6857919999999922,
+          "meanMs": 0.29215000000000374,
+          "minMs": 0.17891600000001517,
+          "name": "live grouped aggregate delta after publish",
+          "p99Ms": 0.6857919999999922,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "status grouped count/sum/min/max/avg",
+        "region+status grouped count/sum/min/max/avg",
+        "high-cardinality desk grouped aggregates",
+        "high-cardinality desk group count via zero-row window",
+        "filtered status grouped aggregates",
+        "live grouped aggregate delta after publish"
+      ],
+      "benchmarkName": "grouped aggregate engine benchmark",
+      "benchmarkScope": "engine-grouped-aggregate",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 56524800,
+      "minimumSampleCount": 5,
+      "mutationCount": 1005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-aggregate-1000rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/grouped-aggregate-1000rows.summary.json",
+      "taskLabel": "grouped aggregate 1000 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
+          "maxMs": 0.9608329999999796,
+          "meanMs": 0.47251660000000584,
+          "minMs": 0.3161670000000072,
+          "name": "grouped publishMany append batch",
+          "p99Ms": 0.9608329999999796,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
+          "maxMs": 0.480083000000036,
+          "meanMs": 0.3484248000000207,
+          "minMs": 0.24095800000003464,
+          "name": "grouped publishMany replace extrema batch",
+          "p99Ms": 0.480083000000036,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
+          "maxMs": 0.4047919999999863,
+          "meanMs": 0.2588667999999871,
+          "minMs": 0.1940829999999778,
+          "name": "grouped patch aggregate values",
+          "p99Ms": 0.4047919999999863,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
+          "maxMs": 0.296875,
+          "meanMs": 0.23414159999999812,
+          "minMs": 0.20958300000000918,
+          "name": "grouped patch group moves",
+          "p99Ms": 0.296875,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
+          "maxMs": 0.2788330000000201,
+          "meanMs": 0.19645000000001572,
+          "minMs": 0.15908300000000963,
+          "name": "grouped delete existing rows",
+          "p99Ms": 0.2788330000000201,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "grouped publishMany append batch",
+        "grouped publishMany replace extrema batch",
+        "grouped patch aggregate values",
+        "grouped patch group moves",
+        "grouped delete existing rows"
+      ],
+      "benchmarkName": "grouped write engine benchmark",
+      "benchmarkScope": "engine-grouped-write",
+      "cleanupLeakCount": 0,
+      "groupedWriteAdmission": {
+        "activeFallbackGroupedViewsAfterSetup": 0,
+        "activeFallbackGroupedViewsBeforeCleanup": 0,
+        "activeIncrementalGroupedViewsAfterSetup": 2,
+        "activeIncrementalGroupedViewsBeforeCleanup": 2,
+        "activeViewsAfterSetup": 2,
+        "activeViewsBeforeCleanup": 2,
+        "configuredMode": "incremental",
+        "expectedAdmission": "incremental",
+        "incrementalAdmissionLimits": {
+          "maxGroups": 8192,
+          "maxMembers": 65536,
+          "maxMembersPerGroup": 4096,
+          "maxRetainedValueEntries": 65536
+        },
+        "priceThreshold": 0,
+        "seedMutationCount": 1000,
+        "timedMutationCount": 25,
+        "writeBatchSize": 1
+      },
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 47071232,
+      "minimumSampleCount": 5,
+      "mutationCount": 1025,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-1000rows-1mutations.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 2,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-1000rows-1mutations.summary.json",
+      "taskLabel": "grouped write incremental 1000 rows 1 mutations",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: noop, 101 rows",
+          "maxMs": 1.3002910000000156,
+          "meanMs": 0.7400083999999992,
+          "minMs": 0.5152090000000271,
+          "name": "retained nonmatching update delete no-op",
+          "p99Ms": 1.3002910000000156,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["retained nonmatching update delete no-op"],
+      "benchmarkName": "raw active retained delta benchmark (noop)",
+      "benchmarkScope": "engine-raw-active-retained-delta",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 9945088,
+      "minimumSampleCount": 5,
+      "mutationCount": 116,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-noop-101rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 101,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-noop-101rows.summary.json",
+      "taskLabel": "raw active retained delta noop 101 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: predicate-enter, 101 rows",
+          "maxMs": 1.275416000000007,
+          "meanMs": 0.6508250000000089,
+          "minMs": 0.4484170000000063,
+          "name": "retained predicate-enter update delta",
+          "p99Ms": 1.275416000000007,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["retained predicate-enter update delta"],
+      "benchmarkName": "raw active retained delta benchmark (predicate-enter)",
+      "benchmarkScope": "engine-raw-active-retained-delta",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 8945664,
+      "minimumSampleCount": 5,
+      "mutationCount": 111,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-predicate-enter-101rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 101,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-predicate-enter-101rows.summary.json",
+      "taskLabel": "raw active retained delta predicate-enter 101 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: visible-delete, 101 rows",
+          "maxMs": 0.7321250000000248,
+          "meanMs": 0.3705914000000064,
+          "minMs": 0.23754200000001902,
+          "name": "retained visible delete refill/fallback sequence",
+          "p99Ms": 0.7321250000000248,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["retained visible delete refill/fallback sequence"],
+      "benchmarkName": "raw active retained delta benchmark (visible-delete)",
+      "benchmarkScope": "engine-raw-active-retained-delta",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 5357568,
+      "minimumSampleCount": 5,
+      "mutationCount": 106,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-visible-delete-101rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 101,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-visible-delete-101rows.summary.json",
+      "taskLabel": "raw active retained delta visible-delete 101 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: exhausted-lookahead, 101 rows",
+          "maxMs": 1.058499999999981,
+          "meanMs": 0.6037668000000054,
+          "minMs": 0.43704200000001947,
+          "name": "retained visible delete pair lookahead plus fallback",
+          "p99Ms": 1.058499999999981,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["retained visible delete pair lookahead plus fallback"],
+      "benchmarkName": "raw active retained delta benchmark (exhausted-lookahead)",
+      "benchmarkScope": "engine-raw-active-retained-delta",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 7831552,
+      "minimumSampleCount": 5,
+      "mutationCount": 111,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-exhausted-lookahead-101rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 101,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-exhausted-lookahead-101rows.summary.json",
+      "taskLabel": "raw active retained delta exhausted-lookahead 101 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: count-only, 101 rows",
+          "maxMs": 0.568333999999993,
+          "meanMs": 0.28545840000000455,
+          "minMs": 0.2093330000000151,
+          "name": "count-only retained insert delta",
+          "p99Ms": 0.568333999999993,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["count-only retained insert delta"],
+      "benchmarkName": "raw active retained delta benchmark (count-only)",
+      "benchmarkScope": "engine-raw-active-retained-delta",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 6389760,
+      "minimumSampleCount": 5,
+      "mutationCount": 106,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-count-only-101rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 101,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-count-only-101rows.summary.json",
+      "taskLabel": "raw active retained delta count-only 101 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "react-browser-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/in-memory-live-query.bench.tsx > React in-memory useLiveQuery browser benchmark: 20 rows",
+          "maxMs": 1.899999976158142,
+          "meanMs": 0.7799999952316284,
+          "minMs": 0.3999999761581421,
+          "name": "publish matching row -> rendered top row",
+          "p99Ms": 1.899999976158142,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "publish matching row through runtime client and observe through in-memory live client"
+      ],
+      "benchmarkName": "React in-memory useLiveQuery browser benchmark",
+      "benchmarkScope": "react-in-memory-live-query",
+      "browser": {
+        "browser": "chromium",
+        "provider": "playwright"
+      },
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "minimumSampleCount": 5,
+      "mutationCount": 25,
+      "outputJsonPath": "packages/react/.artifacts/in-memory-live-query-20rows-chromium.json",
+      "queuedEventCount": 0,
+      "rowCount": 20,
+      "seedBatchSize": 10,
+      "subscriberCount": 1,
+      "summaryPath": "packages/react/.artifacts/in-memory-live-query-20rows-chromium.summary.json",
+      "taskLabel": "React in-memory chromium 20 rows",
+      "topics": ["orders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 5,
+      "maxRatio": 8
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 10,
+      "maxRatio": 8
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    }
+  }
+}
