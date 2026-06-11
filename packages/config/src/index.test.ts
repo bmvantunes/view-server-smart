@@ -11,6 +11,7 @@ import {
   decodeKafkaTopicMessage,
   defineViewServerConfig,
   kafka,
+  kafkaErrorIsMapping,
   VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
   VIEW_SERVER_HEALTH_TOPIC,
   viewServerReservedTopicNames,
@@ -427,8 +428,8 @@ describe("defineViewServerConfig", () => {
   it("defines topics and pure runtime option contracts without starting a runtime", () => {
     const runtimeOptions = viewServer.defineRuntimeOptions({
       websocketPort: runtimeEnvironmentConfig.websocketPort,
-      tcpPublishPort: runtimeConfig.port("VIEW_SERVER_TCP_PUBLISH_PORT"),
       kafka: {
+        consumerGroupId: "view-server-config-test",
         regions: kafkaRegions,
         topics: {
           orders: kafkaTopic({
@@ -474,8 +475,8 @@ describe("defineViewServerConfig", () => {
     expect(runtimeOptions.kafka.regions["usa"]).toBe(kafkaRegions.usa);
     expect(viewServer.topics.orders.key).toBe("id");
     expect(runtimeOptions.websocketPort).toBe(runtimeEnvironmentConfig.websocketPort);
-    expect(Config.isConfig(runtimeEnvironmentConfig.tcpPublishPort)).toBe(true);
-    expect(Config.isConfig(runtimeConfig.port("VIEW_SERVER_TCP_PUBLISH_PORT"))).toBe(true);
+    expect(runtimeOptions.kafka.consumerGroupId).toBe("view-server-config-test");
+    expect(Config.isConfig(runtimeConfig.port("VIEW_SERVER_WEBSOCKET_PORT"))).toBe(true);
   });
 
   it.effect("defines typed Kafka source codecs", () =>
@@ -754,7 +755,7 @@ describe("public type surface", () => {
         },
         topics: {
           sourceOrders: {
-            status: "ready",
+            status: "degraded",
             sourceTopic: "orders-source",
             viewServerTopic: "orders",
             regions: {
@@ -765,15 +766,14 @@ describe("public type surface", () => {
                 bytesPerSecond: 100,
                 decodedMessagesPerSecond: 10,
                 decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
                 processingFailuresPerSecond: 0,
                 lastMessageAt: null,
                 lastCommitAt: null,
                 consumerLagMessages: 5n,
-                consumerLagMs: null,
                 lagSampledAt: null,
-                highWatermarkOffset: "10",
                 committedOffset: "5",
-                lastError: null,
+                lastError: "decode failed",
               },
               london: {
                 connected: true,
@@ -782,13 +782,12 @@ describe("public type surface", () => {
                 bytesPerSecond: 0,
                 decodedMessagesPerSecond: 0,
                 decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
                 processingFailuresPerSecond: 0,
                 lastMessageAt: null,
                 lastCommitAt: null,
                 consumerLagMessages: null,
-                consumerLagMs: null,
                 lagSampledAt: null,
-                highWatermarkOffset: null,
                 committedOffset: null,
                 lastError: null,
               },
@@ -806,13 +805,12 @@ describe("public type surface", () => {
                 bytesPerSecond: 0,
                 decodedMessagesPerSecond: 0,
                 decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
                 processingFailuresPerSecond: 0,
                 lastMessageAt: null,
                 lastCommitAt: null,
                 consumerLagMessages: 11n,
-                consumerLagMs: null,
                 lagSampledAt: null,
-                highWatermarkOffset: "20",
                 committedOffset: "9",
                 lastError: "stalled",
               },
@@ -845,6 +843,77 @@ describe("public type surface", () => {
       engine: health.engine,
       transport: health.transport,
     };
+    const kafkaStartingHealth: ViewServerHealth<typeof viewServer.topics> = {
+      status: "starting",
+      version: 8,
+      uptimeMs: 200,
+      engine: {
+        topics: {
+          orders: runtimeTopicHealth("ready", 10),
+          trades: runtimeTopicHealth("ready", 20),
+          positions: runtimeTopicHealth("ready", 30),
+        },
+      },
+      kafka: {
+        regions: {
+          usa: {
+            status: "connected",
+            brokers: "localhost:9092",
+            lastConnectedAt: null,
+            lastError: null,
+          },
+        },
+        topics: {
+          sourceOrdersReady: {
+            status: "ready",
+            sourceTopic: "orders-source",
+            viewServerTopic: "orders",
+            regions: {
+              usa: {
+                connected: true,
+                assignedPartitions: 1,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: null,
+                lagSampledAt: null,
+                committedOffset: null,
+                lastError: null,
+              },
+            },
+          },
+          sourceTradesStarting: {
+            status: "starting",
+            sourceTopic: "trades-source",
+            viewServerTopic: "trades",
+            regions: {
+              usa: {
+                connected: false,
+                assignedPartitions: 0,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: null,
+                lagSampledAt: null,
+                committedOffset: null,
+                lastError: null,
+              },
+            },
+          },
+        },
+      },
+      transport: health.transport,
+    };
     const stoppingRows = viewServerHealthTopicRowsFromHealth(
       {
         ...health,
@@ -857,7 +926,7 @@ describe("public type surface", () => {
       status: "degraded",
       runtimeStatus: "degraded",
       connectionStatus: "connected",
-      unhealthyTopics: ["trades", "positions"],
+      unhealthyTopics: ["orders", "trades", "positions"],
       updatedAtNanos: 123n,
       maxKafkaLag: 11n,
     });
@@ -866,16 +935,44 @@ describe("public type surface", () => {
       status: "degraded",
       runtimeStatus: "degraded",
       connectionStatus: "connected",
-      unhealthyTopics: ["trades", "positions"],
+      unhealthyTopics: ["orders", "trades", "positions"],
       updatedAtNanos: 123n,
       maxKafkaLag: 11n,
     });
     expect(rows.map((row) => [row.id, row.kafkaLag, row.status])).toStrictEqual([
-      ["orders", 5n, "ready"],
+      ["orders", 5n, "degraded"],
       ["trades", 11n, "degraded"],
       ["positions", 0n, "starting"],
     ]);
     expect(viewServerHealthSummaryFromHealth(healthWithoutKafka, 123n).maxKafkaLag).toBe(0n);
+    expect(
+      viewServerHealthTopicRowsFromHealth(healthWithoutKafka, 123n).map((row) => [
+        row.id,
+        row.status,
+      ]),
+    ).toStrictEqual([
+      ["orders", "ready"],
+      ["trades", "degraded"],
+      ["positions", "starting"],
+    ]);
+    expect(
+      viewServerHealthTopicRowsFromHealth(kafkaStartingHealth, 123n).map((row) => [
+        row.id,
+        row.status,
+      ]),
+    ).toStrictEqual([
+      ["orders", "ready"],
+      ["trades", "starting"],
+      ["positions", "ready"],
+    ]);
+    expect(viewServerHealthSummaryFromHealth(kafkaStartingHealth, 123n)).toStrictEqual({
+      status: "starting",
+      runtimeStatus: "starting",
+      connectionStatus: "connected",
+      unhealthyTopics: ["trades"],
+      updatedAtNanos: 123n,
+      maxKafkaLag: 0n,
+    });
     expect(stoppingRows.map((row) => row.status)).toStrictEqual([
       "stopping",
       "stopping",
@@ -1289,7 +1386,7 @@ describe("public type surface", () => {
           throw new Error("mapper failed");
         },
       });
-      const mappingFailure = yield* Effect.exit(
+      const mappingFailure = yield* Effect.flip(
         decodeKafkaTopicMessage(throwingTopic, {
           keyBytes: textEncoder.encode("order-throws"),
           valueBytes: toBinary(
@@ -1305,7 +1402,16 @@ describe("public type surface", () => {
           metadata: kafkaTestMetadata("usa"),
         }),
       );
-      expect(Exit.isFailure(mappingFailure)).toBe(true);
+      expect({
+        mappingFailure: kafkaErrorIsMapping(mappingFailure),
+        forgedMappingFailure: kafkaErrorIsMapping({
+          _tag: "KafkaMappingError",
+          message: "forged",
+        }),
+      }).toStrictEqual({
+        mappingFailure: true,
+        forgedMappingFailure: false,
+      });
     }),
   );
 
@@ -1815,10 +1921,10 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     // @ts-expect-error runtime options reject unknown top-level fields
     extraRuntimeField: true,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: {
         usa: "broker-a:9092",
       },
@@ -1828,9 +1934,9 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     // @ts-expect-error runtime options must include Kafka topic definitions
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: {
         usa: "broker-a:9092",
       },
@@ -1839,8 +1945,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: {
         usa: "broker-a:9092",
       },
@@ -1852,8 +1958,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: localKafkaRegions,
       topics: {
         // @ts-expect-error Kafka source topics must be created with viewServer.kafkaTopic
@@ -1876,8 +1982,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: localKafkaRegions,
       topics: {
         // @ts-expect-error spread-mutated Kafka topic values must still match mapping input types
@@ -1888,8 +1994,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: localKafkaRegions,
       topics: {
         // @ts-expect-error spread-mutated Kafka topic keys must still match mapping input types
@@ -1900,8 +2006,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: localKafkaRegions,
       topics: {
         // @ts-expect-error spread-mutated Kafka mappings must still return the target topic row
@@ -1912,8 +2018,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: localKafkaRegions,
       topics: {
         // @ts-expect-error spread-mutated Kafka target topics must still match the mapping row
@@ -1924,8 +2030,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: localKafkaRegions,
       topics: {
         // @ts-expect-error Kafka topic helper regions must match runtime kafka.regions
@@ -2050,8 +2156,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: {
         usa: "broker-a:9092",
       },
@@ -2076,8 +2182,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: {
         usa: "broker-a:9092",
       },
@@ -2745,8 +2851,8 @@ const assertCompileTimeContracts = () => {
 
   viewServer.defineRuntimeOptions({
     websocketPort: 8080,
-    tcpPublishPort: 8081,
     kafka: {
+      consumerGroupId: "view-server-type-test",
       regions: {
         usa: "broker-a:9092",
       },

@@ -8,7 +8,11 @@ import {
   type ViewServerHealth,
   type ViewServerRuntimeError,
 } from "@view-server/config";
-import { ViewServerRpcErrorSchema, ViewServerRpcs } from "@view-server/protocol";
+import {
+  ViewServerHealthSchema,
+  ViewServerRpcErrorSchema,
+  ViewServerRpcs,
+} from "@view-server/protocol";
 import { createViewServerRuntimeCore } from "@view-server/runtime-core";
 import {
   Context,
@@ -603,13 +607,12 @@ describe("@view-server/server", () => {
                   bytesPerSecond: 0,
                   decodedMessagesPerSecond: 0,
                   decodeFailuresPerSecond: 0,
+                  mappingFailuresPerSecond: 0,
                   processingFailuresPerSecond: 0,
                   lastMessageAt: null,
                   lastCommitAt: null,
                   consumerLagMessages: 42n,
-                  consumerLagMs: null,
                   lagSampledAt: null,
-                  highWatermarkOffset: null,
                   committedOffset: null,
                   lastError: null,
                 },
@@ -625,23 +628,12 @@ describe("@view-server/server", () => {
         },
       });
 
+      const expectedHealth =
+        yield* Schema.encodeUnknownEffect(ViewServerHealthSchema)(degradedHealth);
       const health = yield* fetchJson(server.healthUrl);
 
       expect(health.response.status).toBe(503);
-      expect(health.value).toMatchObject({
-        status: "degraded",
-        kafka: {
-          topics: {
-            source_orders: {
-              regions: {
-                usa: {
-                  consumerLagMessages: "42",
-                },
-              },
-            },
-          },
-        },
-      });
+      expect(health.value).toStrictEqual(expectedHealth);
 
       yield* server.close;
       yield* inMemory.close;
@@ -670,13 +662,12 @@ describe("@view-server/server", () => {
                   bytesPerSecond: 0,
                   decodedMessagesPerSecond: 0,
                   decodeFailuresPerSecond: 0,
+                  mappingFailuresPerSecond: 0,
                   processingFailuresPerSecond: 0,
                   lastMessageAt: null,
                   lastCommitAt: null,
                   consumerLagMessages: 42n,
-                  consumerLagMs: null,
                   lagSampledAt: null,
-                  highWatermarkOffset: null,
                   committedOffset: null,
                   lastError: null,
                 },

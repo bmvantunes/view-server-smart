@@ -60,13 +60,12 @@ export type KafkaTopicRegionHealth = {
   readonly bytesPerSecond: number;
   readonly decodedMessagesPerSecond: number;
   readonly decodeFailuresPerSecond: number;
+  readonly mappingFailuresPerSecond: number;
   readonly processingFailuresPerSecond: number;
   readonly lastMessageAt: number | null;
   readonly lastCommitAt: number | null;
   readonly consumerLagMessages: bigint | null;
-  readonly consumerLagMs: number | null;
   readonly lagSampledAt: number | null;
-  readonly highWatermarkOffset: string | null;
   readonly committedOffset: string | null;
   readonly lastError: string | null;
 };
@@ -174,6 +173,53 @@ function typedHealthTopicRows(
 
 const topicIsUnhealthy = (topic: TopicRuntimeHealth): boolean => topic.status !== "ready";
 
+const kafkaTopicStatusToTopicStatus = (status: KafkaTopicStatus): TopicHealthStatus => {
+  if (status === "ready") {
+    return "ready";
+  }
+  if (status === "starting") {
+    return "starting";
+  }
+  return "degraded";
+};
+
+const mergeTopicHealthStatus = (
+  engineStatus: TopicHealthStatus,
+  kafkaStatus: TopicHealthStatus | undefined,
+): TopicHealthStatus => {
+  if (engineStatus === "degraded" || kafkaStatus === "degraded") {
+    return "degraded";
+  }
+  if (engineStatus === "starting" || kafkaStatus === "starting") {
+    return "starting";
+  }
+  return "ready";
+};
+
+const kafkaTopicStatusForViewTopic = (
+  health: Pick<ViewServerHealth, "kafka">,
+  viewServerTopic: string,
+): TopicHealthStatus | undefined => {
+  let status: TopicHealthStatus | undefined = undefined;
+  for (const kafkaTopic of Object.values(health.kafka?.topics ?? {})) {
+    if (kafkaTopic.viewServerTopic === viewServerTopic) {
+      status = mergeTopicHealthStatus(
+        status ?? "ready",
+        kafkaTopicStatusToTopicStatus(kafkaTopic.status),
+      );
+    }
+  }
+  return status;
+};
+
+const kafkaTopicIsUnhealthy = (
+  health: Pick<ViewServerHealth, "kafka">,
+  viewServerTopic: string,
+): boolean => {
+  const status = kafkaTopicStatusForViewTopic(health, viewServerTopic);
+  return status !== undefined && status !== "ready";
+};
+
 const kafkaRegionLag = (region: KafkaTopicRegionHealth): bigint =>
   region.consumerLagMessages === null ? 0n : region.consumerLagMessages;
 
@@ -201,7 +247,9 @@ export const viewServerHealthSummaryFromHealth = <Topics extends object>(
 ): ViewServerHealthSummary<Topics> => {
   const topicHealthByName: Readonly<Record<string, TopicRuntimeHealth>> = health.engine.topics;
   const unhealthyTopics = Object.entries(topicHealthByName)
-    .filter(([, topic]) => topicIsUnhealthy(topic))
+    .filter(
+      ([topicName, topic]) => topicIsUnhealthy(topic) || kafkaTopicIsUnhealthy(health, topicName),
+    )
     .map(([topic]) => topic);
   let maxKafkaLag = 0n;
   for (const topic of Object.keys(health.engine.topics)) {
@@ -235,8 +283,12 @@ export const viewServerHealthTopicRowsFromHealth = <Topics extends object>(
   const topicHealthByName: Readonly<Record<string, TopicRuntimeHealth>> = health.engine.topics;
   const rows: Array<ViewServerHealthTopicRow<string>> = [];
   for (const [id, topic] of Object.entries(topicHealthByName)) {
+    const effectiveStatus = mergeTopicHealthStatus(
+      topic.status,
+      kafkaTopicStatusForViewTopic(health, id),
+    );
     const status: TopicHealthStatus | "stopping" =
-      health.status === "stopping" ? "stopping" : topic.status;
+      health.status === "stopping" ? "stopping" : effectiveStatus;
     rows.push({
       id,
       status,

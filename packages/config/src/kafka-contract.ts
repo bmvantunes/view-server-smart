@@ -47,6 +47,21 @@ export type KafkaDecodeError = {
   readonly cause?: unknown;
 };
 
+const KafkaMappingErrorTypeId: unique symbol = Symbol("@view-server/config/KafkaMappingError");
+
+export type KafkaMappingError = {
+  readonly _tag: "KafkaMappingError";
+  readonly [KafkaMappingErrorTypeId]: typeof KafkaMappingErrorTypeId;
+  readonly message: string;
+  readonly cause?: unknown;
+};
+
+export const kafkaErrorIsMapping = (error: unknown): error is KafkaMappingError =>
+  typeof error === "object" &&
+  error !== null &&
+  Object.hasOwn(error, KafkaMappingErrorTypeId) &&
+  Reflect.get(error, KafkaMappingErrorTypeId) === KafkaMappingErrorTypeId;
+
 export type KafkaCodec<A, E = never> = {
   readonly [KafkaCodecValueTypeId]: ReadonlyArray<A>;
   readonly [KafkaCodecErrorTypeId]: ReadonlyArray<E>;
@@ -173,6 +188,13 @@ const utf8Decoder = new TextDecoder();
 
 const kafkaDecodeError = (message: string, cause: unknown): KafkaDecodeError => ({
   _tag: "KafkaDecodeError",
+  message,
+  cause,
+});
+
+const kafkaMappingError = (message: string, cause: unknown): KafkaMappingError => ({
+  _tag: "KafkaMappingError",
+  [KafkaMappingErrorTypeId]: KafkaMappingErrorTypeId,
   message,
   cause,
 });
@@ -356,7 +378,7 @@ type KafkaTopicWithoutKey<
     Topics,
     ViewTopic,
     TopicRegions[number],
-    KafkaCodecError<ValueCodec> | KafkaDecodeError
+    KafkaCodecError<ValueCodec> | KafkaDecodeError | KafkaMappingError
   >;
 
 type KafkaTopicWithKeyInput<
@@ -410,7 +432,7 @@ type KafkaTopicWithKey<
     Topics,
     ViewTopic,
     TopicRegions[number],
-    KafkaCodecError<ValueCodec> | KafkaCodecError<KeyCodec> | KafkaDecodeError
+    KafkaCodecError<ValueCodec> | KafkaCodecError<KeyCodec> | KafkaDecodeError | KafkaMappingError
   >;
 
 export type KafkaTopicDefinition<
@@ -482,10 +504,10 @@ export type KafkaRuntimeTopicDefinition<
 const decodeKafkaStringKey = (input: KafkaCodecDecodeInput): string =>
   utf8Decoder.decode(input.bytes);
 
-const mapKafkaPayload = <A>(map: () => A): Effect.Effect<A, KafkaDecodeError> =>
+const mapKafkaPayload = <A>(map: () => A): Effect.Effect<A, KafkaMappingError> =>
   Effect.try({
     try: map,
-    catch: (cause) => kafkaDecodeError("Failed to map Kafka payload", cause),
+    catch: (cause) => kafkaMappingError("Failed to map Kafka payload", cause),
   });
 
 export const decodeKafkaTopicMessage = Effect.fn("ViewServerConfig.kafka.topic.decodeMessage")(
@@ -621,8 +643,8 @@ export type RuntimeOptions<
   KafkaTopics extends Record<string, object>,
 > = {
   readonly websocketPort: RuntimeValue<number>;
-  readonly tcpPublishPort: RuntimeValue<number>;
   readonly kafka: {
+    readonly consumerGroupId: string;
     readonly regions: Regions;
     readonly topics: ValidateKafkaTopics<Topics, Regions, KafkaTopics>;
   };
@@ -630,8 +652,8 @@ export type RuntimeOptions<
 
 export type RuntimeOptionsCandidate = {
   readonly websocketPort: RuntimeValue<number>;
-  readonly tcpPublishPort: RuntimeValue<number>;
   readonly kafka: {
+    readonly consumerGroupId: string;
     readonly regions: RuntimeRegions;
     readonly topics: Record<string, object>;
   };

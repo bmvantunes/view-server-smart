@@ -8,11 +8,25 @@ import type {
 import { Buffer } from "node:buffer";
 import {
   decodeKafkaTopicMessage,
+  kafkaErrorIsMapping,
   type KafkaMessageMetadata,
   type ViewServerConfig,
   type ViewServerRuntimeClient,
 } from "@view-server/config";
-import { Clock, Effect, Exit, Fiber, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  MutableRef,
+  Option,
+  Ref,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import type { ViewServerKafkaHealthLedger } from "./kafka-health";
 import type { ResolvedViewServerKafkaRuntimeOptions } from "./runtime-options";
 import type { ViewServerRuntimeTopicDefinitions } from "./runtime-types";
@@ -44,6 +58,8 @@ type CloseableKafkaStream = {
 };
 type KafkaConsumerHealthListenerRegistration = {
   readonly close: Effect.Effect<void>;
+  readonly processed: Effect.Effect<number>;
+  readonly waitForProcessed: (expected: number) => Effect.Effect<void>;
 };
 export type StartedKafkaConsumerResources = {
   readonly consumer: CloseableKafkaConsumer;
@@ -52,6 +68,14 @@ export type StartedKafkaConsumerResources = {
 };
 type KafkaMessageBytes = Buffer | null | undefined;
 type KafkaConsumerMessage = Message<KafkaMessageBytes, KafkaMessageBytes, Buffer, Buffer>;
+type KafkaConsumerHealthListenerWaiter = {
+  readonly expected: number;
+  readonly deferred: Deferred.Deferred<void>;
+};
+type KafkaConsumerHealthListenerProcessedState = {
+  readonly count: number;
+  readonly waiters: ReadonlyArray<KafkaConsumerHealthListenerWaiter>;
+};
 
 const emptyMessageBytes = Buffer.alloc(0);
 
@@ -119,9 +143,6 @@ export const assignedPartitionsForSourceTopic = (
   return assignment?.partitions.length ?? 0;
 };
 
-const assignedPartitionsFromLag = (lags: ReadonlyArray<bigint>): number =>
-  lags.filter((lag) => lag >= 0n).length;
-
 const consumerLagMessagesFromLag = (lags: ReadonlyArray<bigint>): bigint =>
   lags.reduce((total, lag) => (lag >= 0n ? total + lag : total), 0n);
 
@@ -188,6 +209,18 @@ export const kafkaMessageDecodeError = (
     sourceTopic,
   });
 
+export const kafkaMessageMappingError = (
+  region: string,
+  sourceTopic: string,
+  cause: unknown,
+): ViewServerKafkaIngressError =>
+  new ViewServerKafkaIngressError({
+    message: `Failed to map Kafka message for source topic ${sourceTopic}`,
+    cause,
+    region,
+    sourceTopic,
+  });
+
 export const kafkaMessageProcessingError = (
   region: string,
   sourceTopic: string,
@@ -204,8 +237,13 @@ export const recordKafkaStreamError = <const Topics extends ViewServerRuntimeTop
   health: ViewServerKafkaHealthLedger<Topics>,
   region: string,
   error: ViewServerKafkaIngressError,
+  options?: {
+    readonly preserveTopicErrors?: boolean;
+  },
 ): Effect.Effect<never, ViewServerKafkaIngressError> =>
-  health.regionDisconnected(region, error.message).pipe(Effect.andThen(Effect.fail(error)));
+  health
+    .regionDisconnected(region, error.message, options)
+    .pipe(Effect.andThen(Effect.fail(error)));
 
 const refreshKafkaHealth = <const Topics extends ViewServerRuntimeTopicDefinitions>(
   client: ViewServerRuntimeClient<Topics>,
@@ -221,6 +259,7 @@ export const recordKafkaAssignments = Effect.fn(
   assignments: ReadonlyArray<GroupAssignment> | null | undefined,
   nowMillis: number,
 ) {
+  yield* health.regionConnected(region, nowMillis);
   yield* Effect.forEach(
     topics,
     (sourceTopic) =>
@@ -244,11 +283,11 @@ export const recordKafkaLag = Effect.fn("ViewServerRuntime.kafka.consumer.record
   lag: Offsets,
   nowMillis: number,
 ) {
+  yield* health.regionRecovered(region, nowMillis);
   yield* Effect.forEach(
     lag,
     ([sourceTopic, partitions]) =>
       health.topicLagSampled(sourceTopic, region, {
-        assignedPartitions: assignedPartitionsFromLag(partitions),
         consumerLagMessages: consumerLagMessagesFromLag(partitions),
         nowMillis,
       }),
@@ -272,7 +311,11 @@ export const closeKafkaConsumerOnStartFailure = Effect.fn(
   consumer: CloseableKafkaConsumer,
   start: Effect.Effect<A, ViewServerKafkaIngressError>,
 ) {
-  return yield* start.pipe(Effect.tapError(() => closeKafkaConsumerAfterStartFailure(consumer)));
+  return yield* start.pipe(
+    Effect.onExit((exit) =>
+      Exit.isFailure(exit) ? closeKafkaConsumerAfterStartFailure(consumer) : Effect.void,
+    ),
+  );
 });
 
 const makeKafkaConsumer = Effect.fn("ViewServerRuntime.kafka.consumer.make")(function* (
@@ -295,7 +338,7 @@ const makeKafkaConsumer = Effect.fn("ViewServerRuntime.kafka.consumer.make")(fun
         consumer.consume({
           autocommit: false,
           fallbackMode: "earliest",
-          mode: "earliest",
+          mode: "committed",
           topics: [...topics],
         }),
       catch: mapKafkaConsumerStartError(region),
@@ -325,7 +368,7 @@ export const closeStartedKafkaConsumerResources = Effect.fn(
 )(function* (resources: StartedKafkaConsumerResources) {
   const healthListeners = resources.healthListeners();
   if (healthListeners !== null) {
-    yield* healthListeners.close.pipe(Effect.ignore);
+    yield* healthListeners.close.pipe(Effect.ignoreCause);
   }
   yield* closeKafkaConsumer({
     consumer: resources.consumer,
@@ -378,8 +421,20 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
     metadata,
   }).pipe(
     Effect.matchEffect({
-      onFailure: (error) =>
-        health
+      onFailure: (error) => {
+        if (kafkaErrorIsMapping(error)) {
+          return health
+            .mappingFailed(sourceTopic, region, {
+              bytes: messageBytes,
+              message: messageFromUnknown(error),
+              nowMillis,
+            })
+            .pipe(
+              Effect.andThen(refreshHealth),
+              Effect.andThen(Effect.fail(kafkaMessageMappingError(region, sourceTopic, error))),
+            );
+        }
+        return health
           .decodeFailed(sourceTopic, region, {
             bytes: messageBytes,
             message: messageFromUnknown(error),
@@ -388,7 +443,8 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
           .pipe(
             Effect.andThen(refreshHealth),
             Effect.andThen(Effect.fail(kafkaMessageDecodeError(region, sourceTopic, error))),
-          ),
+          );
+      },
       onSuccess: (decodedMessage) => Effect.succeed(decodedMessage),
     }),
   );
@@ -436,11 +492,22 @@ export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.r
     Stream.runForEach((message) =>
       processKafkaMessage(config, client, options, health, region, message),
     ),
-    Effect.catch((error) =>
-      recordKafkaStreamError(health, region, error).pipe(
-        Effect.ensuring(refreshKafkaHealth(client)),
-      ),
-    ),
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.failCause(cause);
+      }
+      const error = Cause.findErrorOption(cause);
+      if (Option.isSome(error)) {
+        return recordKafkaStreamError(health, region, error.value, {
+          preserveTopicErrors: true,
+        }).pipe(Effect.ensuring(refreshKafkaHealth(client)));
+      }
+      return recordKafkaStreamError(
+        health,
+        region,
+        kafkaStreamError(region, Cause.squash(cause)),
+      ).pipe(Effect.ensuring(refreshKafkaHealth(client)));
+    }),
   );
 });
 
@@ -452,11 +519,81 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
   client: ViewServerRuntimeClient<Topics>,
   region: string,
   topics: ReadonlyArray<string>,
+  scope: Scope.Scope,
 ) {
   const services = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(services);
+  const listenersOpen = MutableRef.make(true);
+  const processed = yield* Ref.make<KafkaConsumerHealthListenerProcessedState>({
+    count: 0,
+    waiters: [],
+  });
+  yield* Scope.addFinalizer(
+    scope,
+    Effect.sync(() => {
+      listenersOpen.current = false;
+    }),
+  );
+  const markProcessed = Effect.fn("ViewServerRuntime.kafka.consumer.healthEvent.markProcessed")(
+    function* () {
+      const ready = yield* Ref.modify(processed, (state) => {
+        const count = state.count + 1;
+        const ready = state.waiters.filter((waiter) => count >= waiter.expected);
+        const pending = state.waiters.filter((waiter) => count < waiter.expected);
+        return [
+          ready,
+          {
+            count,
+            waiters: pending,
+          },
+        ];
+      });
+      yield* Effect.forEach(ready, (waiter) => Deferred.succeed(waiter.deferred, undefined), {
+        discard: true,
+      });
+    },
+  );
+  const waitForProcessed = Effect.fn("ViewServerRuntime.kafka.consumer.healthEvent.waitProcessed")(
+    function* (expected: number) {
+      const deferred = yield* Deferred.make<void>();
+      const shouldWait = yield* Ref.modify(processed, (state) => {
+        if (state.count >= expected) {
+          return [false, state];
+        }
+        return [
+          true,
+          {
+            count: state.count,
+            waiters: [
+              ...state.waiters,
+              {
+                deferred,
+                expected,
+              },
+            ],
+          },
+        ];
+      });
+      if (!shouldWait) {
+        return;
+      }
+      yield* Deferred.await(deferred);
+    },
+  );
+  const runScoped = (effect: Effect.Effect<void>) => {
+    if (listenersOpen.current) {
+      runFork(
+        effect.pipe(
+          Effect.ensuring(markProcessed()),
+          Effect.forkIn(scope, { startImmediately: true }),
+          Effect.asVoid,
+          Effect.ignoreCause,
+        ),
+      );
+    }
+  };
   const groupJoinListener = (payload: ConsumerGroupJoinPayload) => {
-    runFork(
+    runScoped(
       Effect.gen(function* () {
         const nowMillis = yield* Clock.currentTimeMillis;
         yield* recordKafkaAssignments(
@@ -471,21 +608,42 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
     );
   };
   const lagListener = (lag: Offsets) => {
-    runFork(
+    runScoped(
       Effect.gen(function* () {
         const nowMillis = yield* Clock.currentTimeMillis;
         yield* recordKafkaLag(health, client, region, lag, nowMillis);
       }),
     );
   };
+  const groupLeaveListener = () => {
+    runScoped(
+      health
+        .regionDisconnected(region, "Kafka consumer left group")
+        .pipe(Effect.andThen(refreshKafkaHealth(client))),
+    );
+  };
+  const lagErrorListener = (error: unknown) => {
+    runScoped(
+      health
+        .regionDegraded(region, messageFromUnknown(error))
+        .pipe(Effect.andThen(refreshKafkaHealth(client))),
+    );
+  };
   consumer.on("consumer:group:join", groupJoinListener);
+  consumer.on("consumer:group:leave", groupLeaveListener);
   consumer.on("consumer:lag", lagListener);
+  consumer.on("consumer:lag:error", lagErrorListener);
   const registration: KafkaConsumerHealthListenerRegistration = {
     close: Effect.sync(() => {
+      listenersOpen.current = false;
       consumer.off("consumer:group:join", groupJoinListener);
+      consumer.off("consumer:group:leave", groupLeaveListener);
       consumer.off("consumer:lag", lagListener);
+      consumer.off("consumer:lag:error", lagErrorListener);
       consumer.stopLagMonitoring();
-    }),
+    }).pipe(Effect.ignoreCause),
+    processed: Ref.get(processed).pipe(Effect.map((state) => state.count)),
+    waitForProcessed,
   };
   return registration;
 });
@@ -508,6 +666,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
   region: string,
   brokers: string,
   topics: ReadonlyArray<string>,
+  scope: Scope.Scope,
 ) {
   const { consumer, stream } = yield* makeKafkaConsumer(
     region,
@@ -538,6 +697,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
         client,
         region,
         topics,
+        scope,
       );
       yield* startKafkaLagMonitoring(consumer, topics);
       const nowMillis = yield* Clock.currentTimeMillis;
@@ -558,9 +718,12 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
         region,
         stream,
       ).pipe(Effect.ensuring(closeResources));
-      const fiber = yield* processStream.pipe(Effect.forkDetach({ startImmediately: true }));
+      const fiber = yield* processStream.pipe(Effect.forkIn(scope, { startImmediately: true }));
       return {
-        close: closeResources.pipe(Effect.andThen(Fiber.interrupt(fiber)), Effect.asVoid),
+        close: Effect.all([Fiber.interrupt(fiber), closeResources], {
+          concurrency: "unbounded",
+          discard: true,
+        }),
       };
     }),
   );
@@ -604,6 +767,7 @@ export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntime
   options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
   health: ViewServerKafkaHealthLedger<Topics>,
 ) {
+  const scope = yield* Scope.make("parallel");
   const consumers = yield* startKafkaRegionConsumers(
     Object.entries(options.regions),
     (region, brokers) => {
@@ -613,12 +777,12 @@ export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntime
           close: Effect.void,
         });
       }
-      return startRegionConsumer(config, client, options, health, region, brokers, topics);
+      return startRegionConsumer(config, client, options, health, region, brokers, topics, scope);
     },
-  );
+  ).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)));
   return {
     close: Effect.forEach(consumers, (consumer) => consumer.close, {
       discard: true,
-    }),
+    }).pipe(Effect.ensuring(Scope.close(scope, Exit.void))),
   };
 });

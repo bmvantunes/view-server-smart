@@ -105,6 +105,7 @@ export {
   decodeKafkaTopicMessage,
   defineKafkaTopic,
   kafka,
+  kafkaErrorIsMapping,
 } from "./kafka-contract";
 export type {
   KafkaBytesCodec,
@@ -117,6 +118,7 @@ export type {
   KafkaCustomCodec,
   KafkaDecodeError,
   KafkaJsonCodec,
+  KafkaMappingError,
   KafkaMappingInput,
   KafkaMessageMetadata,
   KafkaProtobufCodec,

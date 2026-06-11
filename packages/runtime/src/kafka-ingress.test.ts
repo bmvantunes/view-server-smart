@@ -49,6 +49,11 @@ type ProducerMessage = {
   readonly value: string;
 };
 
+const nullRecord = <Value>(entries: Record<string, Value>): Record<string, Value> => {
+  const record: Record<string, Value> = Object.create(null);
+  return Object.assign(record, entries);
+};
+
 const uniqueTopicName = Effect.fn("ViewServerRuntime.kafka.test.topicName")(function* (
   prefix: string,
 ) {
@@ -284,20 +289,20 @@ describe("@view-server/runtime Kafka ingress", () => {
                   trades: 1,
                 },
                 kafka: {
-                  regions: {
+                  regions: nullRecord({
                     local: {
                       status: "connected",
                       brokers: kafkaBootstrapServers,
                       lastConnectedAt: expect.any(Number),
                       lastError: null,
                     },
-                  },
-                  topics: {
+                  }),
+                  topics: nullRecord({
                     [ordersSourceTopic]: {
                       status: "ready",
                       sourceTopic: ordersSourceTopic,
                       viewServerTopic: "orders",
-                      regions: {
+                      regions: nullRecord({
                         local: {
                           connected: true,
                           assignedPartitions: 1,
@@ -305,23 +310,22 @@ describe("@view-server/runtime Kafka ingress", () => {
                           bytesPerSecond: expect.any(Number),
                           decodedMessagesPerSecond: expect.any(Number),
                           decodeFailuresPerSecond: 0,
+                          mappingFailuresPerSecond: 0,
                           processingFailuresPerSecond: 0,
                           lastMessageAt: expect.any(Number),
                           lastCommitAt: expect.any(Number),
                           consumerLagMessages: 0n,
-                          consumerLagMs: null,
                           lagSampledAt: expect.any(Number),
-                          highWatermarkOffset: null,
                           committedOffset: "2",
                           lastError: null,
                         },
-                      },
+                      }),
                     },
                     [tradesSourceTopic]: {
                       status: "ready",
                       sourceTopic: tradesSourceTopic,
                       viewServerTopic: "trades",
-                      regions: {
+                      regions: nullRecord({
                         local: {
                           connected: true,
                           assignedPartitions: 1,
@@ -329,19 +333,18 @@ describe("@view-server/runtime Kafka ingress", () => {
                           bytesPerSecond: expect.any(Number),
                           decodedMessagesPerSecond: expect.any(Number),
                           decodeFailuresPerSecond: 0,
+                          mappingFailuresPerSecond: 0,
                           processingFailuresPerSecond: 0,
                           lastMessageAt: expect.any(Number),
                           lastCommitAt: expect.any(Number),
                           consumerLagMessages: 0n,
-                          consumerLagMs: null,
                           lagSampledAt: expect.any(Number),
-                          highWatermarkOffset: null,
                           committedOffset: "1",
                           lastError: null,
                         },
-                      },
+                      }),
                     },
-                  },
+                  }),
                 },
               });
             }),

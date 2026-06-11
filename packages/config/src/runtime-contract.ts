@@ -85,5 +85,4 @@ export type ViewServerRuntimeClient<Topics extends object> = {
 
 export type RuntimeEnvironmentConfig = {
   readonly websocketPort: Config.Config<number>;
-  readonly tcpPublishPort: Config.Config<number>;
 };

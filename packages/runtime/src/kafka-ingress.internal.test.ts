@@ -9,7 +9,7 @@ import {
 } from "@view-server/config";
 import { makeViewServerRuntimeCore } from "@view-server/runtime-core";
 import { Buffer } from "node:buffer";
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Exit, Fiber, Schema, Scope } from "effect";
 import { makeViewServerKafkaHealthLedger } from "./kafka-health";
 import {
   assignedPartitionsForSourceTopic,
@@ -78,6 +78,21 @@ const regions = {
 const localKafkaTopic = viewServer.kafkaTopic<typeof regions>();
 const ordersSourceTopic = "orders-source";
 const unknownSourceTopic = "unknown-source";
+const nonStringTagCodecError: { readonly _tag: 123; readonly message: "non-string tag" } = {
+  _tag: 123,
+  message: "non-string tag",
+};
+const forgedMappingTagCodecError: {
+  readonly _tag: "KafkaMappingError";
+  readonly [key: symbol]: symbol;
+  readonly message: "forged mapping tag";
+} = {
+  _tag: "KafkaMappingError",
+  [Symbol.for("@view-server/config/KafkaMappingError")]: Symbol.for(
+    "@view-server/config/KafkaMappingError",
+  ),
+  message: "forged mapping tag",
+};
 
 const kafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
   consumerGroupId: "view-server-test",
@@ -95,6 +110,11 @@ const kafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
       }),
     }),
   },
+};
+
+const nullRecord = <Value>(entries: Record<string, Value>): Record<string, Value> => {
+  const record: Record<string, Value> = Object.create(null);
+  return Object.assign(record, entries);
 };
 
 const kafkaMessage = (input: {
@@ -370,22 +390,42 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
-  it.effect("closes Kafka consumers when startup effects fail", () =>
+  it.effect("closes Kafka consumers when startup effects fail or are interrupted", () =>
     Effect.gen(function* () {
-      let closeForce: boolean | undefined = undefined;
-      const exit = yield* Effect.exit(
+      let failedCloseForce: boolean | undefined = undefined;
+      const failedExit = yield* Effect.exit(
         closeKafkaConsumerOnStartFailure(
           {
             close: (force) => {
-              closeForce = force;
+              failedCloseForce = force;
             },
           },
           Effect.fail(kafkaConsumerStartError("local", "no-broker")),
         ),
       );
+      let interruptedCloseForce: boolean | undefined = undefined;
+      const interruptedExit = yield* Effect.exit(
+        closeKafkaConsumerOnStartFailure(
+          {
+            close: (force) => {
+              interruptedCloseForce = force;
+            },
+          },
+          Effect.interrupt,
+        ),
+      );
 
-      expect(Exit.isFailure(exit)).toBe(true);
-      expect(closeForce).toBe(true);
+      expect({
+        failed: Exit.isFailure(failedExit),
+        failedCloseForce,
+        interrupted: Exit.hasInterrupts(interruptedExit),
+        interruptedCloseForce,
+      }).toStrictEqual({
+        failed: true,
+        failedCloseForce: true,
+        interrupted: true,
+        interruptedCloseForce: true,
+      });
     }),
   );
 
@@ -432,6 +472,8 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           close: Effect.sync(() => {
             listenerCloseCount += 1;
           }),
+          processed: Effect.succeed(0),
+          waitForProcessed: () => Effect.void,
         }),
       };
       const resourcesWithoutListeners: StartedKafkaConsumerResources = {
@@ -454,6 +496,40 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       expect(streamCloseCount).toBe(2);
       expect(listenerCloseCount).toBe(1);
       expect(closeForce).toBe(true);
+    }),
+  );
+
+  it.effect("closes started Kafka resources when health listener cleanup defects", () =>
+    Effect.gen(function* () {
+      let closeForce: boolean | undefined = undefined;
+      let streamCloseCount = 0;
+      const resources: StartedKafkaConsumerResources = {
+        consumer: {
+          close: (force) => {
+            closeForce = force;
+          },
+        },
+        stream: {
+          close: () => {
+            streamCloseCount += 1;
+          },
+        },
+        healthListeners: () => ({
+          close: Effect.die(new Error("listener close failed")),
+          processed: Effect.succeed(0),
+          waitForProcessed: () => Effect.void,
+        }),
+      };
+
+      yield* closeStartedKafkaConsumerResources(resources);
+
+      expect({
+        closeForce,
+        streamCloseCount,
+      }).toStrictEqual({
+        closeForce: true,
+        streamCloseCount: 1,
+      });
     }),
   );
 
@@ -492,6 +568,8 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           close: Effect.sync(() => {
             failedListenerCloseCount += 1;
           }),
+          processed: Effect.succeed(0),
+          waitForProcessed: () => Effect.void,
         }),
       };
 
@@ -529,6 +607,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         },
       });
 
+      yield* ledger.regionRecovered("local", 1_000);
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 2, 1_000);
       yield* ledger.messageDecoded(ordersSourceTopic, "local", {
@@ -547,8 +626,13 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         nowMillis: 2_000,
       });
       yield* ledger.regionConnected("missing", 2_000);
+      yield* ledger.regionDegraded("missing", "ignored");
+      yield* ledger.regionDegraded("local", "lag monitor failed");
+      yield* ledger.regionRecovered("local", 2_000);
       yield* ledger.regionDisconnected("local", "lost");
+      yield* ledger.regionRecovered("local", 2_000);
       yield* ledger.regionDisconnected("missing", "ignored");
+      yield* ledger.regionRecovered("missing", 2_000);
       yield* ledger.topicConnected("missing", "local", 1, 2_000);
       yield* ledger.messageDecoded("missing", "local", {
         bytes: 1,
@@ -556,6 +640,11 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         nowMillis: 2_000,
       });
       yield* ledger.decodeFailed("missing", "local", {
+        bytes: 1,
+        message: "ignored",
+        nowMillis: 2_000,
+      });
+      yield* ledger.mappingFailed("missing", "local", {
         bytes: 1,
         message: "ignored",
         nowMillis: 2_000,
@@ -574,20 +663,20 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       }).toStrictEqual({
         status: "degraded",
         kafka: {
-          regions: {
+          regions: nullRecord({
             local: {
               status: "disconnected",
               brokers: regions.local,
               lastConnectedAt: 1_000,
               lastError: "lost",
             },
-          },
-          topics: {
+          }),
+          topics: nullRecord({
             [ordersSourceTopic]: {
               status: "degraded",
               sourceTopic: ordersSourceTopic,
               viewServerTopic: "orders",
-              regions: {
+              regions: nullRecord({
                 local: {
                   connected: false,
                   assignedPartitions: 2,
@@ -595,20 +684,102 @@ describe("@view-server/runtime Kafka ingress internals", () => {
                   bytesPerSecond: 25,
                   decodedMessagesPerSecond: 1,
                   decodeFailuresPerSecond: 1,
+                  mappingFailuresPerSecond: 0,
                   processingFailuresPerSecond: 0,
                   lastMessageAt: 2_000,
                   lastCommitAt: 2_000,
                   consumerLagMessages: null,
-                  consumerLagMs: null,
                   lagSampledAt: null,
-                  highWatermarkOffset: null,
                   committedOffset: "2",
                   lastError: "lost",
                 },
-              },
+              }),
             },
+          }),
+        },
+      });
+
+      const splitRegionLedger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+          [unknownSourceTopic]: {
+            regions: ["cold"],
+            viewServerTopic: "orders",
           },
         },
+      });
+      yield* splitRegionLedger.regionRecovered("local", 3_000);
+      const splitRegionHealth = splitRegionLedger.healthOverlay(
+        yield* runtimeCore.client.health(),
+        3_000,
+      );
+      expect(splitRegionHealth.kafka).toStrictEqual({
+        regions: nullRecord({
+          cold: {
+            status: "starting",
+            brokers: regions.cold,
+            lastConnectedAt: null,
+            lastError: null,
+          },
+          local: {
+            status: "connected",
+            brokers: regions.local,
+            lastConnectedAt: 3_000,
+            lastError: null,
+          },
+        }),
+        topics: nullRecord({
+          [ordersSourceTopic]: {
+            status: "starting",
+            sourceTopic: ordersSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              local: {
+                connected: false,
+                assignedPartitions: 0,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: null,
+                lagSampledAt: null,
+                committedOffset: null,
+                lastError: null,
+              },
+            }),
+          },
+          [unknownSourceTopic]: {
+            status: "starting",
+            sourceTopic: unknownSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              cold: {
+                connected: false,
+                assignedPartitions: 0,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: null,
+                lagSampledAt: null,
+                committedOffset: null,
+                lastError: null,
+              },
+            }),
+          },
+        }),
       });
 
       yield* runtimeCore.close;
@@ -661,7 +832,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         status: "ready",
         sourceTopic: ordersSourceTopic,
         viewServerTopic: "orders",
-        regions: {
+        regions: nullRecord({
           local: {
             connected: true,
             assignedPartitions: 2,
@@ -669,17 +840,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
             bytesPerSecond: 0,
             decodedMessagesPerSecond: 0,
             decodeFailuresPerSecond: 0,
+            mappingFailuresPerSecond: 0,
             processingFailuresPerSecond: 0,
-            lastMessageAt: 1_000,
+            lastMessageAt: null,
             lastCommitAt: null,
             consumerLagMessages: 5n,
-            consumerLagMs: null,
             lagSampledAt: 2_000,
-            highWatermarkOffset: null,
             committedOffset: null,
             lastError: null,
           },
-        },
+        }),
       });
 
       yield* runtimeCore.close;
@@ -711,6 +881,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         clientId: "view-server-listener-test",
         groupId: "view-server-listener-test",
       });
+      const scope = yield* Scope.make("parallel");
       yield* ledger.regionConnected("local", 1_000);
       const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
         consumer,
@@ -718,8 +889,13 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         refreshingClient,
         "local",
         [ordersSourceTopic],
+        scope,
       );
+      yield* listenerRegistration.waitForProcessed(0);
 
+      const degradedWait = yield* listenerRegistration
+        .waitForProcessed(5)
+        .pipe(Effect.forkChild({ startImmediately: true }));
       consumer.emit("consumer:group:join", {
         groupId: "view-server-listener-test",
         memberId: "member-1",
@@ -730,29 +906,104 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         assignments: [{ topic: ordersSourceTopic, partitions: [0, 1] }],
       });
       consumer.emit("consumer:lag", new Map([[ordersSourceTopic, [4n, 1n]]]));
-      yield* Effect.promise<void>(() => new Promise((resolve) => setTimeout(resolve, 0)));
-      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+      consumer.emit("consumer:group:leave", {
+        groupId: "view-server-listener-test",
+        memberId: "member-1",
+      });
+      consumer.emit("consumer:lag:error", new Error("lag read failed"));
+      yield* Fiber.join(degradedWait);
+      const degradedProcessed = yield* listenerRegistration.processed;
+      const degradedHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
-      expect(healthReadCount).toBe(3);
-      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]).toStrictEqual({
-        connected: true,
-        assignedPartitions: 2,
-        messagesPerSecond: 0,
-        bytesPerSecond: 0,
-        decodedMessagesPerSecond: 0,
-        decodeFailuresPerSecond: 0,
-        processingFailuresPerSecond: 0,
-        lastMessageAt: expect.any(Number),
-        lastCommitAt: null,
-        consumerLagMessages: 5n,
-        consumerLagMs: null,
-        lagSampledAt: expect.any(Number),
-        highWatermarkOffset: null,
-        committedOffset: null,
-        lastError: null,
+      expect({
+        healthReadCount,
+        processed: degradedProcessed,
+      }).toStrictEqual({
+        healthReadCount: 5,
+        processed: 5,
+      });
+      expect({
+        region: degradedHealth.kafka?.regions["local"],
+        topicStatus: degradedHealth.kafka?.topics[ordersSourceTopic]?.status,
+        topicRegion: degradedHealth.kafka?.topics[ordersSourceTopic]?.regions["local"],
+      }).toStrictEqual({
+        region: {
+          status: "degraded",
+          brokers: regions.local,
+          lastConnectedAt: expect.any(Number),
+          lastError: "lag read failed",
+        },
+        topicStatus: "degraded",
+        topicRegion: {
+          connected: false,
+          assignedPartitions: 2,
+          messagesPerSecond: 0,
+          bytesPerSecond: 0,
+          decodedMessagesPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          processingFailuresPerSecond: 0,
+          lastMessageAt: null,
+          lastCommitAt: null,
+          consumerLagMessages: 5n,
+          lagSampledAt: expect.any(Number),
+          committedOffset: null,
+          lastError: "lag read failed",
+        },
+      });
+
+      const recoveredWait = yield* listenerRegistration
+        .waitForProcessed(7)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      consumer.emit("consumer:group:join", {
+        groupId: "view-server-listener-test",
+        memberId: "member-1",
+        assignments: [{ topic: ordersSourceTopic, partitions: [0, 1] }],
+      });
+      consumer.emit("consumer:lag", new Map([[ordersSourceTopic, [0n, 0n]]]));
+      yield* Fiber.join(recoveredWait);
+      const recoveredProcessed = yield* listenerRegistration.processed;
+      const recoveredHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        healthReadCount,
+        processed: recoveredProcessed,
+      }).toStrictEqual({
+        healthReadCount: 7,
+        processed: 7,
+      });
+      expect({
+        region: recoveredHealth.kafka?.regions["local"],
+        topicStatus: recoveredHealth.kafka?.topics[ordersSourceTopic]?.status,
+        topicRegion: recoveredHealth.kafka?.topics[ordersSourceTopic]?.regions["local"],
+      }).toStrictEqual({
+        region: {
+          status: "connected",
+          brokers: regions.local,
+          lastConnectedAt: expect.any(Number),
+          lastError: null,
+        },
+        topicStatus: "ready",
+        topicRegion: {
+          connected: true,
+          assignedPartitions: 2,
+          messagesPerSecond: 0,
+          bytesPerSecond: 0,
+          decodedMessagesPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          processingFailuresPerSecond: 0,
+          lastMessageAt: null,
+          lastCommitAt: null,
+          consumerLagMessages: 0n,
+          lagSampledAt: expect.any(Number),
+          committedOffset: null,
+          lastError: null,
+        },
       });
 
       yield* listenerRegistration.close;
+      yield* Scope.close(scope, Exit.void);
       yield* Effect.promise(() => Promise.resolve(consumer.close(true))).pipe(Effect.ignore);
       yield* runtimeCore.close;
     }),
@@ -806,20 +1057,20 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         ready: {
           status: "ready",
           kafka: {
-            regions: {
+            regions: nullRecord({
               local: {
                 status: "connected",
                 brokers: regions.local,
                 lastConnectedAt: 1_000,
                 lastError: null,
               },
-            },
-            topics: {
+            }),
+            topics: nullRecord({
               [ordersSourceTopic]: {
                 status: "ready",
                 sourceTopic: ordersSourceTopic,
                 viewServerTopic: "orders",
-                regions: {
+                regions: nullRecord({
                   local: {
                     connected: true,
                     assignedPartitions: 1,
@@ -827,25 +1078,24 @@ describe("@view-server/runtime Kafka ingress internals", () => {
                     bytesPerSecond: 0,
                     decodedMessagesPerSecond: 0,
                     decodeFailuresPerSecond: 0,
+                    mappingFailuresPerSecond: 0,
                     processingFailuresPerSecond: 0,
-                    lastMessageAt: 1_000,
+                    lastMessageAt: null,
                     lastCommitAt: null,
                     consumerLagMessages: null,
-                    consumerLagMs: null,
                     lagSampledAt: null,
-                    highWatermarkOffset: null,
                     committedOffset: null,
                     lastError: null,
                   },
-                },
+                }),
               },
-            },
+            }),
           },
         },
         starting: {
           status: "starting",
           kafka: {
-            regions: {
+            regions: nullRecord({
               cold: {
                 status: "starting",
                 brokers: regions.cold,
@@ -858,13 +1108,13 @@ describe("@view-server/runtime Kafka ingress internals", () => {
                 lastConnectedAt: 2_000,
                 lastError: null,
               },
-            },
-            topics: {
+            }),
+            topics: nullRecord({
               [ordersSourceTopic]: {
                 status: "starting",
                 sourceTopic: ordersSourceTopic,
                 viewServerTopic: "orders",
-                regions: {
+                regions: nullRecord({
                   cold: {
                     connected: false,
                     assignedPartitions: 0,
@@ -872,13 +1122,12 @@ describe("@view-server/runtime Kafka ingress internals", () => {
                     bytesPerSecond: 0,
                     decodedMessagesPerSecond: 0,
                     decodeFailuresPerSecond: 0,
+                    mappingFailuresPerSecond: 0,
                     processingFailuresPerSecond: 0,
                     lastMessageAt: null,
                     lastCommitAt: null,
                     consumerLagMessages: null,
-                    consumerLagMs: null,
                     lagSampledAt: null,
-                    highWatermarkOffset: null,
                     committedOffset: null,
                     lastError: null,
                   },
@@ -889,19 +1138,18 @@ describe("@view-server/runtime Kafka ingress internals", () => {
                     bytesPerSecond: 0,
                     decodedMessagesPerSecond: 0,
                     decodeFailuresPerSecond: 0,
+                    mappingFailuresPerSecond: 0,
                     processingFailuresPerSecond: 0,
-                    lastMessageAt: 2_000,
+                    lastMessageAt: null,
                     lastCommitAt: null,
                     consumerLagMessages: null,
-                    consumerLagMs: null,
                     lagSampledAt: null,
-                    highWatermarkOffset: null,
                     committedOffset: null,
                     lastError: null,
                   },
-                },
+                }),
               },
-            },
+            }),
           },
         },
       });
@@ -941,13 +1189,12 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         bytesPerSecond: 10,
         decodedMessagesPerSecond: 1,
         decodeFailuresPerSecond: 0,
+        mappingFailuresPerSecond: 0,
         processingFailuresPerSecond: 0,
         lastMessageAt: 1_000,
         lastCommitAt: 1_000,
         consumerLagMessages: null,
-        consumerLagMs: null,
         lagSampledAt: null,
-        highWatermarkOffset: null,
         committedOffset: "1",
         lastError: null,
       });
@@ -958,13 +1205,12 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         bytesPerSecond: 0,
         decodedMessagesPerSecond: 0,
         decodeFailuresPerSecond: 0,
+        mappingFailuresPerSecond: 0,
         processingFailuresPerSecond: 0,
         lastMessageAt: 1_000,
         lastCommitAt: 1_000,
         consumerLagMessages: null,
-        consumerLagMs: null,
         lagSampledAt: null,
-        highWatermarkOffset: null,
         committedOffset: "1",
         lastError: null,
       });
@@ -1005,7 +1251,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         status: "ready",
         sourceTopic: ordersSourceTopic,
         viewServerTopic: "orders",
-        regions: {
+        regions: nullRecord({
           local: {
             connected: true,
             assignedPartitions: 1,
@@ -1013,17 +1259,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
             bytesPerSecond: 15,
             decodedMessagesPerSecond: 1,
             decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
             processingFailuresPerSecond: 0,
             lastMessageAt: 1_000,
             lastCommitAt: 1_000,
             consumerLagMessages: null,
-            consumerLagMs: null,
             lagSampledAt: null,
-            highWatermarkOffset: null,
             committedOffset: "2",
             lastError: null,
           },
-        },
+        }),
       });
 
       yield* runtimeCore.close;
@@ -1089,13 +1334,95 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         regions: health.kafka?.regions,
       }).toStrictEqual({
         streamRecordingFailed: true,
-        regions: {
+        regions: nullRecord({
           local: {
             status: "disconnected",
             brokers: regions.local,
             lastConnectedAt: null,
             lastError: "Kafka stream failed for region local",
           },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records defects in Kafka stream processing as generic stream failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      const defectiveClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        publish: () => Effect.die("publish defect"),
+      };
+
+      const error = yield* Effect.flip(
+        runKafkaMessageStream(
+          viewServer,
+          defectiveClient,
+          kafkaOptions,
+          ledger,
+          "local",
+          (async function* () {
+            yield kafkaMessage({
+              topic: ordersSourceTopic,
+              key: "order-defective-publish",
+              value: JSON.stringify({
+                customerId: "customer-defective-publish",
+                price: 60,
+              }),
+            });
+          })(),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        error: {
+          message: error.message,
+          region: error.region,
+          sourceTopic: error.sourceTopic,
+        },
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        error: {
+          message: "Kafka stream failed for region local",
+          region: "local",
+          sourceTopic: undefined,
+        },
+        kafkaTopic: {
+          status: "degraded",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: false,
+              assignedPartitions: 1,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: "Kafka stream failed for region local",
+            },
+          }),
         },
       });
 
@@ -1103,6 +1430,86 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect("preserves Kafka health when message stream processing is interrupted", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      const interruptingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        publish: () => Effect.interrupt,
+      };
+
+      const exit = yield* Effect.exit(
+        runKafkaMessageStream(
+          viewServer,
+          interruptingClient,
+          kafkaOptions,
+          ledger,
+          "local",
+          (async function* () {
+            yield kafkaMessage({
+              topic: ordersSourceTopic,
+              key: "order-interrupted",
+              value: JSON.stringify({
+                customerId: "customer-interrupted",
+                price: 80,
+              }),
+            });
+          })(),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 1_000);
+
+      expect({
+        interrupted: Exit.hasInterrupts(exit),
+        region: health.kafka?.regions["local"],
+        topic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        interrupted: true,
+        region: {
+          status: "connected",
+          brokers: regions.local,
+          lastConnectedAt: 1_000,
+          lastError: null,
+        },
+        topic: {
+          status: "ready",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: null,
+            },
+          }),
+        },
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
   it.effect("runs Kafka message streams and records stream failures", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -1160,20 +1567,20 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       }).toStrictEqual({
         status: "degraded",
         kafka: {
-          regions: {
+          regions: nullRecord({
             local: {
               status: "disconnected",
               brokers: regions.local,
               lastConnectedAt: 1_000,
               lastError: "Kafka stream failed for region local",
             },
-          },
-          topics: {
+          }),
+          topics: nullRecord({
             [ordersSourceTopic]: {
               status: "degraded",
               sourceTopic: ordersSourceTopic,
               viewServerTopic: "orders",
-              regions: {
+              regions: nullRecord({
                 local: {
                   connected: false,
                   assignedPartitions: 1,
@@ -1181,19 +1588,18 @@ describe("@view-server/runtime Kafka ingress internals", () => {
                   bytesPerSecond: 59,
                   decodedMessagesPerSecond: 1,
                   decodeFailuresPerSecond: 0,
+                  mappingFailuresPerSecond: 0,
                   processingFailuresPerSecond: 0,
                   lastMessageAt: 0,
                   lastCommitAt: 0,
                   consumerLagMessages: null,
-                  consumerLagMs: null,
                   lagSampledAt: null,
-                  highWatermarkOffset: null,
                   committedOffset: "5",
                   lastError: "Kafka stream failed for region local",
                 },
-              },
+              }),
             },
-          },
+          }),
         },
       });
 
@@ -1217,7 +1623,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
 
       let committedMessages = 0;
-      const exit = yield* Effect.exit(
+      const error = yield* Effect.flip(
         runKafkaMessageStream(
           viewServer,
           runtimeCore.client,
@@ -1237,12 +1643,20 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
       expect({
-        streamFailed: Exit.isFailure(exit),
+        streamFailure: {
+          message: error.message,
+          region: error.region,
+          sourceTopic: error.sourceTopic,
+        },
         committedMessages,
         snapshot,
         kafkaTopic: health.kafka?.topics[ordersSourceTopic],
       }).toStrictEqual({
-        streamFailed: true,
+        streamFailure: {
+          message: `Failed to decode Kafka message for source topic ${ordersSourceTopic}`,
+          region: "local",
+          sourceTopic: ordersSourceTopic,
+        },
         committedMessages: 0,
         snapshot: {
           status: "ready",
@@ -1255,7 +1669,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           status: "degraded",
           sourceTopic: ordersSourceTopic,
           viewServerTopic: "orders",
-          regions: {
+          regions: nullRecord({
             local: {
               connected: false,
               assignedPartitions: 1,
@@ -1263,17 +1677,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
               bytesPerSecond: 9,
               decodedMessagesPerSecond: 0,
               decodeFailuresPerSecond: 1,
+              mappingFailuresPerSecond: 0,
               processingFailuresPerSecond: 0,
               lastMessageAt: 0,
               lastCommitAt: null,
               consumerLagMessages: null,
-              consumerLagMs: null,
               lagSampledAt: null,
-              highWatermarkOffset: null,
               committedOffset: null,
-              lastError: `Failed to decode Kafka message for source topic ${ordersSourceTopic}`,
+              lastError: "Failed to parse Kafka JSON payload",
             },
-          },
+          }),
         },
       });
 
@@ -1307,9 +1720,138 @@ describe("@view-server/runtime Kafka ingress internals", () => {
 
       expect(health.status).toBe("ready");
       expect(health.kafka).toStrictEqual({
-        regions: {},
-        topics: {},
+        regions: nullRecord({}),
+        topics: nullRecord({}),
       });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("does not run Kafka listener callbacks after their scope closes", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      let healthReadCount = 0;
+      const refreshingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        health: () =>
+          Effect.sync(() => {
+            healthReadCount += 1;
+          }).pipe(Effect.andThen(runtimeCore.client.health())),
+      };
+      const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
+        bootstrapBrokers: ["127.0.0.1:1"],
+        clientId: "view-server-scoped-listener-test",
+        groupId: "view-server-scoped-listener-test",
+      });
+      const scope = yield* Scope.make("parallel");
+      const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
+        consumer,
+        ledger,
+        refreshingClient,
+        "local",
+        [ordersSourceTopic],
+        scope,
+      );
+
+      yield* Scope.close(scope, Exit.void);
+      consumer.emit("consumer:group:join", {
+        groupId: "view-server-scoped-listener-test",
+        memberId: "member-1",
+        assignments: [{ topic: ordersSourceTopic, partitions: [0] }],
+      });
+      consumer.emit("consumer:lag:error", new Error("late lag failure"));
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        healthReadCount,
+        region: health.kafka?.regions["local"],
+        topic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        healthReadCount: 0,
+        region: {
+          status: "starting",
+          brokers: regions.local,
+          lastConnectedAt: null,
+          lastError: null,
+        },
+        topic: {
+          status: "starting",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: false,
+              assignedPartitions: 0,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: null,
+            },
+          }),
+        },
+      });
+
+      yield* listenerRegistration.close;
+      yield* Effect.promise(() => Promise.resolve(consumer.close(true))).pipe(Effect.ignore);
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("fails Kafka ingress startup when Kafka consumer cannot start", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const invalidKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-invalid-broker-test",
+        regions: {
+          local: "",
+        },
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: invalidKafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+
+      const exit = yield* Effect.exit(
+        makeViewServerKafkaIngress(viewServer, runtimeCore.client, invalidKafkaOptions, ledger),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
 
       yield* runtimeCore.close;
     }),
@@ -1437,7 +1979,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         status: "degraded",
         sourceTopic: ordersSourceTopic,
         viewServerTopic: "orders",
-        regions: {
+        regions: nullRecord({
           local: {
             connected: true,
             assignedPartitions: 1,
@@ -1445,16 +1987,392 @@ describe("@view-server/runtime Kafka ingress internals", () => {
             bytesPerSecond: 99,
             decodedMessagesPerSecond: 1,
             decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
             processingFailuresPerSecond: 1,
             lastMessageAt: 0,
             lastCommitAt: 0,
             consumerLagMessages: null,
-            consumerLagMs: null,
             lagSampledAt: null,
-            highWatermarkOffset: null,
             committedOffset: "2",
             lastError: "publish failed",
           },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records mapping failures separately from decode failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const throwingKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-mapping-failure-test",
+        regions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: () => {
+              throw new Error("mapping failed");
+            },
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthReadCount = 0;
+      const refreshingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        health: () =>
+          Effect.sync(() => {
+            healthReadCount += 1;
+          }).pipe(Effect.andThen(runtimeCore.client.health())),
+      };
+
+      const error = yield* Effect.flip(
+        processKafkaMessage(
+          viewServer,
+          refreshingClient,
+          throwingKafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "order-mapping-failed",
+            value: JSON.stringify({
+              customerId: "customer-mapping-failed",
+              price: 70,
+            }),
+            offset: 7n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        error: {
+          causeMessage: messageFromUnknown(error.cause),
+          message: error.message,
+          region: error.region,
+          sourceTopic: error.sourceTopic,
+        },
+        healthReadCount,
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        error: {
+          causeMessage: "Failed to map Kafka payload",
+          message: `Failed to map Kafka message for source topic ${ordersSourceTopic}`,
+          region: "local",
+          sourceTopic: ordersSourceTopic,
+        },
+        healthReadCount: 1,
+        kafkaTopic: {
+          status: "degraded",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 1,
+              bytesPerSecond: 71,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 1,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: 0,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: "Failed to map Kafka payload",
+            },
+          }),
+        },
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records untagged codec failures as decode failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const untaggedDecodeKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-untagged-decode-failure-test",
+        regions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.codec({
+              name: "untagged-error",
+              decode: () => Effect.fail(nonStringTagCodecError),
+            }),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key }) => ({
+              id: key,
+              customerId: "unused",
+              price: 0,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          untaggedDecodeKafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "order-untagged-codec-failed",
+            value: JSON.stringify({
+              customerId: "customer-untagged-codec-failed",
+              price: 90,
+            }),
+            offset: 8n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        decodeFailed: Exit.isFailure(exit),
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        decodeFailed: true,
+        kafkaTopic: {
+          status: "degraded",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 1,
+              bytesPerSecond: 85,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 1,
+              mappingFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: 0,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: "non-string tag",
+            },
+          }),
+        },
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("does not classify custom codec errors as mapping failures by public tag alone", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const forgedMappingTagKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-forged-mapping-tag-test",
+        regions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.codec({
+              name: "forged-mapping-tag-error",
+              decode: () => Effect.fail(forgedMappingTagCodecError),
+            }),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key }) => ({
+              id: key,
+              customerId: "unused",
+              price: 0,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+
+      const error = yield* Effect.flip(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          forgedMappingTagKafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "order-forged-mapping-tag-codec-failed",
+            value: JSON.stringify({
+              customerId: "customer-forged-mapping-tag-codec-failed",
+              price: 95,
+            }),
+            offset: 9n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        error: {
+          message: error.message,
+          sourceTopic: error.sourceTopic,
+        },
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        error: {
+          message: `Failed to decode Kafka message for source topic ${ordersSourceTopic}`,
+          sourceTopic: ordersSourceTopic,
+        },
+        kafkaTopic: {
+          status: "degraded",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 1,
+              bytesPerSecond: 105,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 1,
+              mappingFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: 0,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: "forged mapping tag",
+            },
+          }),
+        },
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records primitive codec failures as decode failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const primitiveDecodeKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-primitive-decode-failure-test",
+        regions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.codec({
+              name: "primitive-error",
+              decode: () => Effect.fail("raw codec failed"),
+            }),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key }) => ({
+              id: key,
+              customerId: "unused",
+              price: 0,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          primitiveDecodeKafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "order-primitive-codec-failed",
+            value: JSON.stringify({
+              customerId: "customer-primitive-codec-failed",
+              price: 100,
+            }),
+            offset: 9n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        decodeFailed: Exit.isFailure(exit),
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        decodeFailed: true,
+        kafkaTopic: {
+          status: "degraded",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 1,
+              bytesPerSecond: 88,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 1,
+              mappingFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: 0,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: "raw codec failed",
+            },
+          }),
         },
       });
 
@@ -1508,7 +2426,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         status: "degraded",
         sourceTopic: ordersSourceTopic,
         viewServerTopic: "orders",
-        regions: {
+        regions: nullRecord({
           local: {
             connected: true,
             assignedPartitions: 1,
@@ -1516,17 +2434,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
             bytesPerSecond: 0,
             decodedMessagesPerSecond: 0,
             decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
             processingFailuresPerSecond: 0,
             lastMessageAt: 0,
             lastCommitAt: null,
             consumerLagMessages: null,
-            consumerLagMs: null,
             lagSampledAt: null,
-            highWatermarkOffset: null,
             committedOffset: null,
             lastError: "Failed to parse Kafka JSON payload",
           },
-        },
+        }),
       });
 
       yield* runtimeCore.close;
@@ -1597,7 +2514,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           status: "ready",
           sourceTopic: ordersSourceTopic,
           viewServerTopic: "orders",
-          regions: {
+          regions: nullRecord({
             local: {
               connected: true,
               assignedPartitions: 1,
@@ -1605,17 +2522,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
               bytesPerSecond: 0,
               decodedMessagesPerSecond: 0,
               decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
               processingFailuresPerSecond: 0,
-              lastMessageAt: 1_000,
+              lastMessageAt: null,
               lastCommitAt: null,
               consumerLagMessages: null,
-              consumerLagMs: null,
               lagSampledAt: null,
-              highWatermarkOffset: null,
               committedOffset: null,
               lastError: null,
             },
-          },
+          }),
         },
       });
 

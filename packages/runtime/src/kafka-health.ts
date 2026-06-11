@@ -25,15 +25,15 @@ type KafkaTopicRegionLedger = {
   bytesPerSecond: number;
   decodedMessagesPerSecond: number;
   decodeFailuresPerSecond: number;
+  mappingFailuresPerSecond: number;
   processingFailuresPerSecond: number;
   lastMessageAt: number | null;
   lastCommitAt: number | null;
   consumerLagMessages: bigint | null;
-  consumerLagMs: number | null;
   lagSampledAt: number | null;
-  highWatermarkOffset: string | null;
   committedOffset: string | null;
   lastError: string | null;
+  regionLastError: string | null;
   windowSecond: number | null;
 };
 
@@ -50,7 +50,15 @@ export type ViewServerKafkaHealthLedger<Topics extends ViewServerRuntimeTopicDef
     nowMillis: number,
   ) => ViewServerHealth<Topics>;
   readonly regionConnected: (region: string, nowMillis: number) => Effect.Effect<void>;
-  readonly regionDisconnected: (region: string, message: string) => Effect.Effect<void>;
+  readonly regionDisconnected: (
+    region: string,
+    message: string,
+    options?: {
+      readonly preserveTopicErrors?: boolean;
+    },
+  ) => Effect.Effect<void>;
+  readonly regionDegraded: (region: string, message: string) => Effect.Effect<void>;
+  readonly regionRecovered: (region: string, nowMillis: number) => Effect.Effect<void>;
   readonly topicConnected: (
     sourceTopic: string,
     region: string,
@@ -61,7 +69,6 @@ export type ViewServerKafkaHealthLedger<Topics extends ViewServerRuntimeTopicDef
     sourceTopic: string,
     region: string,
     input: {
-      readonly assignedPartitions: number;
       readonly consumerLagMessages: bigint;
       readonly nowMillis: number;
     },
@@ -76,6 +83,15 @@ export type ViewServerKafkaHealthLedger<Topics extends ViewServerRuntimeTopicDef
     },
   ) => Effect.Effect<void>;
   readonly decodeFailed: (
+    sourceTopic: string,
+    region: string,
+    input: {
+      readonly bytes: number;
+      readonly message: string;
+      readonly nowMillis: number;
+    },
+  ) => Effect.Effect<void>;
+  readonly mappingFailed: (
     sourceTopic: string,
     region: string,
     input: {
@@ -102,15 +118,15 @@ const initialTopicRegionLedger = (): KafkaTopicRegionLedger => ({
   bytesPerSecond: 0,
   decodedMessagesPerSecond: 0,
   decodeFailuresPerSecond: 0,
+  mappingFailuresPerSecond: 0,
   processingFailuresPerSecond: 0,
   lastMessageAt: null,
   lastCommitAt: null,
   consumerLagMessages: null,
-  consumerLagMs: null,
   lagSampledAt: null,
-  highWatermarkOffset: null,
   committedOffset: null,
   lastError: null,
+  regionLastError: null,
   windowSecond: null,
 });
 
@@ -121,15 +137,14 @@ const copyTopicRegionHealth = (region: KafkaTopicRegionLedger): KafkaTopicRegion
   bytesPerSecond: region.bytesPerSecond,
   decodedMessagesPerSecond: region.decodedMessagesPerSecond,
   decodeFailuresPerSecond: region.decodeFailuresPerSecond,
+  mappingFailuresPerSecond: region.mappingFailuresPerSecond,
   processingFailuresPerSecond: region.processingFailuresPerSecond,
   lastMessageAt: region.lastMessageAt,
   lastCommitAt: region.lastCommitAt,
   consumerLagMessages: region.consumerLagMessages,
-  consumerLagMs: region.consumerLagMs,
   lagSampledAt: region.lagSampledAt,
-  highWatermarkOffset: region.highWatermarkOffset,
   committedOffset: region.committedOffset,
-  lastError: region.lastError,
+  lastError: region.lastError ?? region.regionLastError,
 });
 
 const incrementWindow = (
@@ -140,6 +155,7 @@ const incrementWindow = (
     readonly bytes: number;
     readonly decoded: number;
     readonly failed: number;
+    readonly mappingFailed: number;
     readonly processingFailed: number;
   },
 ) => {
@@ -150,12 +166,14 @@ const incrementWindow = (
     region.bytesPerSecond = 0;
     region.decodedMessagesPerSecond = 0;
     region.decodeFailuresPerSecond = 0;
+    region.mappingFailuresPerSecond = 0;
     region.processingFailuresPerSecond = 0;
   }
   region.messagesPerSecond += counters.messages;
   region.bytesPerSecond += counters.bytes;
   region.decodedMessagesPerSecond += counters.decoded;
   region.decodeFailuresPerSecond += counters.failed;
+  region.mappingFailuresPerSecond += counters.mappingFailed;
   region.processingFailuresPerSecond += counters.processingFailed;
 };
 
@@ -167,6 +185,7 @@ const resetIdleWindow = (region: KafkaTopicRegionLedger, nowMillis: number) => {
     region.bytesPerSecond = 0;
     region.decodedMessagesPerSecond = 0;
     region.decodeFailuresPerSecond = 0;
+    region.mappingFailuresPerSecond = 0;
     region.processingFailuresPerSecond = 0;
   }
 };
@@ -186,7 +205,7 @@ const getTopicRegion = (
 
 const refreshTopicStatus = (topic: KafkaTopicLedger) => {
   const regions = [...topic.regions.values()];
-  if (regions.some((region) => region.lastError !== null)) {
+  if (regions.some((region) => region.lastError !== null || region.regionLastError !== null)) {
     topic.status = "degraded";
     return;
   }
@@ -283,15 +302,15 @@ export const makeViewServerKafkaHealthLedger = <
   }
 
   const snapshot = (nowMillis: number): KafkaHealthSnapshot<Topics> => {
-    const regionHealth: Record<string, KafkaRegionHealth> = {};
-    const topicHealth: Record<string, KafkaTopicHealth> = {};
+    const regionHealth: Record<string, KafkaRegionHealth> = Object.create(null);
+    const topicHealth: Record<string, KafkaTopicHealth> = Object.create(null);
 
     for (const [region, ledger] of regions) {
       regionHealth[region] = copyRegionHealth(ledger);
     }
 
     for (const [sourceTopic, topic] of topics) {
-      const topicRegions: Record<string, KafkaTopicRegionHealth> = {};
+      const topicRegions: Record<string, KafkaTopicRegionHealth> = Object.create(null);
       for (const [region, ledger] of topic.regions) {
         resetIdleWindow(ledger, nowMillis);
         topicRegions[region] = copyTopicRegionHealth(ledger);
@@ -328,7 +347,7 @@ export const makeViewServerKafkaHealthLedger = <
           ledger.lastError = null;
         }
       }),
-    regionDisconnected: (region, message) =>
+    regionDisconnected: (region, message, options) =>
       Effect.sync(() => {
         const ledger = regions.get(region);
         if (ledger !== undefined) {
@@ -339,20 +358,54 @@ export const makeViewServerKafkaHealthLedger = <
           const topicRegion = topic.regions.get(region);
           if (topicRegion !== undefined) {
             topicRegion.connected = false;
-            topicRegion.lastError = message;
+            topicRegion.regionLastError = message;
+            if (options?.preserveTopicErrors !== true) {
+              topicRegion.lastError = null;
+            }
             refreshTopicStatus(topic);
           }
         }
       }),
-    topicConnected: (sourceTopic, region, assignedPartitions, nowMillis) =>
+    regionDegraded: (region, message) =>
+      Effect.sync(() => {
+        const ledger = regions.get(region);
+        if (ledger !== undefined) {
+          ledger.status = "degraded";
+          ledger.lastError = message;
+        }
+        for (const topic of topics.values()) {
+          const topicRegion = topic.regions.get(region);
+          if (topicRegion !== undefined) {
+            topicRegion.regionLastError = message;
+            refreshTopicStatus(topic);
+          }
+        }
+      }),
+    regionRecovered: (region, nowMillis) =>
+      Effect.sync(() => {
+        const ledger = regions.get(region);
+        if (ledger !== undefined && ledger.status !== "disconnected") {
+          ledger.status = "connected";
+          ledger.lastConnectedAt = ledger.lastConnectedAt ?? nowMillis;
+          ledger.lastError = null;
+          for (const topic of topics.values()) {
+            const topicRegion = topic.regions.get(region);
+            if (topicRegion !== undefined) {
+              topicRegion.regionLastError = null;
+              refreshTopicStatus(topic);
+            }
+          }
+        }
+      }),
+    topicConnected: (sourceTopic, region, assignedPartitions, _nowMillis) =>
       Effect.sync(() => {
         const ledger = getTopicRegion(topics, sourceTopic, region);
         const topic = topics.get(sourceTopic);
         if (ledger !== undefined && topic !== undefined) {
           ledger.connected = true;
           ledger.assignedPartitions = assignedPartitions;
-          ledger.lastMessageAt = ledger.lastMessageAt ?? nowMillis;
           ledger.lastError = null;
+          ledger.regionLastError = null;
           refreshTopicStatus(topic);
         }
       }),
@@ -360,7 +413,6 @@ export const makeViewServerKafkaHealthLedger = <
       Effect.sync(() => {
         const ledger = getTopicRegion(topics, sourceTopic, region);
         if (ledger !== undefined) {
-          ledger.assignedPartitions = input.assignedPartitions;
           ledger.consumerLagMessages = input.consumerLagMessages;
           ledger.lagSampledAt = input.nowMillis;
         }
@@ -374,6 +426,7 @@ export const makeViewServerKafkaHealthLedger = <
             bytes: input.bytes,
             decoded: 1,
             failed: 0,
+            mappingFailed: 0,
             messages: 1,
             processingFailed: 0,
           });
@@ -394,6 +447,25 @@ export const makeViewServerKafkaHealthLedger = <
             bytes: input.bytes,
             decoded: 0,
             failed: 1,
+            mappingFailed: 0,
+            messages: 1,
+            processingFailed: 0,
+          });
+          ledger.lastMessageAt = input.nowMillis;
+          ledger.lastError = input.message;
+        }
+      }),
+    mappingFailed: (sourceTopic, region, input) =>
+      Effect.sync(() => {
+        const ledger = getTopicRegion(topics, sourceTopic, region);
+        const topic = topics.get(sourceTopic);
+        if (ledger !== undefined && topic !== undefined) {
+          topic.status = "degraded";
+          incrementWindow(ledger, input.nowMillis, {
+            bytes: input.bytes,
+            decoded: 0,
+            failed: 0,
+            mappingFailed: 1,
             messages: 1,
             processingFailed: 0,
           });
@@ -410,6 +482,7 @@ export const makeViewServerKafkaHealthLedger = <
             bytes: input.bytes,
             decoded: 0,
             failed: 0,
+            mappingFailed: 0,
             messages: 1,
             processingFailed: 1,
           });

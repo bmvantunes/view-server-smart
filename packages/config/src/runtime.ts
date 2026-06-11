@@ -5,7 +5,6 @@ export type { RuntimeEnvironmentConfig } from "./index";
 
 export const runtimeEnvironmentConfig: RuntimeEnvironmentConfig = {
   websocketPort: Config.number("VIEW_SERVER_WEBSOCKET_PORT"),
-  tcpPublishPort: Config.number("VIEW_SERVER_TCP_PUBLISH_PORT"),
 };
 
 export const runtimeConfig = {
