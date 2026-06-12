@@ -90,7 +90,14 @@ const publicPackageExports = [
   "@view-server/server",
 ];
 
+const forbiddenDeepImportSuffixes = ["dist/index.js", "internal", "src/index"];
+
+const forbiddenPackageSubpathDeepImports = publicPackageExports.flatMap((specifier) =>
+  forbiddenDeepImportSuffixes.map((suffix) => `${specifier}/${suffix}`),
+);
+
 const forbiddenPackageDeepImports = [
+  ...forbiddenPackageSubpathDeepImports,
   "@view-server/client/src/index",
   "@view-server/client/dist/index.js",
   "@view-server/client/src/live-client",
