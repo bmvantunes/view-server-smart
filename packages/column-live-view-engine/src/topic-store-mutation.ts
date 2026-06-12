@@ -58,6 +58,9 @@ const recordTopicStoreMutation = (
   rowsChanged: number,
   occurredAt: number,
 ): ReadonlyArray<LiveTopicSubscriber> => {
+  if (rowsChanged <= 0) {
+    return [];
+  }
   const subscribersToNotify = commitTopicStoreState(state);
   state.healthLedger.recordMutation({
     version: state.storage.version,

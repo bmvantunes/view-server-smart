@@ -5523,6 +5523,42 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     }),
   );
 
+  it.effect("does not notify topic-store subscribers for no-op mutations", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      let notifyCount = 0;
+      const subscriber: LiveTopicSubscriber = {
+        topic: "orders",
+        queryId: "query-no-op-mutation-notification",
+        notify: () =>
+          Effect.sync(() => {
+            notifyCount += 1;
+          }),
+        queuedEvents: Effect.succeed(0),
+        end: Effect.void,
+        closeWithStatus: () => Effect.void,
+        maxQueueDepth: 0,
+        backpressureEvents: 0,
+        closed: false,
+      };
+      const invalidRow = (topic: string, message: string) =>
+        InvalidRowError.make({ topic, message });
+
+      yield* registerTestTopicStoreSubscriber(store, subscriber);
+      yield* publishTopicStoreRow(store, order("1", "open", 10, 1), invalidRow);
+      expect(notifyCount).toBe(1);
+
+      yield* deleteTopicStoreRow(store, "missing");
+      yield* publishTopicStoreRows(store, [], invalidRow);
+
+      const health = yield* collectTopicStoreHealth(store, false);
+      expect(notifyCount).toBe(1);
+      expect(health.version).toBe(1);
+      expect(health.rowCount).toBe(1);
+      yield* closeTopicStoreSubscriptions(store);
+    }),
+  );
+
   it.effect("collects topic-store throughput and drains subscribers on normal close", () =>
     Effect.gen(function* () {
       const store = new TopicStore("orders", Order, "id", () => {});
@@ -9875,14 +9911,25 @@ describe("ColumnLiveViewEngine validation and health", () => {
       yield* engine.publishMany("orders", [order("1", "open", 10, 1), order("2", "closed", 20, 2)]);
       yield* engine.patch("orders", "1", { price: 30 });
       yield* engine.delete("orders", "2");
-      yield* engine.delete("orders", "missing");
 
       const mutated = yield* engine.health();
-      expect(mutated.version).toBe(4);
+      expect(mutated.version).toBe(3);
       expect(mutated.topics["orders"].rowCount).toBe(1);
-      expect(mutated.topics["orders"].version).toBe(4);
+      expect(mutated.topics["orders"].version).toBe(3);
       expect(mutated.topics["orders"].lastMutationAt).not.toBeNull();
       expect(mutated.topics["orders"].pendingMutationBatches).toBe(0);
+
+      yield* engine.delete("orders", "missing");
+      yield* engine.publishMany("orders", []);
+
+      const afterNoOpMutations = yield* engine.health();
+      expect(afterNoOpMutations.version).toBe(mutated.version);
+      expect(afterNoOpMutations.topics["orders"].version).toBe(mutated.topics["orders"].version);
+      expect(afterNoOpMutations.topics["orders"].rowCount).toBe(mutated.topics["orders"].rowCount);
+      expect(afterNoOpMutations.topics["orders"].lastMutationAt).toBe(
+        mutated.topics["orders"].lastMutationAt,
+      );
+      expect(afterNoOpMutations.topics["orders"].pendingMutationBatches).toBe(0);
 
       yield* engine.reset();
 
