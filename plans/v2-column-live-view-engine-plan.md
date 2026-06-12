@@ -1374,9 +1374,10 @@ benchmark. It compares:
 Scanner-level predicate candidate selection uses a materialization safety budget, not a semantic
 filter. New candidate builds up to 100k slots may be materialized; broader scalar/range candidates
 fall back to the normal scan path so 10M-row topics do not allocate and sort multi-million-slot
-candidate arrays. Already-warmed scalar buckets that later grow beyond the budget are also rejected
-for scan selection; bucket eviction/adaptive budgets are separate performance work. This fallback
-must preserve `totalRows`, deterministic ordering, and exact predicate semantics.
+candidate arrays. Already-warmed scalar buckets that later grow beyond the retained bucket budget
+are evicted and rejected for scan selection, so broad buckets do not keep adding write-path
+maintenance and memory pressure after they stop being selective. This fallback must preserve
+`totalRows`, deterministic ordering, and exact predicate semantics.
 
 It writes profile-specific Vitest timing JSON plus a View Server summary sidecar, for example
 `raw-predicate-index-100000rows.json` and `raw-predicate-index-100000rows.summary.json`. Run each row

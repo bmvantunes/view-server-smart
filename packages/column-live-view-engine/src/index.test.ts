@@ -49,6 +49,7 @@ import { scanTopicRawWindow } from "./topic-raw-window-scanner";
 import {
   addSlotToScalarPredicateIndexes,
   createScalarPredicateIndexes,
+  maxRetainedScalarPredicateBucketSlots,
   removeSlotFromScalarPredicateIndexes,
   selectedPredicateCandidateSlots,
 } from "./topic-predicate-candidate-index";
@@ -8310,8 +8311,219 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
     expect(result.keys).toStrictEqual(["open-0"]);
     expect(result.totalRows).toBe(rows.length - 1);
-    expect(state.scalarPredicateIndexes.get("status")?.indexedKeys.has(openKey)).toBe(false);
-    expect(state.scalarPredicateIndexes.get("status")?.buckets.has(openKey)).toBe(false);
+    expect(state.scalarPredicateIndexes.has("status")).toBe(false);
+  });
+
+  it("evicts scalar predicate buckets that grow past the retained budget", () => {
+    const openKey = scalarEqualityKey("open");
+    const rows = Array.from(
+      { length: maxRetainedScalarPredicateBucketSlots + 1 },
+      (_value, index) => order(`open-${index}`, "open", index, index),
+    );
+    const metadata = rawQueryCompilerMetadata(Order);
+    const scalarPredicateIndexes = createScalarPredicateIndexes();
+    scalarPredicateIndexes.set("status", {
+      buckets: new Map([
+        [
+          openKey,
+          new Set(
+            Array.from({ length: maxRetainedScalarPredicateBucketSlots }, (_value, index) => index),
+          ),
+        ],
+      ]),
+      indexedKeys: new Set([openKey]),
+    });
+
+    addSlotToScalarPredicateIndexes(
+      scalarPredicateIndexes,
+      makeColumns(metadata, [["status", rows.map((row) => row.status)]]),
+      maxRetainedScalarPredicateBucketSlots,
+    );
+
+    expect(scalarPredicateIndexes.has("status")).toBe(false);
+  });
+
+  it("does not retain newly built single-key scalar predicate buckets beyond the retained budget", () => {
+    const rows = Array.from(
+      { length: maxRetainedScalarPredicateBucketSlots + 1 },
+      (_value, index) => order(`open-${index}`, "open", index, index),
+    );
+    const metadata = rawQueryCompilerMetadata(Order);
+    const state = {
+      columns: makeColumns(metadata, [
+        ["id", rows.map((row) => row.id)],
+        ["price", rows.map((row) => row.price)],
+        ["status", rows.map((row) => row.status)],
+      ]),
+      orderedSlotIndexes: new Map(),
+      rawQueryMetadata: metadata,
+      scalarPredicateIndexes: createScalarPredicateIndexes(),
+      slots: rows.map((row) => ({
+        key: row.id,
+        row,
+      })),
+    };
+
+    const candidate = selectedPredicateCandidateSlots(
+      state,
+      [{ field: "status", operator: "eq", value: "open" }],
+      {
+        allowScalarIndexBuild: true,
+        exactRangeCandidates: true,
+        maxSlotCount: maxRetainedScalarPredicateBucketSlots + 2,
+      },
+    );
+
+    expect(candidate).toBeUndefined();
+    expect(state.scalarPredicateIndexes.has("status")).toBe(false);
+  });
+
+  it("does not retain newly built multi-key scalar predicate buckets beyond the retained budget", () => {
+    const rows = Array.from(
+      { length: maxRetainedScalarPredicateBucketSlots + 1 },
+      (_value, index) => order(`open-${index}`, "open", index, index),
+    );
+    rows.push(order("closed-row", "closed", 0, 0));
+    const metadata = rawQueryCompilerMetadata(Order);
+    const state = {
+      columns: makeColumns(metadata, [
+        ["id", rows.map((row) => row.id)],
+        ["price", rows.map((row) => row.price)],
+        ["status", rows.map((row) => row.status)],
+      ]),
+      orderedSlotIndexes: new Map(),
+      rawQueryMetadata: metadata,
+      scalarPredicateIndexes: createScalarPredicateIndexes(),
+      slots: rows.map((row) => ({
+        key: row.id,
+        row,
+      })),
+    };
+
+    const candidate = selectedPredicateCandidateSlots(
+      state,
+      [{ field: "status", operator: "in", values: ["open", "closed"] }],
+      {
+        allowScalarIndexBuild: true,
+        exactRangeCandidates: true,
+        maxSlotCount: maxRetainedScalarPredicateBucketSlots + 3,
+      },
+    );
+
+    expect(candidate).toBeUndefined();
+    expect(state.scalarPredicateIndexes.has("status")).toBe(false);
+  });
+
+  it("evicts already broad single-key scalar predicate buckets during candidate selection", () => {
+    const openKey = scalarEqualityKey("open");
+    const rows = Array.from(
+      { length: maxRetainedScalarPredicateBucketSlots + 1 },
+      (_value, index) => order(`open-${index}`, "open", index, index),
+    );
+    const metadata = rawQueryCompilerMetadata(Order);
+    const state = {
+      columns: makeColumns(metadata, [
+        ["id", rows.map((row) => row.id)],
+        ["price", rows.map((row) => row.price)],
+        ["status", rows.map((row) => row.status)],
+      ]),
+      orderedSlotIndexes: new Map(),
+      rawQueryMetadata: metadata,
+      scalarPredicateIndexes: createScalarPredicateIndexes(),
+      slots: rows.map((row) => ({
+        key: row.id,
+        row,
+      })),
+    };
+    state.scalarPredicateIndexes.set("status", {
+      buckets: new Map([
+        [
+          openKey,
+          new Set(
+            Array.from(
+              { length: maxRetainedScalarPredicateBucketSlots + 1 },
+              (_value, index) => index,
+            ),
+          ),
+        ],
+      ]),
+      indexedKeys: new Set([openKey]),
+    });
+
+    const candidate = selectedPredicateCandidateSlots(
+      state,
+      [{ field: "status", operator: "eq", value: "open" }],
+      {
+        allowScalarIndexBuild: false,
+        exactRangeCandidates: true,
+        maxSlotCount: maxRetainedScalarPredicateBucketSlots + 1,
+      },
+    );
+
+    expect(candidate).toBeUndefined();
+    expect(state.scalarPredicateIndexes.has("status")).toBe(false);
+  });
+
+  it("evicts already broad scalar predicate buckets during candidate selection", () => {
+    const openKey = scalarEqualityKey("open");
+    const closedKey = scalarEqualityKey("closed");
+    const rows = Array.from(
+      { length: maxRetainedScalarPredicateBucketSlots + 1 },
+      (_value, index) => order(`open-${index}`, "open", index, index),
+    );
+    rows.push(order("closed-row", "closed", 0, 0));
+    const metadata = rawQueryCompilerMetadata(Order);
+    const statusColumn: TopicColumnValues = {
+      get: () => {
+        throw new Error("over-budget cached scalar buckets should not be rebuilt");
+      },
+      kind: "generic",
+      length: rows.length,
+    };
+    const state = {
+      columns: new Map([["status", statusColumn]]),
+      orderedSlotIndexes: new Map(),
+      rawQueryMetadata: metadata,
+      scalarPredicateIndexes: createScalarPredicateIndexes(),
+      slots: rows.map((row) => ({
+        key: row.id,
+        row,
+      })),
+    };
+    state.scalarPredicateIndexes.set("status", {
+      buckets: new Map([
+        [
+          openKey,
+          new Set(
+            Array.from(
+              { length: maxRetainedScalarPredicateBucketSlots + 1 },
+              (_value, index) => index,
+            ),
+          ),
+        ],
+        [closedKey, new Set([maxRetainedScalarPredicateBucketSlots + 1])],
+      ]),
+      indexedKeys: new Set([openKey, closedKey]),
+    });
+
+    const candidate = selectedPredicateCandidateSlots(
+      state,
+      [{ field: "status", operator: "in", values: ["open", "closed"] }],
+      {
+        allowScalarIndexBuild: true,
+        exactRangeCandidates: true,
+        maxSlotCount: maxRetainedScalarPredicateBucketSlots + 1,
+      },
+    );
+
+    const statusIndex = state.scalarPredicateIndexes.get("status")!;
+    expect(candidate).toBeUndefined();
+    expect(statusIndex.indexedKeys.has(openKey)).toBe(false);
+    expect(statusIndex.buckets.has(openKey)).toBe(false);
+    expect(statusIndex.indexedKeys.has(closedKey)).toBe(true);
+    expect(statusIndex.buckets.get(closedKey)).toStrictEqual(
+      new Set([maxRetainedScalarPredicateBucketSlots + 1]),
+    );
   });
 
   it("counts exact broad zero-row scans without reading row objects", () => {

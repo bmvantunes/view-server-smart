@@ -21,6 +21,8 @@ type ScalarPredicateFieldIndex = {
   readonly indexedKeys: Set<string>;
 };
 
+export const maxRetainedScalarPredicateBucketSlots = 100_000;
+
 export type ScalarPredicateIndexes = Map<string, ScalarPredicateFieldIndex>;
 
 export type PredicateCandidateSlotIndexState = RawOrderedWindowIndexState & {
@@ -47,6 +49,7 @@ export const addSlotToScalarPredicateIndexes = (
 ): void => {
   for (const [field, index] of indexes) {
     addSlotToScalarPredicateIndex(index, columns.get(field), slot);
+    pruneEmptyScalarPredicateIndex(indexes, field, index);
   }
 };
 
@@ -57,6 +60,7 @@ export const removeSlotFromScalarPredicateIndexes = (
 ): void => {
   for (const [field, index] of indexes) {
     removeSlotFromScalarPredicateIndex(index, columns.get(field), slot);
+    pruneEmptyScalarPredicateIndex(indexes, field, index);
   }
 };
 
@@ -143,6 +147,7 @@ const scalarEqualityCandidateSlots = (
   }
   const column = state.columns.get(field)!;
   const slots = unionScalarPredicateSlots(index, column, valueKeys, allowIndexBuild, maxSlotCount);
+  pruneEmptyScalarPredicateIndex(state.scalarPredicateIndexes, field, index);
   if (slots === undefined) {
     return undefined;
   }
@@ -220,6 +225,10 @@ const unionScalarPredicateSlots = (
       continue;
     }
     const bucket = index.buckets.get(key)!;
+    if (scalarPredicateBucketIsOverRetainedBudget(bucket)) {
+      evictScalarPredicateBucket(index, key);
+      return undefined;
+    }
     for (const slot of bucket) {
       slots.add(slot);
       if (maxSlotCount !== undefined && slots.size >= maxSlotCount) {
@@ -247,6 +256,9 @@ const unionScalarPredicateSlots = (
       continue;
     }
     bucket.add(slot);
+    if (scalarPredicateBucketIsOverRetainedBudget(bucket)) {
+      return undefined;
+    }
     slots.add(slot);
     if (maxSlotCount !== undefined && slots.size >= maxSlotCount) {
       return undefined;
@@ -270,7 +282,12 @@ const ensureScalarPredicateBucket = (
   maxSlotCount: number | undefined,
 ): Set<number> | undefined => {
   if (index.indexedKeys.has(valueKey)) {
-    return index.buckets.get(valueKey)!;
+    const bucket = index.buckets.get(valueKey)!;
+    if (scalarPredicateBucketIsOverRetainedBudget(bucket)) {
+      evictScalarPredicateBucket(index, valueKey);
+      return undefined;
+    }
+    return bucket;
   }
   if (!allowBucketBuild) {
     return undefined;
@@ -282,6 +299,9 @@ const ensureScalarPredicateBucket = (
       continue;
     }
     bucket.add(slot);
+    if (scalarPredicateBucketIsOverRetainedBudget(bucket)) {
+      return undefined;
+    }
     if (maxSlotCount !== undefined && bucket.size >= maxSlotCount) {
       return undefined;
     }
@@ -356,6 +376,9 @@ const addSlotToScalarPredicateIndex = (
   }
   const bucket = index.buckets.get(key)!;
   bucket.add(slot);
+  if (scalarPredicateBucketIsOverRetainedBudget(bucket)) {
+    evictScalarPredicateBucket(index, key);
+  }
 };
 
 const removeSlotFromScalarPredicateIndex = (
@@ -371,6 +394,24 @@ const removeSlotFromScalarPredicateIndex = (
     return;
   }
   index.buckets.get(key)!.delete(slot);
+};
+
+const scalarPredicateBucketIsOverRetainedBudget = (bucket: Set<number>): boolean =>
+  bucket.size > maxRetainedScalarPredicateBucketSlots;
+
+const evictScalarPredicateBucket = (index: ScalarPredicateFieldIndex, key: string): void => {
+  index.indexedKeys.delete(key);
+  index.buckets.delete(key);
+};
+
+const pruneEmptyScalarPredicateIndex = (
+  indexes: ScalarPredicateIndexes,
+  field: string,
+  index: ScalarPredicateFieldIndex,
+): void => {
+  if (index.indexedKeys.size === 0) {
+    indexes.delete(field);
+  }
 };
 
 const isRangePredicateFilter = (

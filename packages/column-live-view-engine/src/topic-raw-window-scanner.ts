@@ -3,6 +3,7 @@ import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-win
 import type { TopicRowEntry } from "./row-scan";
 import type { TopicColumnValues } from "./topic-column-vector";
 import {
+  maxRetainedScalarPredicateBucketSlots,
   selectedPredicateCandidateSlots,
   type PredicateCandidateSlotIndexState,
   type PredicateCandidateSlots,
@@ -32,7 +33,7 @@ export type TopicRawWindowScanState = {
 
 const maxSortedBoundedRawWindowEnd = 1_024;
 const maxHeapBoundedRawWindowEnd = 100_000;
-const maxMaterializedPredicateCandidateSlots = 100_000;
+const maxMaterializedPredicateCandidateSlots = maxRetainedScalarPredicateBucketSlots;
 const materializedPredicateCandidateSlotBudget = maxMaterializedPredicateCandidateSlots + 1;
 
 type BoundedRawWindowStrategy = {
