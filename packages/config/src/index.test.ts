@@ -4849,6 +4849,63 @@ describe("public type surface", () => {
       });
       expectTypeOf(invalidKeyedTopicRegion).not.toBeAny();
 
+      const jsonPositionTopic = kafkaTopic({
+        regions: ["usa"],
+        value: kafka.json(Position),
+        viewServerTopic: "positions",
+        mapping: ({ key, value, region }) => {
+          expectTypeOf(key).toEqualTypeOf<string>();
+          expectTypeOf(value).toEqualTypeOf<typeof Position.Type>();
+          expectTypeOf(region).toEqualTypeOf<"usa">();
+          return {
+            ...value,
+            id: key,
+          };
+        },
+      });
+      const decodedJsonPosition = yield* decodeKafkaTopicMessage(jsonPositionTopic, {
+        keyBytes: textEncoder.encode("position-json-1"),
+        valueBytes: textEncoder.encode(
+          JSON.stringify({
+            id: "ignored-source-id",
+            accountId: "account-json-1",
+            symbol: "AAPL",
+            active: true,
+            quantity: "9007199254740993",
+            optionalQuantity: "9007199254740995",
+            price: "1234567890.123456789",
+            notional: 10,
+            optionalNotional: 20,
+          }),
+        ),
+        region: "usa",
+        metadata: kafkaTestMetadata("usa"),
+      });
+      expect(BigDecimal.isBigDecimal(decodedJsonPosition.row.price)).toBe(true);
+      const decodedJsonPositionPrice = yield* Schema.decodeUnknownEffect(Schema.BigDecimal)(
+        decodedJsonPosition.row.price,
+      );
+      expect({
+        ...decodedJsonPosition,
+        row: {
+          ...decodedJsonPosition.row,
+          price: BigDecimal.format(decodedJsonPositionPrice),
+        },
+      }).toStrictEqual({
+        viewServerTopic: "positions",
+        row: {
+          id: "position-json-1",
+          accountId: "account-json-1",
+          symbol: "AAPL",
+          active: true,
+          quantity: 9007199254740993n,
+          optionalQuantity: 9007199254740995n,
+          price: "1234567890.123456789",
+          notional: 10,
+          optionalNotional: 20,
+        },
+      });
+
       const throwingTopic = kafkaTopic({
         regions: ["usa"],
         value: kafka.protobuf(ordersValueSchema),
