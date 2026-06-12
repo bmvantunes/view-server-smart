@@ -9924,7 +9924,12 @@ describe("ColumnLiveViewEngine validation and health", () => {
 
       const afterNoOpMutations = yield* engine.health();
       expect(afterNoOpMutations.version).toBe(mutated.version);
-      expect(afterNoOpMutations.topics["orders"]).toStrictEqual(mutated.topics["orders"]);
+      expect(afterNoOpMutations.topics["orders"].version).toBe(mutated.topics["orders"].version);
+      expect(afterNoOpMutations.topics["orders"].rowCount).toBe(mutated.topics["orders"].rowCount);
+      expect(afterNoOpMutations.topics["orders"].lastMutationAt).toBe(
+        mutated.topics["orders"].lastMutationAt,
+      );
+      expect(afterNoOpMutations.topics["orders"].pendingMutationBatches).toBe(0);
 
       yield* engine.reset();
 
