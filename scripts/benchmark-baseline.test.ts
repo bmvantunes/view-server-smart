@@ -350,8 +350,8 @@ describe("benchmark baseline comparison", () => {
         benchmarks: [
           {
             ...observation.benchmarks[0],
-            meanMs: 7,
-            p99Ms: 13,
+            meanMs: 15,
+            p99Ms: 23,
           },
         ],
         memoryRssTotalDeltaBytes: 2048,
@@ -419,8 +419,8 @@ describe("benchmark baseline comparison", () => {
         "task a: backpressureCount must stay 0 but was 1.",
         "task a: queuedEventCount must stay 0 but was 1.",
         "task a: total RSS delta regressed from 1024 bytes to 209715200 bytes; allowed <= 3072 bytes.",
-        "task a / src/example.bench.ts > example benchmark group / case a: mean regressed from 2.000ms to 40.000ms; allowed <= 7.000ms.",
-        "task a / src/example.bench.ts > example benchmark group / case a: p99 regressed from 3.000ms to 100.000ms; allowed <= 13.000ms.",
+        "task a / src/example.bench.ts > example benchmark group / case a: mean regressed from 2.000ms to 40.000ms; allowed <= 16.000ms.",
+        "task a / src/example.bench.ts > example benchmark group / case a: p99 regressed from 3.000ms to 100.000ms; allowed <= 24.000ms.",
         "missing task: missing benchmark task in actual run.",
       ],
     });

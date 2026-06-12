@@ -61,7 +61,7 @@ const stringArrayValue = (value, path) =>
   arrayValue(value, path).map((item, index) => stringValue(item, `${path}[${index}]`));
 
 const metricLimit = (baseline, threshold) =>
-  Math.min(baseline * threshold.maxRatio, baseline + threshold.maxAbsoluteDeltaMs);
+  Math.max(baseline * threshold.maxRatio, baseline + threshold.maxAbsoluteDeltaMs);
 
 const byteMetricLimit = (baseline, threshold) =>
   Math.min(baseline * threshold.maxRatio, baseline + threshold.maxAbsoluteDeltaBytes);

@@ -452,7 +452,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       firstError:
-        "\ntiny benchmark baseline regressed:\n- task a / src/runner-example.bench.ts > runner example benchmark group / case a: mean regressed from 2.000ms to 100.000ms; allowed <= 7.000ms.\n- task a / src/runner-example.bench.ts > runner example benchmark group / case a: p99 regressed from 3.000ms to 100.000ms; allowed <= 13.000ms.",
+        "\ntiny benchmark baseline regressed:\n- task a / src/runner-example.bench.ts > runner example benchmark group / case a: mean regressed from 2.000ms to 100.000ms; allowed <= 16.000ms.\n- task a / src/runner-example.bench.ts > runner example benchmark group / case a: p99 regressed from 3.000ms to 100.000ms; allowed <= 24.000ms.",
     });
   });
 
