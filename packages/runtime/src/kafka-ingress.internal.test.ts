@@ -1128,18 +1128,14 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           },
         },
       });
-      let healthReadCount = 0;
-      const refreshingClient: ViewServerRuntimeClient<Topics> = {
-        ...runtimeCore.client,
-        health: () =>
-          Effect.sync(() => {
-            healthReadCount += 1;
-          }).pipe(Effect.andThen(runtimeCore.client.health())),
-      };
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
       yield* ledger.regionConnected("local", 1_000);
       yield* recordKafkaAssignments(
         ledger,
-        refreshingClient,
+        requestHealthRefresh,
         "local",
         [ordersSourceTopic],
         [{ topic: ordersSourceTopic, partitions: [0, 1] }],
@@ -1147,7 +1143,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       );
       yield* recordKafkaLag(
         ledger,
-        refreshingClient,
+        requestHealthRefresh,
         "local",
         new Map([
           [ordersSourceTopic, [3n, -1n, 2n]],
@@ -1157,7 +1153,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       );
       const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
 
-      expect(healthReadCount).toBe(2);
+      expect(healthRefreshRequestCount).toBe(2);
       expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
         status: "ready",
         sourceTopic: ordersSourceTopic,
@@ -1198,14 +1194,10 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           },
         },
       });
-      let healthReadCount = 0;
-      const refreshingClient: ViewServerRuntimeClient<Topics> = {
-        ...runtimeCore.client,
-        health: () =>
-          Effect.sync(() => {
-            healthReadCount += 1;
-          }).pipe(Effect.andThen(runtimeCore.client.health())),
-      };
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
       const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
         bootstrapBrokers: ["127.0.0.1:1"],
         clientId: "view-server-listener-test",
@@ -1216,7 +1208,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
         consumer,
         ledger,
-        refreshingClient,
+        requestHealthRefresh,
         "local",
         [ordersSourceTopic],
         scope,
@@ -1246,10 +1238,10 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const degradedHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
       expect({
-        healthReadCount,
+        healthRefreshRequestCount,
         processed: degradedProcessed,
       }).toStrictEqual({
-        healthReadCount: 5,
+        healthRefreshRequestCount: 5,
         processed: 5,
       });
       expect({
@@ -1296,10 +1288,10 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const recoveredHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
       expect({
-        healthReadCount,
+        healthRefreshRequestCount,
         processed: recoveredProcessed,
       }).toStrictEqual({
-        healthReadCount: 7,
+        healthRefreshRequestCount: 7,
         processed: 7,
       });
       expect({
@@ -1369,7 +1361,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
         consumer,
         failingLedger,
-        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
         "local",
         [ordersSourceTopic],
         scope,
@@ -1461,7 +1453,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
         consumer,
         interruptingLedger,
-        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
         "local",
         [ordersSourceTopic],
         scope,
@@ -1858,6 +1850,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         runKafkaMessageStream(
           viewServer,
           defectiveClient,
+          runtimeCore.requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
@@ -1940,6 +1933,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         runKafkaMessageStream(
           viewServer,
           interruptingClient,
+          runtimeCore.requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
@@ -2016,6 +2010,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         runKafkaMessageStream(
           viewServer,
           runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
@@ -2114,6 +2109,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         runKafkaMessageStream(
           viewServer,
           runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
@@ -2199,6 +2195,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const ingress = yield* makeViewServerKafkaIngress(
         viewServer,
         runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
         emptyKafkaOptions,
         ledger,
       );
@@ -2303,14 +2300,10 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           },
         },
       });
-      let healthReadCount = 0;
-      const refreshingClient: ViewServerRuntimeClient<Topics> = {
-        ...runtimeCore.client,
-        health: () =>
-          Effect.sync(() => {
-            healthReadCount += 1;
-          }).pipe(Effect.andThen(runtimeCore.client.health())),
-      };
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
       const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
         bootstrapBrokers: ["127.0.0.1:1"],
         clientId: "view-server-scoped-listener-test",
@@ -2320,7 +2313,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
         consumer,
         ledger,
-        refreshingClient,
+        requestHealthRefresh,
         "local",
         [ordersSourceTopic],
         scope,
@@ -2336,11 +2329,11 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
       expect({
-        healthReadCount,
+        healthRefreshRequestCount,
         region: health.kafka?.regions["local"],
         topic: health.kafka?.topics[ordersSourceTopic],
       }).toStrictEqual({
-        healthReadCount: 0,
+        healthRefreshRequestCount: 0,
         region: {
           status: "starting",
           brokers: regions.local,
@@ -2411,7 +2404,13 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       });
 
       const exit = yield* Effect.exit(
-        makeViewServerKafkaIngress(viewServer, runtimeCore.client, invalidKafkaOptions, ledger),
+        makeViewServerKafkaIngress(
+          viewServer,
+          runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
+          invalidKafkaOptions,
+          ledger,
+        ),
       );
 
       expect(Exit.isFailure(exit)).toBe(true);
@@ -2439,6 +2438,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       yield* processKafkaMessage(
         viewServer,
         runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
         kafkaOptions,
         ledger,
         "local",
@@ -2451,6 +2451,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       yield* processKafkaMessage(
         viewServer,
         runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
         kafkaOptions,
         ledger,
         "local",
@@ -2472,6 +2473,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         processKafkaMessage(
           viewServer,
           runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
@@ -2491,6 +2493,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         processKafkaMessage(
           viewServer,
           failingClient,
+          runtimeCore.requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
@@ -2595,19 +2598,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       };
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
-      let healthReadCount = 0;
-      const refreshingClient: ViewServerRuntimeClient<Topics> = {
-        ...runtimeCore.client,
-        health: () =>
-          Effect.sync(() => {
-            healthReadCount += 1;
-          }).pipe(Effect.andThen(runtimeCore.client.health())),
-      };
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
 
       const error = yield* Effect.flip(
         processKafkaMessage(
           viewServer,
-          refreshingClient,
+          runtimeCore.client,
+          requestHealthRefresh,
           throwingKafkaOptions,
           ledger,
           "local",
@@ -2631,7 +2631,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           region: error.region,
           sourceTopic: error.sourceTopic,
         },
-        healthReadCount,
+        healthRefreshRequestCount,
         kafkaTopic: health.kafka?.topics[ordersSourceTopic],
       }).toStrictEqual({
         error: {
@@ -2640,7 +2640,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           region: "local",
           sourceTopic: ordersSourceTopic,
         },
-        healthReadCount: 1,
+        healthRefreshRequestCount: 1,
         kafkaTopic: {
           status: "degraded",
           sourceTopic: ordersSourceTopic,
@@ -2709,6 +2709,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         processKafkaMessage(
           viewServer,
           runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
           untaggedDecodeKafkaOptions,
           ledger,
           "local",
@@ -2798,6 +2799,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         processKafkaMessage(
           viewServer,
           runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
           forgedMappingTagKafkaOptions,
           ledger,
           "local",
@@ -2893,6 +2895,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         processKafkaMessage(
           viewServer,
           runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
           primitiveDecodeKafkaOptions,
           ledger,
           "local",
@@ -2957,19 +2960,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       });
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
-      let healthReadCount = 0;
-      const refreshingClient: ViewServerRuntimeClient<Topics> = {
-        ...runtimeCore.client,
-        health: () =>
-          Effect.sync(() => {
-            healthReadCount += 1;
-          }).pipe(Effect.andThen(runtimeCore.client.health())),
-      };
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
 
       const exit = yield* Effect.exit(
         processKafkaMessage(
           viewServer,
-          refreshingClient,
+          runtimeCore.client,
+          requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
@@ -2984,7 +2984,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
       expect(Exit.isFailure(exit)).toBe(true);
-      expect(healthReadCount).toBe(1);
+      expect(healthRefreshRequestCount).toBe(1);
       expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
         status: "degraded",
         sourceTopic: ordersSourceTopic,
@@ -3032,6 +3032,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         processKafkaMessage(
           viewServer,
           runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",

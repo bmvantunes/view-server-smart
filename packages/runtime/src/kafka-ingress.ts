@@ -81,6 +81,7 @@ type KafkaConsumerHealthListenerProcessedState = {
   readonly count: number;
   readonly waiters: ReadonlyArray<KafkaConsumerHealthListenerWaiter>;
 };
+type ViewServerKafkaHealthRefreshRequest = Effect.Effect<void>;
 
 const emptyMessageBytes = Buffer.alloc(0);
 const ignoreKafkaConsumerCloseFailure = ignoreLoggedTypedFailuresPreserveNonTypedFailures(
@@ -270,15 +271,14 @@ export const recordKafkaStreamError = <const Topics extends ViewServerRuntimeTop
     .regionDisconnected(region, error.message, options)
     .pipe(Effect.andThen(Effect.fail(error)));
 
-const refreshKafkaHealth = <const Topics extends ViewServerRuntimeTopicDefinitions>(
-  client: ViewServerRuntimeClient<Topics>,
-) => client.health().pipe(ignoreKafkaHealthRefreshFailure);
+const requestKafkaHealthRefresh = (requestHealthRefresh: ViewServerKafkaHealthRefreshRequest) =>
+  requestHealthRefresh.pipe(ignoreKafkaHealthRefreshFailure);
 
 export const recordKafkaAssignments = Effect.fn(
   "ViewServerRuntime.kafka.consumer.recordAssignments",
 )(function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
   health: ViewServerKafkaHealthLedger<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   region: string,
   topics: ReadonlyArray<string>,
   assignments: ReadonlyArray<GroupAssignment> | null | undefined,
@@ -296,14 +296,14 @@ export const recordKafkaAssignments = Effect.fn(
       ),
     { discard: true },
   );
-  yield* refreshKafkaHealth(client);
+  yield* requestKafkaHealthRefresh(requestHealthRefresh);
 });
 
 export const recordKafkaLag = Effect.fn("ViewServerRuntime.kafka.consumer.recordLag")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
 >(
   health: ViewServerKafkaHealthLedger<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   region: string,
   lag: Offsets,
   nowMillis: number,
@@ -318,7 +318,7 @@ export const recordKafkaLag = Effect.fn("ViewServerRuntime.kafka.consumer.record
       }),
     { discard: true },
   );
-  yield* refreshKafkaHealth(client);
+  yield* requestKafkaHealthRefresh(requestHealthRefresh);
 });
 
 export const closeKafkaConsumerAfterStartFailure = Effect.fn(
@@ -469,6 +469,7 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
 >(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
   health: ViewServerKafkaHealthLedger<Topics>,
   region: string,
@@ -491,7 +492,7 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
     timestamp: Number(message.timestamp),
     headers: kafkaHeadersFromMessage(message.headers),
   };
-  const refreshHealth = refreshKafkaHealth(client);
+  const requestHealthRefreshAfterLedgerUpdate = requestKafkaHealthRefresh(requestHealthRefresh);
   const decoded = yield* decodeKafkaTopicMessage(topic, {
     keyBytes,
     valueBytes,
@@ -508,7 +509,7 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
               nowMillis,
             })
             .pipe(
-              Effect.andThen(refreshHealth),
+              Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
               Effect.andThen(Effect.fail(kafkaMessageMappingError(region, sourceTopic, error))),
             );
         }
@@ -519,7 +520,7 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
             nowMillis,
           })
           .pipe(
-            Effect.andThen(refreshHealth),
+            Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
             Effect.andThen(Effect.fail(kafkaMessageDecodeError(region, sourceTopic, error))),
           );
       },
@@ -536,21 +537,27 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
             nowMillis,
           })
           .pipe(
-            Effect.andThen(refreshHealth),
+            Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
             Effect.andThen(Effect.fail(kafkaMessageProcessingError(region, sourceTopic, cause))),
           ),
       onSuccess: () => Effect.succeed(true),
     }),
   );
-  yield* Effect.tryPromise({
-    try: () => Promise.resolve(message.commit()),
-    catch: (cause) => kafkaMessageCommitError(region, sourceTopic, cause),
-  });
-  yield* health.messageDecoded(sourceTopic, region, {
-    bytes: messageBytes,
-    committedOffset: String(message.offset + 1n),
-    nowMillis,
-  });
+  yield* Effect.uninterruptible(
+    Effect.tryPromise({
+      try: () => Promise.resolve(message.commit()),
+      catch: (cause) => kafkaMessageCommitError(region, sourceTopic, cause),
+    }).pipe(
+      Effect.andThen(
+        health.messageDecoded(sourceTopic, region, {
+          bytes: messageBytes,
+          committedOffset: String(message.offset + 1n),
+          nowMillis,
+        }),
+      ),
+      Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
+    ),
+  );
 });
 
 export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.run")(function* <
@@ -558,6 +565,7 @@ export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.r
 >(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
   health: ViewServerKafkaHealthLedger<Topics>,
   region: string,
@@ -568,7 +576,7 @@ export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.r
     mapKafkaStreamError(region),
   ).pipe(
     Stream.runForEach((message) =>
-      processKafkaMessage(config, client, options, health, region, message),
+      processKafkaMessage(config, client, requestHealthRefresh, options, health, region, message),
     ),
     Effect.catchCause((cause) => {
       if (Cause.hasInterruptsOnly(cause)) {
@@ -578,13 +586,13 @@ export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.r
       if (Option.isSome(error)) {
         return recordKafkaStreamError(health, region, error.value, {
           preserveTopicErrors: true,
-        }).pipe(Effect.ensuring(refreshKafkaHealth(client)));
+        }).pipe(Effect.ensuring(requestKafkaHealthRefresh(requestHealthRefresh)));
       }
       return recordKafkaStreamError(
         health,
         region,
         kafkaStreamError(region, Cause.squash(cause)),
-      ).pipe(Effect.ensuring(refreshKafkaHealth(client)));
+      ).pipe(Effect.ensuring(requestKafkaHealthRefresh(requestHealthRefresh)));
     }),
   );
 });
@@ -594,7 +602,7 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
 )(function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
   consumer: KafkaConsumer,
   health: ViewServerKafkaHealthLedger<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   region: string,
   topics: ReadonlyArray<string>,
   scope: Scope.Scope,
@@ -676,7 +684,7 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
         const nowMillis = yield* Clock.currentTimeMillis;
         yield* recordKafkaAssignments(
           health,
-          client,
+          requestHealthRefresh,
           region,
           topics,
           payload.assignments ?? consumer.assignments,
@@ -689,7 +697,7 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
     runScoped(
       Effect.gen(function* () {
         const nowMillis = yield* Clock.currentTimeMillis;
-        yield* recordKafkaLag(health, client, region, lag, nowMillis);
+        yield* recordKafkaLag(health, requestHealthRefresh, region, lag, nowMillis);
       }),
     );
   };
@@ -697,14 +705,14 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
     runScoped(
       health
         .regionDisconnected(region, "Kafka consumer left group")
-        .pipe(Effect.andThen(refreshKafkaHealth(client))),
+        .pipe(Effect.andThen(requestKafkaHealthRefresh(requestHealthRefresh))),
     );
   };
   const lagErrorListener = (error: unknown) => {
     runScoped(
       health
         .regionDegraded(region, messageFromUnknown(error))
-        .pipe(Effect.andThen(refreshKafkaHealth(client))),
+        .pipe(Effect.andThen(requestKafkaHealthRefresh(requestHealthRefresh))),
     );
   };
   consumer.on("consumer:group:join", groupJoinListener);
@@ -739,6 +747,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
 >(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
   health: ViewServerKafkaHealthLedger<Topics>,
   region: string,
@@ -765,7 +774,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
       healthListeners = yield* registerKafkaConsumerHealthListeners(
         consumer,
         health,
-        client,
+        requestHealthRefresh,
         region,
         topics,
         scope,
@@ -775,7 +784,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
       yield* health.regionConnected(region, nowMillis);
       yield* recordKafkaAssignments(
         health,
-        client,
+        requestHealthRefresh,
         region,
         topics,
         consumer.assignments,
@@ -784,6 +793,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
       const processStream = runKafkaMessageStream(
         config,
         client,
+        requestHealthRefresh,
         options,
         health,
         region,
@@ -823,6 +833,7 @@ export const startKafkaRegionConsumers = Effect.fn("ViewServerRuntime.kafka.regi
 export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntimeTopicDefinitions>(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
   health: ViewServerKafkaHealthLedger<Topics>,
 ) => Effect.Effect<ViewServerKafkaIngress, ViewServerKafkaIngressError> = Effect.fn(
@@ -830,6 +841,7 @@ export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntime
 )(function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
   health: ViewServerKafkaHealthLedger<Topics>,
 ) {
@@ -843,7 +855,17 @@ export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntime
           close: Effect.void,
         });
       }
-      return startRegionConsumer(config, client, options, health, region, brokers, topics, scope);
+      return startRegionConsumer(
+        config,
+        client,
+        requestHealthRefresh,
+        options,
+        health,
+        region,
+        brokers,
+        topics,
+        scope,
+      );
     },
   ).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)));
   return {

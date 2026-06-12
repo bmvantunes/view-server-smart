@@ -38,6 +38,7 @@ export type ViewServerRuntimeDependencies<Topics extends ViewServerRuntimeTopicD
   readonly makeKafkaIngress: (
     config: ViewServerConfig<Topics>,
     client: ViewServerRuntimeClient<Topics>,
+    requestHealthRefresh: Effect.Effect<void>,
     options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
     health: ViewServerKafkaHealthLedger<Topics>,
   ) => Effect.Effect<ViewServerKafkaIngress, ViewServerKafkaIngressError>;

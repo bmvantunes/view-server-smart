@@ -1,10 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { ColumnLiveViewEngineHealth } from "@view-server/column-live-view-engine";
-import { defineViewServerConfig } from "@view-server/config";
-import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
+import {
+  createColumnLiveViewEngine,
+  type ColumnLiveViewEngineHealth,
+} from "@view-server/column-live-view-engine";
+import { defineViewServerConfig, type ViewServerRuntimeError } from "@view-server/config";
+import { Deferred, Effect, Fiber, Queue, Schema, Stream } from "effect";
 import { AtomRef } from "effect/unstable/reactivity";
-import { healthFromEngine, makeHealthRefreshScheduler, readHealth } from "./health";
+import {
+  healthFromEngine,
+  makeCoalescedHealthReader,
+  makeHealthRefreshScheduler,
+  readHealth,
+} from "./health";
 import { createViewServerRuntimeCore, makeViewServerRuntimeCore } from "./index";
+import { makeRuntimeCoreLiveClient } from "./live-client";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -35,6 +44,12 @@ const order = (id: string, price: number): OrderRow => ({
   region: "usa",
   updatedAt: price,
 });
+
+const refreshFailed: ViewServerRuntimeError = {
+  _tag: "ViewServerRuntimeError",
+  code: "RuntimeUnavailable",
+  message: "Health refresh failed.",
+};
 
 const engineHealth = (
   status: "ready" | "stopping",
@@ -109,6 +124,8 @@ describe("@view-server/runtime-core", () => {
 
       const health = yield* runtimeCore.client.health();
       expect(health.engine.topics.orders.rowCount).toBe(2);
+      const refreshedHealth = yield* runtimeCore.refreshHealth;
+      expect(refreshedHealth.engine.topics.orders.rowCount).toBe(2);
 
       yield* subscription.close();
       yield* runtimeCore.client.reset();
@@ -207,6 +224,59 @@ describe("@view-server/runtime-core", () => {
       const health = yield* runtimeCore.client.health();
       expect(health.engine.topics.orders.activeSubscriptions).toBe(0);
       yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("releases acquired live subscriptions when initial health refresh fails", () =>
+    Effect.gen(function* () {
+      const engine = yield* createColumnLiveViewEngine({ topics: viewServer.topics });
+      const health = AtomRef.make(healthFromEngine(yield* engine.health()));
+      const liveClient = yield* makeRuntimeCoreLiveClient(
+        engine,
+        health,
+        Effect.fail(refreshFailed),
+      );
+
+      const failedRaw = yield* Effect.flip(
+        liveClient.subscribe("orders", {
+          select: ["id"],
+          limit: 1,
+        }),
+      );
+      const afterRawFailure = yield* engine.health();
+      expect(failedRaw).toStrictEqual(refreshFailed);
+      expect(afterRawFailure.activeSubscriptions).toBe(0);
+
+      const failedRuntime = yield* Effect.flip(
+        liveClient.subscribeRuntime("orders", {
+          select: ["id"],
+          limit: 1,
+        }),
+      );
+      const afterRuntimeFailure = yield* engine.health();
+      expect(failedRuntime).toStrictEqual(refreshFailed);
+      expect(afterRuntimeFailure.activeSubscriptions).toBe(0);
+
+      yield* liveClient.close;
+    }),
+  );
+
+  it.effect("releases pushed health subscriptions when initial health refresh fails", () =>
+    Effect.gen(function* () {
+      const engine = yield* createColumnLiveViewEngine({ topics: viewServer.topics });
+      const health = AtomRef.make(healthFromEngine(yield* engine.health()));
+      const liveClient = yield* makeRuntimeCoreLiveClient(
+        engine,
+        health,
+        Effect.fail(refreshFailed),
+      );
+
+      const failedSummary = yield* Effect.flip(liveClient.subscribeHealthSummary());
+      const failedDetail = yield* Effect.flip(liveClient.subscribeHealth());
+
+      expect(failedSummary).toStrictEqual(refreshFailed);
+      expect(failedDetail).toStrictEqual(refreshFailed);
+      yield* liveClient.close.pipe(Effect.timeout("1 second"));
     }),
   );
 
@@ -556,7 +626,7 @@ describe("@view-server/runtime-core", () => {
       yield* runtimeCore.client.health();
       const events = yield* Fiber.join(eventsFiber).pipe(
         Effect.timeout("1 second"),
-        Effect.ensuring(summary.close().pipe(Effect.andThen(runtimeCore.close), Effect.ignore)),
+        Effect.ensuring(summary.close().pipe(Effect.orDie, Effect.andThen(runtimeCore.close))),
       );
 
       expect(Array.from(events)).toStrictEqual([
@@ -638,6 +708,323 @@ describe("@view-server/runtime-core", () => {
       yield* Deferred.succeed(releaseFirstRead, undefined);
       yield* Fiber.join(staleRefresh);
       expect(health.value.status).toBe("stopping");
+    }),
+  );
+
+  it.effect("coalesces concurrent health reads while an active same-epoch read is running", () =>
+    Effect.gen(function* () {
+      const readStarted = yield* Deferred.make<void>();
+      const releaseRead = yield* Deferred.make<void>();
+      let readCount = 0;
+      const coalescedHealth = makeCoalescedHealthReader(
+        () =>
+          Effect.gen(function* () {
+            readCount += 1;
+            yield* Deferred.succeed(readStarted, undefined);
+            yield* Deferred.await(releaseRead);
+            return healthFromEngine(engineHealth("ready", readCount));
+          }),
+        () => 0,
+      );
+
+      const first = yield* coalescedHealth().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(readStarted);
+      const second = yield* coalescedHealth().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(releaseRead, undefined);
+      const [firstHealth, secondHealth] = yield* Effect.all(
+        [Fiber.join(first), Fiber.join(second)],
+        {
+          concurrency: 2,
+        },
+      ).pipe(Effect.timeout("1 second"));
+
+      expect(readCount).toBe(1);
+      expect(firstHealth.engine.topics.orders.rowCount).toBe(1);
+      expect(secondHealth.engine.topics.orders.rowCount).toBe(1);
+      const thirdHealth = yield* coalescedHealth();
+      expect(readCount).toBe(2);
+      expect(thirdHealth.engine.topics.orders.rowCount).toBe(2);
+    }),
+  );
+
+  it.effect("clears the active health read after a failed read so the next read retries", () =>
+    Effect.gen(function* () {
+      let readCount = 0;
+      const healthReads = [
+        Effect.fail("boom"),
+        Effect.succeed(healthFromEngine(engineHealth("ready", 2))),
+      ];
+      const coalescedHealth = makeCoalescedHealthReader(() =>
+        Effect.gen(function* () {
+          const nextRead =
+            healthReads[readCount] ?? Effect.succeed(healthFromEngine(engineHealth("ready", 3)));
+          readCount += 1;
+          return yield* nextRead;
+        }),
+      );
+
+      const failedHealth = yield* Effect.flip(coalescedHealth());
+      expect(failedHealth).toBe("boom");
+      const recoveredHealth = yield* coalescedHealth();
+      expect(readCount).toBe(2);
+      expect(recoveredHealth.engine.topics.orders.rowCount).toBe(2);
+    }),
+  );
+
+  it.effect("does not strand followers when the active health reader is interrupted", () =>
+    Effect.gen(function* () {
+      const firstReadStarted = yield* Deferred.make<void>();
+      const releaseFirstRead = yield* Deferred.make<void>();
+      const followerJoinedActiveRead = yield* Deferred.make<void>();
+      let epochCheckCount = 0;
+      let readCount = 0;
+      const coalescedHealth = makeCoalescedHealthReader(
+        () =>
+          Effect.gen(function* () {
+            readCount += 1;
+            yield* Deferred.succeed(firstReadStarted, undefined);
+            yield* Deferred.await(releaseFirstRead);
+            return healthFromEngine(engineHealth("ready", readCount));
+          }),
+        () => {
+          epochCheckCount += 1;
+          if (epochCheckCount === 2) {
+            Deferred.doneUnsafe(followerJoinedActiveRead, Effect.void);
+          }
+          return 0;
+        },
+      );
+
+      const leader = yield* coalescedHealth().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(firstReadStarted);
+      const follower = yield* coalescedHealth().pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(followerJoinedActiveRead).pipe(
+        Effect.timeout("1 second"),
+        Effect.onError(() => Deferred.succeed(releaseFirstRead, undefined).pipe(Effect.asVoid)),
+      );
+
+      const interruptStarted = yield* Deferred.make<void>();
+      const interruptLeader = yield* Effect.gen(function* () {
+        yield* Deferred.succeed(interruptStarted, undefined);
+        yield* Fiber.interrupt(leader);
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(interruptStarted);
+      yield* Deferred.succeed(releaseFirstRead, undefined);
+      yield* Fiber.join(interruptLeader);
+      const followerHealth = yield* Fiber.join(follower);
+      const nextHealth = yield* coalescedHealth();
+      expect(readCount).toBe(2);
+      expect(followerHealth.engine.topics.orders.rowCount).toBe(1);
+      expect(nextHealth.engine.topics.orders.rowCount).toBe(2);
+    }),
+  );
+
+  it.effect("starts a fresh health read after the caller epoch changes", () =>
+    Effect.gen(function* () {
+      const firstReadStarted = yield* Deferred.make<void>();
+      const releaseFirstRead = yield* Deferred.make<void>();
+      let epoch = 0;
+      let readCount = 0;
+      const healthReads = [
+        Effect.gen(function* () {
+          yield* Deferred.succeed(firstReadStarted, undefined);
+          yield* Deferred.await(releaseFirstRead);
+          return healthFromEngine(engineHealth("ready", 1));
+        }),
+        Effect.succeed(healthFromEngine(engineHealth("ready", 2))),
+      ];
+      const coalescedHealth = makeCoalescedHealthReader(
+        () =>
+          Effect.gen(function* () {
+            const nextRead =
+              healthReads[readCount] ?? Effect.succeed(healthFromEngine(engineHealth("ready", 3)));
+            readCount += 1;
+            return yield* nextRead;
+          }),
+        () => epoch,
+      );
+
+      const staleHealthRead = yield* coalescedHealth().pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(firstReadStarted);
+      epoch += 1;
+      const freshHealth = yield* coalescedHealth();
+      yield* Deferred.succeed(releaseFirstRead, undefined);
+      const staleHealth = yield* Fiber.join(staleHealthRead);
+
+      expect(readCount).toBe(2);
+      expect(freshHealth.engine.topics.orders.rowCount).toBe(2);
+      expect(staleHealth.engine.topics.orders.rowCount).toBe(1);
+    }),
+  );
+
+  it.effect("does not let obsolete epoch health reads overwrite fresher cached health", () =>
+    Effect.gen(function* () {
+      const firstReadStarted = yield* Deferred.make<void>();
+      const releaseFirstRead = yield* Deferred.make<void>();
+      const health = AtomRef.make(healthFromEngine(engineHealth("ready", 0)));
+      let epoch = 0;
+      let readCount = 0;
+      const engineHealthReads = [
+        Effect.gen(function* () {
+          yield* Deferred.succeed(firstReadStarted, undefined);
+          yield* Deferred.await(releaseFirstRead);
+          return engineHealth("ready", 1);
+        }),
+        Effect.succeed(engineHealth("ready", 2)),
+      ];
+      const engine = {
+        health: () => {
+          const nextRead = engineHealthReads[readCount] ?? Effect.succeed(engineHealth("ready", 3));
+          return Effect.suspend(() =>
+            Effect.sync(() => {
+              readCount += 1;
+            }).pipe(Effect.andThen(nextRead)),
+          );
+        },
+      };
+      const coalescedHealth = makeCoalescedHealthReader(
+        (readEpoch) => readHealth(engine, health, undefined, undefined, () => epoch === readEpoch),
+        () => epoch,
+      );
+
+      const obsoleteHealthRead = yield* coalescedHealth().pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(firstReadStarted);
+      epoch += 1;
+      const freshHealth = yield* coalescedHealth();
+      yield* Deferred.succeed(releaseFirstRead, undefined);
+      const obsoleteHealth = yield* Fiber.join(obsoleteHealthRead);
+
+      expect(freshHealth.engine.topics.orders.rowCount).toBe(2);
+      expect(obsoleteHealth.engine.topics.orders.rowCount).toBe(2);
+      expect(health.value.engine.topics.orders.rowCount).toBe(2);
+    }),
+  );
+
+  it.effect("does not let older scheduled health reads overwrite newer installed health", () =>
+    Effect.gen(function* () {
+      const scheduledReadStarted = yield* Deferred.make<void>();
+      const releaseScheduledRead = yield* Deferred.make<void>();
+      const scheduledReadFinished = yield* Deferred.make<void>();
+      const health = AtomRef.make(healthFromEngine(engineHealth("ready", 0)));
+      let installEpoch = 0;
+      let readCount = 0;
+      const engineHealthReads = [
+        Effect.gen(function* () {
+          yield* Deferred.succeed(scheduledReadStarted, undefined);
+          yield* Deferred.await(releaseScheduledRead);
+          return engineHealth("ready", 1);
+        }),
+        Effect.succeed(engineHealth("ready", 2)),
+      ];
+      const engine = {
+        health: () => {
+          const nextRead = engineHealthReads[readCount] ?? Effect.succeed(engineHealth("ready", 3));
+          return Effect.suspend(() =>
+            Effect.sync(() => {
+              readCount += 1;
+            }).pipe(Effect.andThen(nextRead)),
+          );
+        },
+      };
+      const scheduler = makeHealthRefreshScheduler(
+        Effect.gen(function* () {
+          const readInstallEpoch = installEpoch;
+          yield* readHealth(
+            engine,
+            health,
+            undefined,
+            undefined,
+            () => installEpoch === readInstallEpoch,
+            () => {
+              installEpoch += 1;
+            },
+          );
+          yield* Deferred.succeed(scheduledReadFinished, undefined);
+        }),
+        "0 millis",
+      );
+
+      yield* scheduler.request;
+      yield* Deferred.await(scheduledReadStarted).pipe(Effect.timeout("1 second"));
+      const freshHealth = yield* readHealth(engine, health, undefined, undefined, undefined, () => {
+        installEpoch += 1;
+      });
+      yield* Deferred.succeed(releaseScheduledRead, undefined);
+      yield* Deferred.await(scheduledReadFinished).pipe(Effect.timeout("1 second"));
+
+      expect(freshHealth.engine.topics.orders.rowCount).toBe(2);
+      expect(health.value.engine.topics.orders.rowCount).toBe(2);
+      yield* scheduler.close;
+    }),
+  );
+
+  it.effect("lets scheduled health refreshes install and follow up while requests continue", () =>
+    Effect.gen(function* () {
+      const firstReadStarted = yield* Deferred.make<void>();
+      const releaseFirstRead = yield* Deferred.make<void>();
+      const secondReadStarted = yield* Deferred.make<void>();
+      const releaseSecondRead = yield* Deferred.make<void>();
+      const refreshCompleted = yield* Queue.unbounded<void>();
+      const health = AtomRef.make(healthFromEngine(engineHealth("ready", 0)));
+      let installEpoch = 0;
+      let readCount = 0;
+      const engineHealthReads = [
+        Effect.gen(function* () {
+          yield* Deferred.succeed(firstReadStarted, undefined);
+          yield* Deferred.await(releaseFirstRead);
+          return engineHealth("ready", 1);
+        }),
+        Effect.gen(function* () {
+          yield* Deferred.succeed(secondReadStarted, undefined);
+          yield* Deferred.await(releaseSecondRead);
+          return engineHealth("ready", 2);
+        }),
+      ];
+      const engine = {
+        health: () => {
+          const nextRead = engineHealthReads[readCount] ?? Effect.succeed(engineHealth("ready", 3));
+          return Effect.suspend(() =>
+            Effect.sync(() => {
+              readCount += 1;
+            }).pipe(Effect.andThen(nextRead)),
+          );
+        },
+      };
+      const scheduler = makeHealthRefreshScheduler(
+        Effect.gen(function* () {
+          const readInstallEpoch = installEpoch;
+          yield* readHealth(
+            engine,
+            health,
+            undefined,
+            undefined,
+            () => installEpoch === readInstallEpoch,
+            () => {
+              installEpoch += 1;
+            },
+          );
+          yield* Queue.offer(refreshCompleted, undefined);
+        }),
+        "0 millis",
+      );
+
+      yield* scheduler.request;
+      yield* Deferred.await(firstReadStarted).pipe(Effect.timeout("1 second"));
+      yield* scheduler.request;
+      yield* Deferred.succeed(releaseFirstRead, undefined);
+      yield* Queue.take(refreshCompleted).pipe(Effect.timeout("1 second"));
+      yield* Deferred.await(secondReadStarted).pipe(Effect.timeout("1 second"));
+      expect(health.value.engine.topics.orders.rowCount).toBe(1);
+      yield* Deferred.succeed(releaseSecondRead, undefined);
+      yield* Queue.take(refreshCompleted).pipe(Effect.timeout("1 second"));
+
+      expect(readCount).toBe(2);
+      expect(health.value.engine.topics.orders.rowCount).toBe(2);
+      yield* scheduler.close;
     }),
   );
 

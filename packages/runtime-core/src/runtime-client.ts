@@ -17,8 +17,8 @@ import { Effect } from "effect";
 import type { AtomRef } from "effect/unstable/reactivity";
 import {
   makeHealthRefreshScheduler,
+  makeCoalescedHealthReader,
   readHealth,
-  refreshHealth,
   type RuntimeCoreHealthOverlay,
   type RuntimeCoreTransportHealth,
 } from "./health";
@@ -28,6 +28,8 @@ import { engineErrorToRuntimeError } from "./runtime-error";
 export type RuntimeCoreClientInstance<Topics extends DecodableTopicDefinitions> = {
   readonly client: ViewServerRuntimeClient<Topics>;
   readonly close: Effect.Effect<void>;
+  readonly requestHealthRefresh: Effect.Effect<void>;
+  readonly refreshHealth: Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
 };
 
 export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.make")(<
@@ -39,9 +41,56 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
   healthOverlay?: RuntimeCoreHealthOverlay<Topics>,
   healthRefreshCadence?: Duration.Input,
 ): Effect.Effect<RuntimeCoreClientInstance<Topics>> => {
+  let healthReadEpoch = 0;
+  let healthInstallEpoch = 0;
+  const bumpHealthReadEpoch = Effect.sync(() => {
+    healthReadEpoch += 1;
+  });
+  const readRuntimeHealth = (epoch: number, installMode: "strict" | "scheduled") => {
+    const installEpoch = healthInstallEpoch;
+    return readHealth(
+      engine,
+      health,
+      transportHealth,
+      healthOverlay,
+      () =>
+        healthInstallEpoch === installEpoch &&
+        (installMode === "scheduled" || healthReadEpoch === epoch),
+      () => {
+        healthInstallEpoch += 1;
+      },
+    );
+  };
+  const healthReader = makeCoalescedHealthReader(
+    (epoch) => readRuntimeHealth(epoch, "strict"),
+    () => healthReadEpoch,
+  );
+  const scheduledHealthReader = makeCoalescedHealthReader(
+    (epoch) => readRuntimeHealth(epoch, "scheduled"),
+    () => healthReadEpoch,
+  );
+  const scheduledHealthRefresh = Effect.fn("ViewServerRuntimeCore.client.healthRefresh.scheduled")(
+    function* () {
+      yield* scheduledHealthReader();
+    },
+  );
   const healthRefreshScheduler = makeHealthRefreshScheduler(
-    refreshHealth(engine, health, transportHealth, healthOverlay),
+    scheduledHealthRefresh(),
     healthRefreshCadence,
+  );
+  const requestHealthRefresh = Effect.fn("ViewServerRuntimeCore.client.healthRefresh.request")(
+    function* () {
+      yield* Effect.uninterruptible(
+        bumpHealthReadEpoch.pipe(Effect.andThen(healthRefreshScheduler.request)),
+      );
+    },
+  );
+  const refreshHealthNow = Effect.fn("ViewServerRuntimeCore.client.healthRefresh.now")(
+    function* () {
+      return yield* Effect.uninterruptible(
+        bumpHealthReadEpoch.pipe(Effect.andThen(healthReader())),
+      );
+    },
   );
   const snapshot = <
     Topic extends Extract<keyof Topics, string>,
@@ -56,36 +105,30 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
   return Effect.succeed<RuntimeCoreClientInstance<Topics>>({
     client: {
       publish: (topic, row) =>
-        engine.publish(topic, row).pipe(
-          Effect.tap(() => healthRefreshScheduler.request),
-          Effect.mapError(engineErrorToRuntimeError),
-        ),
+        Effect.uninterruptible(
+          engine.publish(topic, row).pipe(Effect.tap(() => requestHealthRefresh())),
+        ).pipe(Effect.mapError(engineErrorToRuntimeError)),
       publishMany: (topic, rows) =>
-        engine.publishMany(topic, rows).pipe(
-          Effect.tap(() => healthRefreshScheduler.request),
-          Effect.mapError(engineErrorToRuntimeError),
-        ),
+        Effect.uninterruptible(
+          engine.publishMany(topic, rows).pipe(Effect.tap(() => requestHealthRefresh())),
+        ).pipe(Effect.mapError(engineErrorToRuntimeError)),
       patch: (topic, key, patch) =>
-        engine.patch(topic, key, patch).pipe(
-          Effect.tap(() => healthRefreshScheduler.request),
-          Effect.mapError(engineErrorToRuntimeError),
-        ),
+        Effect.uninterruptible(
+          engine.patch(topic, key, patch).pipe(Effect.tap(() => requestHealthRefresh())),
+        ).pipe(Effect.mapError(engineErrorToRuntimeError)),
       delete: (topic, key) =>
-        engine.delete(topic, key).pipe(
-          Effect.tap(() => healthRefreshScheduler.request),
-          Effect.mapError(engineErrorToRuntimeError),
-        ),
+        Effect.uninterruptible(
+          engine.delete(topic, key).pipe(Effect.tap(() => requestHealthRefresh())),
+        ).pipe(Effect.mapError(engineErrorToRuntimeError)),
       snapshot,
-      health: () =>
-        readHealth(engine, health, transportHealth, healthOverlay).pipe(
-          Effect.mapError(engineErrorToRuntimeError),
-        ),
+      health: () => healthReader(),
       reset: () =>
-        engine.reset().pipe(
-          Effect.tap(() => healthRefreshScheduler.request),
+        Effect.uninterruptible(engine.reset().pipe(Effect.tap(() => requestHealthRefresh()))).pipe(
           Effect.mapError(engineErrorToRuntimeError),
         ),
     },
     close: healthRefreshScheduler.close,
+    requestHealthRefresh: requestHealthRefresh(),
+    refreshHealth: refreshHealthNow(),
   });
 });

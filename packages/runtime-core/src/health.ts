@@ -1,10 +1,9 @@
 import type {
-  ColumnLiveViewEngine,
   ColumnLiveViewEngineHealth,
   DecodableTopicDefinitions,
 } from "@view-server/column-live-view-engine";
 import type { TransportHealth, ViewServerHealth } from "@view-server/config";
-import { Clock, Effect, Fiber, Semaphore } from "effect";
+import { Clock, Deferred, Effect, Fiber, Semaphore, type Exit } from "effect";
 import type * as Duration from "effect/Duration";
 import type { AtomRef } from "effect/unstable/reactivity";
 
@@ -77,25 +76,88 @@ export const readHealth = Effect.fn("ViewServerRuntimeCore.health.read")(functio
   health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
   transportHealth: RuntimeCoreTransportHealth<Topics> = defaultRuntimeCoreTransportHealth,
   healthOverlay: RuntimeCoreHealthOverlay<Topics> = defaultRuntimeCoreHealthOverlay,
+  shouldInstall: () => boolean = () => true,
+  onInstall: () => void = () => undefined,
 ) {
   const nowMillis = yield* Clock.currentTimeMillis;
   const value = healthFromEngine(yield* engine.health(), transportHealth, healthOverlay, nowMillis);
   yield* Effect.sync(() => {
-    health.update((current) => nextHealthValue(current, value));
+    if (shouldInstall()) {
+      health.update((current) => nextHealthValue(current, value));
+      onInstall();
+    }
   });
   return health.value;
 });
 
-export const refreshHealth = Effect.fn("ViewServerRuntimeCore.health.refresh")(function* <
-  const Topics extends DecodableTopicDefinitions,
->(
-  engine: ColumnLiveViewEngine<Topics>,
-  health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
-  transportHealth: RuntimeCoreTransportHealth<Topics>,
-  healthOverlay: RuntimeCoreHealthOverlay<Topics> = defaultRuntimeCoreHealthOverlay,
-) {
-  yield* readHealth(engine, health, transportHealth, healthOverlay);
-});
+export const makeCoalescedHealthReader = <const Topics extends DecodableTopicDefinitions, E>(
+  read: (epoch: number) => Effect.Effect<ViewServerHealth<Topics>, E>,
+  currentEpoch: () => number = () => 0,
+) => {
+  type ActiveRead = {
+    readonly deferred: Deferred.Deferred<ViewServerHealth<Topics>, E>;
+    readonly epoch: number;
+  };
+  let activeRead: ActiveRead | undefined = undefined;
+  const stateLock = Semaphore.makeUnsafe(1);
+  type ReadDecision =
+    | {
+        readonly _tag: "leader";
+        readonly active: ActiveRead;
+      }
+    | {
+        readonly _tag: "follower";
+        readonly deferred: Deferred.Deferred<ViewServerHealth<Topics>, E>;
+      };
+
+  const completeActiveRead = (active: ActiveRead, exit: Exit.Exit<ViewServerHealth<Topics>, E>) =>
+    Effect.uninterruptible(
+      stateLock.withPermit(
+        Effect.gen(function* () {
+          yield* Deferred.done(active.deferred, exit);
+          yield* Effect.sync(() => {
+            if (activeRead === active) {
+              activeRead = undefined;
+            }
+          });
+        }),
+      ),
+    );
+
+  return Effect.fn("ViewServerRuntimeCore.health.readCoalesced")(function* () {
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const decision = yield* stateLock.withPermit(
+          Effect.gen(function* () {
+            const epoch = currentEpoch();
+            if (activeRead !== undefined && activeRead.epoch === epoch) {
+              return {
+                _tag: "follower",
+                deferred: activeRead.deferred,
+              } satisfies ReadDecision;
+            }
+            const nextRead = yield* Deferred.make<ViewServerHealth<Topics>, E>();
+            const active = {
+              deferred: nextRead,
+              epoch,
+            };
+            activeRead = active;
+            return {
+              _tag: "leader",
+              active,
+            } satisfies ReadDecision;
+          }),
+        );
+        if (decision._tag === "follower") {
+          return yield* restore(Deferred.await(decision.deferred));
+        }
+        return yield* read(decision.active.epoch).pipe(
+          Effect.onExit((exit) => completeActiveRead(decision.active, exit)),
+        );
+      }),
+    );
+  });
+};
 
 export const makeHealthRefreshScheduler = (
   refresh: Effect.Effect<void>,

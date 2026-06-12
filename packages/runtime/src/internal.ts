@@ -1,5 +1,6 @@
 import type { ViewServerLiveClient, ViewServerRuntimeLiveClient } from "@view-server/client";
 import type { RuntimeRegions, ViewServerConfig, ViewServerHealth } from "@view-server/config";
+import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/effect-utils";
 import type { ViewServerRuntimeCoreOptionsFor } from "@view-server/runtime-core";
 import { Config, Effect, Exit, Layer } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
@@ -36,6 +37,10 @@ const toPublicLiveClient = <const Topics extends ViewServerRuntimeTopicDefinitio
   subscribeHealth: liveClient.subscribeHealth,
   subscribeHealthSummary: liveClient.subscribeHealthSummary,
 });
+
+const ignoreRuntimeHealthRefreshFailure = ignoreLoggedTypedFailuresPreserveNonTypedFailures(
+  "Ignoring runtime health refresh failure.",
+);
 
 type RuntimeCoreOptionsBuilder<Topics extends ViewServerRuntimeTopicDefinitions> = {
   groupedIncrementalAdmissionLimits?: NonNullable<
@@ -92,7 +97,7 @@ export const makeViewServerRuntimeWithDependencies: <
     ): ViewServerHealth<Topics> => kafkaHealth.healthOverlay(health, nowMillis);
   }
   const runtimeCore = yield* dependencies.makeRuntimeCore(config, runtimeCoreInput);
-  const refreshTransportHealth = runtimeCore.client.health().pipe(Effect.ignore);
+  const refreshTransportHealth = ignoreRuntimeHealthRefreshFailure(runtimeCore.refreshHealth);
   const server = yield* dependencies
     .makeServer(
       config,
@@ -113,7 +118,13 @@ export const makeViewServerRuntimeWithDependencies: <
     kafkaOptions === undefined || kafkaHealth === undefined
       ? undefined
       : yield* dependencies
-          .makeKafkaIngress(config, runtimeCore.client, kafkaOptions, kafkaHealth)
+          .makeKafkaIngress(
+            config,
+            runtimeCore.client,
+            runtimeCore.requestHealthRefresh,
+            kafkaOptions,
+            kafkaHealth,
+          )
           .pipe(
             Effect.onExit((exit) =>
               Exit.isFailure(exit)

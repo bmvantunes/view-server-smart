@@ -8,6 +8,7 @@ import type {
   ViewServerConfig,
   ViewServerHealth,
   ViewServerRuntimeClient,
+  ViewServerRuntimeError,
 } from "@view-server/config";
 import { runAllFinalizers } from "@view-server/effect-utils";
 import { Clock, Effect } from "effect";
@@ -31,6 +32,8 @@ export type ViewServerRuntimeCoreInstance<Topics extends DecodableTopicDefinitio
   readonly client: ViewServerRuntimeClient<Topics>;
   readonly liveClient: ViewServerRuntimeLiveClient<Topics>;
   readonly close: Effect.Effect<void>;
+  readonly requestHealthRefresh: Effect.Effect<void>;
+  readonly refreshHealth: Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
 };
 
 export type ViewServerRuntimeCoreOptions = {
@@ -84,8 +87,7 @@ export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefi
     const liveClient = yield* makeRuntimeCoreLiveClient<Topics>(
       engine,
       health,
-      transportHealth,
-      healthOverlay,
+      runtimeClient.refreshHealth,
     );
     const close = Effect.uninterruptible(runAllFinalizers([runtimeClient.close, liveClient.close]));
     return {
@@ -95,6 +97,8 @@ export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefi
         close,
       },
       close,
+      requestHealthRefresh: runtimeClient.requestHealthRefresh,
+      refreshHealth: runtimeClient.refreshHealth,
     };
   },
 );

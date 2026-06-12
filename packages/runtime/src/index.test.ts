@@ -352,7 +352,7 @@ describe("@view-server/runtime", () => {
             healthUrl: "http://127.0.0.1:0/health",
             close: Effect.void,
           }),
-        makeKafkaIngress: (_config, _client, options) => {
+        makeKafkaIngress: (_config, _client, _requestHealthRefresh, options) => {
           kafkaOptions = options;
           return Effect.succeed({
             close: Effect.void,
@@ -431,7 +431,7 @@ describe("@view-server/runtime", () => {
             healthUrl: "http://127.0.0.1:0/health",
             close: Effect.void,
           }),
-        makeKafkaIngress: (_config, _client, options) => {
+        makeKafkaIngress: (_config, _client, _requestHealthRefresh, options) => {
           kafkaOptions = options;
           return Effect.succeed({
             close: Effect.void,
@@ -473,7 +473,7 @@ describe("@view-server/runtime", () => {
       const localKafkaTopic = viewServer.kafkaTopic<typeof regions>();
       const dependencies: ViewServerRuntimeDependencies<typeof viewServer.topics> = {
         ...makeDefaultRuntimeDependencies<typeof viewServer.topics>(),
-        makeKafkaIngress: (_config, _client, _options, health) =>
+        makeKafkaIngress: (_config, _client, _requestHealthRefresh, _options, health) =>
           health.regionDisconnected("local", "lost").pipe(
             Effect.as({
               close: Effect.void,
@@ -508,7 +508,7 @@ describe("@view-server/runtime", () => {
             expect(health.health.status).toBe("degraded");
             expect(health.health.engine.topics.orders.rowCount).toBe(0);
           }),
-        (runtime) => runtime.close.pipe(Effect.ignore),
+        (runtime) => runtime.close,
       );
     }),
   );
