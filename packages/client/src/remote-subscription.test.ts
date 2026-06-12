@@ -83,4 +83,30 @@ describe("remote subscription", () => {
       yield* Scope.close(clientScope, Exit.void);
     }),
   );
+
+  it.effect("propagates subscription close defects from lifecycle finalizers", () =>
+    Effect.gen(function* () {
+      const clientScope = yield* Scope.make("parallel");
+      let closeCount = 0;
+      const subscription = yield* makeRemoteSubscription<Row, string>({
+        clientScope,
+        failureStatus,
+        lifecycle: {
+          onOpen: Effect.void,
+          onClose: Effect.sync(() => {
+            closeCount += 1;
+          }).pipe(Effect.andThen(Effect.die("close failed"))),
+        },
+        source: Stream.make(snapshot),
+        subscriptionBufferSize: 2,
+        topic: "orders",
+      });
+
+      const closeExit = yield* Effect.exit(subscription.close());
+
+      expect(Exit.isFailure(closeExit)).toBe(true);
+      expect(closeCount).toBe(1);
+      yield* Scope.close(clientScope, Exit.void);
+    }),
+  );
 });

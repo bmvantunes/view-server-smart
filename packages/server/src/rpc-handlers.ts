@@ -1,4 +1,5 @@
 import { VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC } from "@view-server/config";
+import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/effect-utils";
 import type { TopicDefinitions, ViewServerConfig } from "@view-server/config";
 import {
   ViewServerRpcs,
@@ -12,6 +13,10 @@ import {
 } from "@view-server/protocol";
 import { Effect, Exit, Stream } from "effect";
 import type { ViewServerWebSocketServerInput } from "./server-types";
+
+const ignoreSubscriptionCloseFailure = ignoreLoggedTypedFailuresPreserveNonTypedFailures(
+  "Ignoring RPC subscription close failure.",
+);
 
 export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>(
   config: ViewServerConfig<Topics>,
@@ -46,7 +51,7 @@ export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>
               Stream.mapEffect((event) =>
                 viewServerEncodeHealthSummaryEvent<Topics>(config, event),
               ),
-              Stream.ensuring(subscription.close().pipe(Effect.ignore)),
+              Stream.ensuring(subscription.close().pipe(ignoreSubscriptionCloseFailure)),
             );
           }
           if (payload.topic === VIEW_SERVER_HEALTH_TOPIC) {
@@ -54,7 +59,7 @@ export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>
             const subscription = yield* input.liveClient.subscribeHealth();
             return subscription.events.pipe(
               Stream.mapEffect((event) => viewServerEncodeHealthTopicEvent<Topics>(config, event)),
-              Stream.ensuring(subscription.close().pipe(Effect.ignore)),
+              Stream.ensuring(subscription.close().pipe(ignoreSubscriptionCloseFailure)),
             );
           }
           const topic = yield* viewServerDecodeTopic(config, payload.topic);
@@ -66,7 +71,7 @@ export const makeViewServerRpcHandlers = <const Topics extends TopicDefinitions>
           const subscription = yield* input.liveClient.subscribeRuntime(topic, query);
           return subscription.events.pipe(
             Stream.mapEffect((event) => viewServerEncodeLiveEvent(config, topic, query, event)),
-            Stream.ensuring(subscription.close().pipe(Effect.ignore)),
+            Stream.ensuring(subscription.close().pipe(ignoreSubscriptionCloseFailure)),
           );
         }),
       ),

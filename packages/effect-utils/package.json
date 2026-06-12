@@ -1,5 +1,5 @@
 {
-  "name": "@view-server/server",
+  "name": "@view-server/effect-utils",
   "version": "0.0.0",
   "private": true,
   "files": [
@@ -14,20 +14,13 @@
   },
   "scripts": {
     "build": "vp pack",
-    "test": "vp run -t @view-server/effect-utils#build && vp run -t @view-server/runtime-core#build && vp test run --coverage --typecheck"
+    "test": "vp test run --coverage --typecheck"
   },
   "dependencies": {
-    "@effect/platform-node": "catalog:",
-    "@view-server/client": "workspace:*",
-    "@view-server/config": "workspace:*",
-    "@view-server/effect-utils": "workspace:*",
-    "@view-server/protocol": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@types/node": "catalog:",
-    "@view-server/runtime-core": "workspace:*",
     "@vitest/coverage-istanbul": "catalog:",
     "@vitest/runner": "catalog:",
     "typescript": "catalog:",

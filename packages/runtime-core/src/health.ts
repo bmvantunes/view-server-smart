@@ -206,7 +206,7 @@ export const makeHealthRefreshScheduler = (
           }),
         );
         if (fiber !== undefined) {
-          yield* Fiber.interrupt(fiber).pipe(Effect.ignore);
+          yield* Fiber.interrupt(fiber).pipe(Effect.asVoid);
         }
       }),
     );

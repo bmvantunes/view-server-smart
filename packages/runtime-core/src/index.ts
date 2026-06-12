@@ -9,6 +9,7 @@ import type {
   ViewServerHealth,
   ViewServerRuntimeClient,
 } from "@view-server/config";
+import { runAllFinalizers } from "@view-server/effect-utils";
 import { Clock, Effect } from "effect";
 import { AtomRef } from "effect/unstable/reactivity";
 import {
@@ -86,9 +87,7 @@ export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefi
       transportHealth,
       healthOverlay,
     );
-    const close = Effect.uninterruptible(
-      runtimeClient.close.pipe(Effect.andThen(liveClient.close)),
-    );
+    const close = Effect.uninterruptible(runAllFinalizers([runtimeClient.close, liveClient.close]));
     return {
       client: runtimeClient.client,
       liveClient: {

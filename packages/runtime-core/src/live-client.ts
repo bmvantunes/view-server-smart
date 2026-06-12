@@ -7,6 +7,10 @@ import type {
   ViewServerLiveSubscription,
   ViewServerRuntimeLiveClient,
 } from "@view-server/client";
+import {
+  ignoreLoggedTypedFailuresPreserveNonTypedFailures,
+  runAllFinalizers,
+} from "@view-server/effect-utils";
 import type {
   ExactLiveQueryInput,
   GroupedQuery,
@@ -40,6 +44,10 @@ const runtimeClosedError: ViewServerRuntimeError = {
   code: "RuntimeUnavailable",
   message: "Runtime Core is closed.",
 };
+
+const ignoreHealthSubscriptionCloseFailure = ignoreLoggedTypedFailuresPreserveNonTypedFailures(
+  "Ignoring runtime health subscription close failure.",
+);
 
 export const makeRuntimeCoreLiveClient = Effect.fn("ViewServerRuntimeCore.liveClient.make")(
   <const Topics extends DecodableTopicDefinitions>(
@@ -119,16 +127,15 @@ export const makeRuntimeCoreLiveClient = Effect.fn("ViewServerRuntimeCore.liveCl
           )
           .pipe(
             Effect.andThen((subscriptions) =>
-              Effect.forEach(subscriptions, (subscription) => subscription.close, {
-                discard: true,
-              }),
+              runAllFinalizers(subscriptions.map((subscription) => subscription.close)),
             ),
           ),
-      ).pipe(Effect.ignore);
-      const close = closeActiveHealthSubscriptions.pipe(
-        Effect.andThen(engine.close()),
-        Effect.andThen(refreshHealth(engine, health, transportHealth, healthOverlay)),
-      );
+      ).pipe(ignoreHealthSubscriptionCloseFailure);
+      const close = runAllFinalizers([
+        closeActiveHealthSubscriptions,
+        engine.close(),
+        refreshHealth(engine, health, transportHealth, healthOverlay),
+      ]);
       const readonlyHealth = health.map((value) => value);
       const makeHealthSubscription = Effect.fn("ViewServerRuntimeCore.health.subscribe")(function* <
         Topic extends typeof VIEW_SERVER_HEALTH_SUMMARY_TOPIC | typeof VIEW_SERVER_HEALTH_TOPIC,
@@ -174,8 +181,8 @@ export const makeRuntimeCoreLiveClient = Effect.fn("ViewServerRuntimeCore.liveCl
                 }),
               );
               if (shouldClose) {
-                yield* Queue.end(updates).pipe(Effect.ignore);
-                yield* Fiber.interrupt(pumpFiber).pipe(Effect.ignore);
+                yield* Queue.end(updates);
+                yield* Fiber.interrupt(pumpFiber).pipe(Effect.asVoid);
                 yield* Queue.end(queue);
               }
             });

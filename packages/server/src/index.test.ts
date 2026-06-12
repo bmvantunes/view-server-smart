@@ -7,6 +7,7 @@ import {
   VIEW_SERVER_HEALTH_TOPIC,
   type ViewServerHealth,
   type ViewServerRuntimeError,
+  type ViewServerTransportError,
 } from "@view-server/config";
 import {
   ViewServerHealthSchema,
@@ -16,11 +17,14 @@ import {
 import { createViewServerRuntimeCore } from "@view-server/runtime-core";
 import {
   Context,
+  Cause,
   Deferred,
   Effect,
   Fiber,
   Layer,
+  Logger,
   ManagedRuntime,
+  References,
   Schema,
   SchemaGetter,
   Stream,
@@ -31,6 +35,7 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import * as Net from "node:net";
 import { makeViewServerWebSocketServer } from "./index";
+import { makeViewServerRpcHandlers } from "./rpc-handlers";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -980,6 +985,209 @@ describe("@view-server/server", () => {
       yield* wrongTopic.raw.close;
       yield* wrongTopic.server.close;
 
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("logs typed RPC handler stream finalization close failures", () => {
+    const logMessages: Array<unknown> = [];
+    const logger = Logger.make<unknown, void>((options) => {
+      logMessages.push(options.message);
+    });
+    let closeAttempts = 0;
+    const closeFailure: ViewServerTransportError = {
+      _tag: "ViewServerTransportError",
+      code: "SubscriptionClosed",
+      message: "close failed",
+      topic: "orders",
+      queryId: "close-failure",
+    };
+    return Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const closeStarted = yield* Deferred.make<void>();
+      const liveClient = {
+        ...inMemory.liveClient,
+        subscribeRuntime: () =>
+          Effect.succeed({
+            events: Stream.make({
+              type: "snapshot",
+              topic: "orders",
+              queryId: "close-failure",
+              version: 0,
+              keys: ["order-1"],
+              rows: [{ id: "order-1" }],
+              totalRows: 1,
+            } satisfies ViewServerLiveEvent<{ readonly id: string }>),
+            close: () =>
+              Effect.gen(function* () {
+                closeAttempts += 1;
+                yield* Deferred.succeed(closeStarted, undefined);
+                return yield* Effect.fail(closeFailure);
+              }),
+          }),
+      };
+      const handlers = makeViewServerRpcHandlers(viewServer, {
+        liveClient,
+        runtime: inMemory.client,
+      });
+
+      const stream = handlers["ViewServer.Subscribe"]({
+        topic: "orders",
+        query: { select: ["id"] },
+      });
+      const events = yield* stream.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "orders",
+        queryId: "close-failure",
+        version: 0,
+        keys: ["order-1"],
+        rows: [{ id: "order-1" }],
+        totalRows: 1,
+      });
+
+      yield* Deferred.await(closeStarted);
+      expect(closeAttempts).toBe(1);
+      expect(logMessages).toStrictEqual([["Ignoring RPC subscription close failure."]]);
+      yield* inMemory.close;
+    }).pipe(
+      Effect.provide(Logger.layer([logger])),
+      Effect.provideService(References.MinimumLogLevel, "Trace"),
+    );
+  });
+
+  it.live(
+    "preserves RPC handler stream finalization close defects mixed with typed failures",
+    () => {
+      const logMessages: Array<unknown> = [];
+      const logger = Logger.make<unknown, void>((options) => {
+        logMessages.push(options.message);
+      });
+      let closeAttempts = 0;
+      const closeFailure: ViewServerTransportError = {
+        _tag: "ViewServerTransportError",
+        code: "SubscriptionClosed",
+        message: "close failed",
+        topic: "orders",
+        queryId: "close-failure",
+      };
+      return Effect.gen(function* () {
+        const inMemory = createServerTestRuntime(viewServer);
+        const closeStarted = yield* Deferred.make<void>();
+        const liveClient = {
+          ...inMemory.liveClient,
+          subscribeRuntime: () =>
+            Effect.succeed({
+              events: Stream.make({
+                type: "snapshot",
+                topic: "orders",
+                queryId: "close-failure",
+                version: 0,
+                keys: ["order-1"],
+                rows: [{ id: "order-1" }],
+                totalRows: 1,
+              } satisfies ViewServerLiveEvent<{ readonly id: string }>),
+              close: () =>
+                Effect.gen(function* () {
+                  closeAttempts += 1;
+                  yield* Deferred.succeed(closeStarted, undefined);
+                  return yield* Effect.failCause(
+                    Cause.fromReasons([
+                      Cause.makeFailReason(closeFailure),
+                      Cause.makeDieReason("close defect"),
+                    ]),
+                  );
+                }),
+            }),
+        };
+        const handlers = makeViewServerRpcHandlers(viewServer, {
+          liveClient,
+          runtime: inMemory.client,
+        });
+
+        const stream = handlers["ViewServer.Subscribe"]({
+          topic: "orders",
+          query: { select: ["id"] },
+        });
+        const cause = yield* stream.pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.sandbox,
+          Effect.flip,
+        );
+
+        yield* Deferred.await(closeStarted);
+        expect(Cause.hasDies(cause)).toBe(true);
+        expect(Cause.hasFails(cause)).toBe(false);
+        expect(closeAttempts).toBe(1);
+        expect(logMessages).toStrictEqual([["Ignoring RPC subscription close failure."]]);
+        yield* inMemory.close;
+      }).pipe(
+        Effect.provide(Logger.layer([logger])),
+        Effect.provideService(References.MinimumLogLevel, "Trace"),
+      );
+    },
+  );
+
+  it.live("does not fail RPC stream finalization when typed subscription close fails", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const closeStarted = yield* Deferred.make<void>();
+      let closeAttempts = 0;
+      const closeFailure: ViewServerTransportError = {
+        _tag: "ViewServerTransportError",
+        code: "SubscriptionClosed",
+        message: "close failed",
+        topic: "orders",
+        queryId: "close-failure",
+      };
+      const liveClient = {
+        ...inMemory.liveClient,
+        subscribeRuntime: () =>
+          Effect.succeed({
+            events: Stream.make({
+              type: "snapshot",
+              topic: "orders",
+              queryId: "close-failure",
+              version: 0,
+              keys: ["order-1"],
+              rows: [{ id: "order-1" }],
+              totalRows: 1,
+            } satisfies ViewServerLiveEvent<{ readonly id: string }>),
+            close: () =>
+              Effect.gen(function* () {
+                closeAttempts += 1;
+                yield* Deferred.succeed(closeStarted, undefined);
+                return yield* Effect.fail(closeFailure);
+              }),
+          }),
+      };
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient,
+        runtime: inMemory.client,
+      });
+      const raw = yield* makeRawRpcClient(server.url);
+
+      const events = yield* raw.rpc["ViewServer.Subscribe"]({
+        topic: "orders",
+        query: { select: ["id"] },
+      }).pipe(Stream.take(1), Stream.runCollect);
+
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "orders",
+        queryId: "close-failure",
+        version: 0,
+        keys: ["order-1"],
+        rows: [{ id: "order-1" }],
+        totalRows: 1,
+      });
+
+      yield* Deferred.await(closeStarted);
+      expect(closeAttempts).toBe(1);
+      yield* raw.close;
+      yield* server.close;
       yield* inMemory.close;
     }),
   );

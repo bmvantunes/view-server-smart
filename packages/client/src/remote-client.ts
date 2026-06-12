@@ -18,6 +18,7 @@ import type {
   ViewServerTransportError,
 } from "@view-server/config";
 import { VIEW_SERVER_HEALTH_SUMMARY_TOPIC, VIEW_SERVER_HEALTH_TOPIC } from "@view-server/config";
+import { runAllFinalizers } from "@view-server/effect-utils";
 import {
   ViewServerRpcs,
   viewServerDecodeHealth,
@@ -157,10 +158,11 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   const subscriptionBufferSize = options.subscriptionBufferSize ?? 1_024;
   const clientScope = yield* Scope.make("parallel");
 
-  const close = Scope.close(clientScope, Exit.void).pipe(
-    Effect.andThen(managedRuntime.disposeEffect),
-    Effect.andThen(remoteHealth.markStopping),
-  );
+  const close = runAllFinalizers([
+    Scope.close(clientScope, Exit.void),
+    managedRuntime.disposeEffect,
+    remoteHealth.markStopping,
+  ]);
 
   const streamToSubscription = <Row, Topic extends string = string, Key extends string = string>(
     topic: Topic,

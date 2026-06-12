@@ -3,6 +3,7 @@ import * as clientPackage from "@view-server/client";
 import * as clientRemotePackage from "@view-server/client/remote";
 import type { ColumnLiveViewEngine } from "@view-server/column-live-view-engine";
 import * as enginePackage from "@view-server/column-live-view-engine";
+import * as effectUtilsPackage from "@view-server/effect-utils";
 import type { ViewServerHealth } from "@view-server/config/health";
 import type { KafkaMappingInput } from "@view-server/config/kafka";
 import type { LiveSubscription } from "@view-server/config/live-protocol";
@@ -64,8 +65,18 @@ requireExport("@view-server/client", clientPackage, "applyEvent");
 rejectExport("@view-server/client", clientPackage, "makeViewServerClient");
 rejectExport("@view-server/client", clientPackage, "createViewServerClient");
 rejectExport("@view-server/client", clientPackage, "ViewServerRpcs");
+rejectExport(
+  "@view-server/client",
+  clientPackage,
+  "ignoreLoggedTypedFailuresPreserveNonTypedFailures",
+);
 requireExport("@view-server/client/remote", clientRemotePackage, "makeViewServerClient");
 requireExport("@view-server/client/remote", clientRemotePackage, "createViewServerClient");
+requireExport(
+  "@view-server/effect-utils",
+  effectUtilsPackage,
+  "ignoreLoggedTypedFailuresPreserveNonTypedFailures",
+);
 requireExport("@view-server/protocol", protocolPackage, "ViewServerRpcs");
 requireExport("@view-server/protocol", protocolPackage, "ViewServerWireRowSchema");
 requireExport("@view-server/column-live-view-engine", enginePackage, "createColumnLiveViewEngine");

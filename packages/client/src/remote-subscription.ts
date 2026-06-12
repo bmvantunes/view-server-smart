@@ -1,10 +1,19 @@
 import { Cause, Effect, Exit, Queue, Scope, Stream } from "effect";
 import { constant } from "effect/Function";
+import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/effect-utils";
 import type {
   ViewServerLiveEvent,
   ViewServerLiveSubscription,
   ViewServerStatusEvent,
 } from "./live-client";
+
+const ignoreRemoteSubscriptionCloseFailure = ignoreLoggedTypedFailuresPreserveNonTypedFailures(
+  "Ignoring remote subscription close failure.",
+);
+const ignoreRemoteSubscriptionStreamStartFailure =
+  ignoreLoggedTypedFailuresPreserveNonTypedFailures(
+    "Ignoring remote subscription stream start failure.",
+  );
 
 export type RemoteSubscriptionLifecycle = {
   readonly onOpen: Effect.Effect<void>;
@@ -40,7 +49,9 @@ export const makeRemoteSubscription = Effect.fn("ViewServerClient.remote.subscri
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const scope = yield* Scope.fork(clientScope, "parallel");
-        const closeSubscription = Scope.close(scope, Exit.void).pipe(Effect.ignore);
+        const closeSubscription = Scope.close(scope, Exit.void).pipe(
+          ignoreRemoteSubscriptionCloseFailure,
+        );
         return yield* restore(
           Effect.gen(function* () {
             const stream = source.pipe(
@@ -49,10 +60,13 @@ export const makeRemoteSubscription = Effect.fn("ViewServerClient.remote.subscri
             const queue = yield* Queue.bounded<ViewServerLiveEvent<Row, Topic, Key>, Cause.Done>(
               subscriptionBufferSize,
             );
-            yield* Scope.addFinalizer(scope, lifecycle.onClose.pipe(Effect.ignore));
+            yield* Scope.addFinalizer(
+              scope,
+              lifecycle.onClose.pipe(ignoreRemoteSubscriptionCloseFailure),
+            );
             yield* Stream.runIntoQueue(stream, queue).pipe(
               Effect.forkIn(scope, { startImmediately: true }),
-              Effect.ignore,
+              ignoreRemoteSubscriptionStreamStartFailure,
             );
             yield* lifecycle.onOpen;
             const subscription = {

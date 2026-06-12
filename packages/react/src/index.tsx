@@ -1,4 +1,5 @@
 import * as AtomReact from "@effect/atom-react";
+import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/effect-utils";
 import {
   applyEvent,
   initialClientState,
@@ -53,6 +54,10 @@ type ViewServerClientProviderProps<Topics extends TopicDefinitions> = {
 export type ViewServerProviderProps = ViewServerClientOptions & {
   readonly children?: ReactNode;
 };
+
+const ignoreSubscriptionCloseFailure = ignoreLoggedTypedFailuresPreserveNonTypedFailures(
+  "Ignoring React subscription close failure.",
+);
 
 export type UseLiveQueryHook<Topics extends TopicDefinitions> = {
   <
@@ -149,7 +154,7 @@ export const createViewServerReact = <const Topics extends TopicDefinitions>(
                 const subscription = yield* subscribe();
                 return subscription.events.pipe(
                   Stream.scan(initialClientState<Row>(), applyEvent),
-                  Stream.ensuring(subscription.close().pipe(Effect.ignore)),
+                  Stream.ensuring(subscription.close().pipe(ignoreSubscriptionCloseFailure)),
                 );
               }),
             ),

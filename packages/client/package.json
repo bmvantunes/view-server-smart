@@ -18,11 +18,12 @@
   },
   "scripts": {
     "build": "vp pack",
-    "test": "vp test run --coverage --typecheck"
+    "test": "vp run -t @view-server/effect-utils#build && vp test run --coverage --typecheck"
   },
   "dependencies": {
     "@effect/platform-browser": "catalog:",
     "@view-server/config": "workspace:*",
+    "@view-server/effect-utils": "workspace:*",
     "@view-server/protocol": "workspace:*",
     "effect": "catalog:"
   },

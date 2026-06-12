@@ -13,13 +13,14 @@
     }
   },
   "scripts": {
-    "build": "vp run -t @view-server/client#build && vp run -t @view-server/column-live-view-engine#build && vp pack",
-    "test": "vp run -t @view-server/client#build && vp run -t @view-server/column-live-view-engine#build && vp test run --coverage --typecheck"
+    "build": "vp run -t @view-server/client#build && vp run -t @view-server/column-live-view-engine#build && vp run -t @view-server/effect-utils#build && vp pack",
+    "test": "vp run -t @view-server/client#build && vp run -t @view-server/column-live-view-engine#build && vp run -t @view-server/effect-utils#build && vp test run --coverage --typecheck"
   },
   "dependencies": {
     "@view-server/client": "workspace:*",
     "@view-server/column-live-view-engine": "workspace:*",
     "@view-server/config": "workspace:*",
+    "@view-server/effect-utils": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
