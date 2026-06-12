@@ -50,6 +50,95 @@ const requireModule = (moduleName: string, moduleValue: unknown) => {
   }
 };
 
+const requireResolvablePackageExport = (specifier: string) => {
+  try {
+    return import.meta.resolve(specifier);
+  } catch (error) {
+    throw new Error(`${specifier} should resolve as a public package export`, { cause: error });
+  }
+};
+
+const rejectResolvablePackageExport = (specifier: string) => {
+  const unexpectedMessage = `${specifier} unexpectedly resolves as a public package export`;
+  try {
+    const resolved = import.meta.resolve(specifier);
+    throw new Error(`${unexpectedMessage}: ${resolved}`);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith(unexpectedMessage)) {
+      throw error;
+    }
+  }
+};
+
+const publicPackageExports = [
+  "@view-server/client",
+  "@view-server/client/remote",
+  "@view-server/column-live-view-engine",
+  "@view-server/config",
+  "@view-server/config/health",
+  "@view-server/config/kafka",
+  "@view-server/config/live-protocol",
+  "@view-server/config/query",
+  "@view-server/config/runtime",
+  "@view-server/effect-utils",
+  "@view-server/in-memory",
+  "@view-server/protocol",
+  "@view-server/react",
+  "@view-server/react/testing",
+  "@view-server/runtime",
+  "@view-server/runtime-core",
+  "@view-server/server",
+];
+
+const forbiddenPackageDeepImports = [
+  "@view-server/client/src/index",
+  "@view-server/client/dist/index.js",
+  "@view-server/client/src/live-client",
+  "@view-server/client/src/remote-client",
+  "@view-server/client/remote/client",
+  "@view-server/client/remote/internal",
+  "@view-server/column-live-view-engine/src/index",
+  "@view-server/column-live-view-engine/dist/index.js",
+  "@view-server/column-live-view-engine/src/topic-store-state",
+  "@view-server/column-live-view-engine/topic-store-state",
+  "@view-server/config/src/index",
+  "@view-server/config/dist/index.js",
+  "@view-server/config/dist/topic-contract.js",
+  "@view-server/config/src/topic-contract",
+  "@view-server/config/query/raw-query-contract",
+  "@view-server/config/query/src/topic-contract",
+  "@view-server/effect-utils/src/index",
+  "@view-server/effect-utils/dist/index.js",
+  "@view-server/in-memory/src/index",
+  "@view-server/in-memory/dist/index.js",
+  "@view-server/protocol/src/index",
+  "@view-server/protocol/dist/index.js",
+  "@view-server/protocol/src/protocol-row-codec",
+  "@view-server/protocol/protocol-row-codec",
+  "@view-server/react/src/index",
+  "@view-server/react/dist/index.js",
+  "@view-server/react/dist/testing.js",
+  "@view-server/react/src/testing",
+  "@view-server/react/testing/internal",
+  "@view-server/runtime/src/internal",
+  "@view-server/runtime/dist/index.js",
+  "@view-server/runtime/internal",
+  "@view-server/runtime-core/src/health",
+  "@view-server/runtime-core/dist/index.js",
+  "@view-server/runtime-core/health",
+  "@view-server/server/src/rpc-handlers",
+  "@view-server/server/dist/index.js",
+  "@view-server/server/rpc-handlers",
+];
+
+for (const specifier of publicPackageExports) {
+  requireResolvablePackageExport(specifier);
+}
+
+for (const specifier of forbiddenPackageDeepImports) {
+  rejectResolvablePackageExport(specifier);
+}
+
 requireExport("@view-server/config", configPackage, "defineViewServerConfig");
 requireExport("@view-server/config", configPackage, "defineKafkaTopic");
 requireExport("@view-server/config", configPackage, "kafka");

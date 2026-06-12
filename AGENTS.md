@@ -134,6 +134,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   - in-memory: in-process Adapter over runtime-core for tests, demos, Storybook, and browser benchmarks.
   - runtime: production composition of runtime-core plus server and future Kafka/TCP/gRPC ingress Adapters.
 - Do not make production packages depend on testing packages or in-memory implementations.
+- Package export checks must cover approved root exports, approved subexports, and rejected deep/internal subpaths. A package seam is not enforced if `@view-server/package/src/...`, `@view-server/package/dist/...`, or unapproved nested subexports can resolve.
 
 ## Common Blockers
 
@@ -158,6 +159,7 @@ These issues block merge until fixed or explicitly accepted by the user:
 - Production runtime imports the in-memory Adapter instead of runtime-core.
 - Browser/remote client exposes publish, publishMany, reset, or other admin mutation RPCs.
 - A package imports through a root export that also pulls in the wrong runtime/platform adapter.
+- An unapproved deep import or nested subexport resolves across a package seam.
 - Public API type tests are missing for new generic inference or rejection behavior.
 - Runtime fields that are always present are modeled as optional.
 - A benchmark comparison runs multiple candidates concurrently or omits process/child failure checks.
