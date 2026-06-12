@@ -6326,6 +6326,181 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     }),
   );
 
+  it.effect("uses heap bounded scans for larger finite windows with stable row-key ties", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore("orders", Order, "id", () => {});
+      const rows = Array.from({ length: 5_000 }, (_value, index) => {
+        const id = `order-${String(index).padStart(4, "0")}`;
+        const region = index < 4_900 ? "emea" : "amer";
+        return order(id, "open", Math.floor(index / 2), 5_000 - index, region);
+      });
+      yield* publishTopicStoreRows(store, rows, (topic, message) =>
+        InvalidRowError.make({ topic, message }),
+      );
+
+      const compareByPriceThenKey = (
+        left: { readonly key: string; readonly row: object },
+        right: { readonly key: string; readonly row: object },
+      ) =>
+        numericRowField(left.row, "price") - numericRowField(right.row, "price") ||
+        left.key.localeCompare(right.key);
+
+      const heapWindow = topicStoreReadModel(store).scanRawWindow({
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: (row) => rowField(row, "region") === "emea",
+        compare: compareByPriceThenKey,
+        offset: 1_200,
+        limit: 10,
+      });
+
+      expect(heapWindow.keys).toStrictEqual([
+        "order-1200",
+        "order-1201",
+        "order-1202",
+        "order-1203",
+        "order-1204",
+        "order-1205",
+        "order-1206",
+        "order-1207",
+        "order-1208",
+        "order-1209",
+      ]);
+      expect(heapWindow.window.map((entry) => entry.key)).toStrictEqual([
+        "order-1200",
+        "order-1201",
+        "order-1202",
+        "order-1203",
+        "order-1204",
+        "order-1205",
+        "order-1206",
+        "order-1207",
+        "order-1208",
+        "order-1209",
+      ]);
+      expect(rowIds(heapWindow.window.map((entry) => entry.row))).toStrictEqual([
+        "order-1200",
+        "order-1201",
+        "order-1202",
+        "order-1203",
+        "order-1204",
+        "order-1205",
+        "order-1206",
+        "order-1207",
+        "order-1208",
+        "order-1209",
+      ]);
+      expect(heapWindow.totalRows).toBe(4_900);
+
+      const compareByPriceOnly = (
+        left: { readonly row: object },
+        right: { readonly row: object },
+      ) => numericRowField(left.row, "price") - numericRowField(right.row, "price");
+
+      const priceOnlyTieWindow = topicStoreReadModel(store).scanRawWindow({
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: (row) => rowField(row, "region") === "emea",
+        compare: compareByPriceOnly,
+        offset: 1_200,
+        limit: 10,
+      });
+
+      expect(priceOnlyTieWindow.keys).toStrictEqual([
+        "order-1200",
+        "order-1201",
+        "order-1202",
+        "order-1203",
+        "order-1204",
+        "order-1205",
+        "order-1206",
+        "order-1207",
+        "order-1208",
+        "order-1209",
+      ]);
+      expect(priceOnlyTieWindow.totalRows).toBe(4_900);
+
+      const compareByUpdatedAtThenKey = (
+        left: { readonly key: string; readonly row: object },
+        right: { readonly key: string; readonly row: object },
+      ) =>
+        numericRowField(left.row, "updatedAt") - numericRowField(right.row, "updatedAt") ||
+        left.key.localeCompare(right.key);
+
+      const candidateHeapWindow = topicStoreReadModel(store).scanRawWindow({
+        predicate: {
+          filters: [{ field: "region", operator: "eq", value: "emea" }],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: (row) => rowField(row, "id") !== "order-0000",
+        compare: compareByUpdatedAtThenKey,
+        offset: 1_200,
+        limit: 10,
+      });
+
+      expect(candidateHeapWindow.keys).toStrictEqual([
+        "order-3699",
+        "order-3698",
+        "order-3697",
+        "order-3696",
+        "order-3695",
+        "order-3694",
+        "order-3693",
+        "order-3692",
+        "order-3691",
+        "order-3690",
+      ]);
+      expect(candidateHeapWindow.window.map((entry) => entry.key)).toStrictEqual([
+        "order-3699",
+        "order-3698",
+        "order-3697",
+        "order-3696",
+        "order-3695",
+        "order-3694",
+        "order-3693",
+        "order-3692",
+        "order-3691",
+        "order-3690",
+      ]);
+      expect(rowIds(candidateHeapWindow.window.map((entry) => entry.row))).toStrictEqual([
+        "order-3699",
+        "order-3698",
+        "order-3697",
+        "order-3696",
+        "order-3695",
+        "order-3694",
+        "order-3693",
+        "order-3692",
+        "order-3691",
+        "order-3690",
+      ]);
+      expect(candidateHeapWindow.totalRows).toBe(4_899);
+
+      const unboundedFallbackWindow = topicStoreReadModel(store).scanRawWindow({
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: [],
+        matches: () => true,
+        compare: compareByPriceThenKey,
+        offset: 5_000,
+        limit: 1,
+      });
+
+      expect(unboundedFallbackWindow.keys).toStrictEqual([]);
+      expect(unboundedFallbackWindow.window).toStrictEqual([]);
+      expect(unboundedFallbackWindow.totalRows).toBe(5_000);
+    }),
+  );
+
   it.effect("skips row callbacks for complete column predicate plans", () =>
     Effect.gen(function* () {
       const store = new TopicStore("orders", Order, "id", () => {});

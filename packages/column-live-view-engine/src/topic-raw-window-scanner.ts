@@ -30,9 +30,15 @@ export type TopicRawWindowScanState = {
   readonly slots: ReadonlyArray<TopicRowEntry<object>>;
 };
 
-const maxBoundedRawWindowEnd = 1_024;
+const maxSortedBoundedRawWindowEnd = 1_024;
+const maxHeapBoundedRawWindowEnd = 100_000;
 const maxMaterializedPredicateCandidateSlots = 100_000;
 const materializedPredicateCandidateSlotBudget = maxMaterializedPredicateCandidateSlots + 1;
+
+type BoundedRawWindowStrategy = {
+  readonly kind: "heap" | "sorted";
+  readonly windowEnd: number;
+};
 
 export const scanTopicRawWindow = (
   state: TopicRawWindowScanState,
@@ -144,14 +150,24 @@ const scanRawWindowCandidateSlots = (
   matchesSlot: (slot: number) => boolean,
   candidateSlots: PredicateCandidateSlots,
 ): TopicRawWindowScanResult<object> => {
-  const boundedWindowEnd = boundedRawWindowEnd(plan);
-  if (boundedWindowEnd !== undefined) {
-    return scanRawWindowBoundedSlotCandidates(
+  const boundedWindow = boundedRawWindowStrategy(plan, candidateSlots.slots.length);
+  if (boundedWindow?.kind === "sorted") {
+    return scanRawWindowBoundedSortedSlotCandidates(
       state,
       plan,
       compareSlots,
       matchesSlot,
-      boundedWindowEnd,
+      boundedWindow.windowEnd,
+      candidateSlots,
+    );
+  }
+  if (boundedWindow?.kind === "heap") {
+    return scanRawWindowBoundedHeapSlotCandidates(
+      state,
+      plan,
+      compareSlots,
+      matchesSlot,
+      boundedWindow.windowEnd,
       candidateSlots,
     );
   }
@@ -179,9 +195,24 @@ const scanRawWindowSlots = (
   compareSlots: (left: number, right: number) => number,
   matchesSlot: (slot: number) => boolean,
 ): TopicRawWindowScanResult<object> => {
-  const boundedWindowEnd = boundedRawWindowEnd(plan);
-  if (boundedWindowEnd !== undefined) {
-    return scanRawWindowBoundedSlots(state, plan, compareSlots, matchesSlot, boundedWindowEnd);
+  const boundedWindow = boundedRawWindowStrategy(plan, state.slots.length);
+  if (boundedWindow?.kind === "sorted") {
+    return scanRawWindowBoundedSortedSlots(
+      state,
+      plan,
+      compareSlots,
+      matchesSlot,
+      boundedWindow.windowEnd,
+    );
+  }
+  if (boundedWindow?.kind === "heap") {
+    return scanRawWindowBoundedHeapSlots(
+      state,
+      plan,
+      compareSlots,
+      matchesSlot,
+      boundedWindow.windowEnd,
+    );
   }
 
   let totalRows = 0;
@@ -201,7 +232,7 @@ const scanRawWindowSlots = (
   return rawWindowScanResult(state, windowSlots, totalRows);
 };
 
-const scanRawWindowBoundedSlots = (
+const scanRawWindowBoundedSortedSlots = (
   state: TopicRawWindowScanState,
   plan: TopicRawWindowScanPlan<object>,
   compareSlots: (left: number, right: number) => number,
@@ -230,7 +261,7 @@ const scanRawWindowBoundedSlots = (
   return rawWindowScanResult(state, windowSlots.slice(plan.offset), totalRows);
 };
 
-const scanRawWindowBoundedSlotCandidates = (
+const scanRawWindowBoundedSortedSlotCandidates = (
   state: TopicRawWindowScanState,
   plan: TopicRawWindowScanPlan<object>,
   compareSlots: (left: number, right: number) => number,
@@ -260,6 +291,120 @@ const scanRawWindowBoundedSlotCandidates = (
   return rawWindowScanResult(state, windowSlots.slice(plan.offset), totalRows);
 };
 
+const scanRawWindowBoundedHeapSlots = (
+  state: TopicRawWindowScanState,
+  plan: TopicRawWindowScanPlan<object>,
+  compareSlots: (left: number, right: number) => number,
+  matchesSlot: (slot: number) => boolean,
+  windowEnd: number,
+): TopicRawWindowScanResult<object> => {
+  let totalRows = 0;
+  const heap: Array<number> = [];
+  const compareStableSlots = stableRawWindowSlotComparator(compareSlots);
+  for (let slot = 0; slot < state.slots.length; slot += 1) {
+    if (!matchesSlot(slot)) {
+      continue;
+    }
+    totalRows += 1;
+    retainBoundedRawWindowSlot(heap, slot, windowEnd, compareStableSlots);
+  }
+  heap.sort(compareStableSlots);
+  return rawWindowScanResult(state, heap.slice(plan.offset), totalRows);
+};
+
+const scanRawWindowBoundedHeapSlotCandidates = (
+  state: TopicRawWindowScanState,
+  plan: TopicRawWindowScanPlan<object>,
+  compareSlots: (left: number, right: number) => number,
+  matchesSlot: (slot: number) => boolean,
+  windowEnd: number,
+  candidateSlots: PredicateCandidateSlots,
+): TopicRawWindowScanResult<object> => {
+  let totalRows = 0;
+  const heap: Array<number> = [];
+  const compareStableSlots = stableRawWindowSlotComparator(compareSlots);
+  for (const slot of candidateSlots.slots) {
+    if (!matchesSlot(slot)) {
+      continue;
+    }
+    totalRows += 1;
+    retainBoundedRawWindowSlot(heap, slot, windowEnd, compareStableSlots);
+  }
+  heap.sort(compareStableSlots);
+  return rawWindowScanResult(state, heap.slice(plan.offset), totalRows);
+};
+
+const stableRawWindowSlotComparator =
+  (compareSlots: (left: number, right: number) => number) =>
+  (left: number, right: number): number => {
+    const comparison = compareSlots(left, right);
+    return comparison === 0 ? left - right : comparison;
+  };
+
+const retainBoundedRawWindowSlot = (
+  heap: Array<number>,
+  slot: number,
+  windowEnd: number,
+  compareSlots: (left: number, right: number) => number,
+): void => {
+  if (heap.length < windowEnd) {
+    heap.push(slot);
+    siftRawWindowSlotUp(heap, heap.length - 1, compareSlots);
+    return;
+  }
+  if (compareSlots(slot, heap[0]!) >= 0) {
+    return;
+  }
+  heap[0] = slot;
+  siftRawWindowSlotDown(heap, 0, compareSlots);
+};
+
+const siftRawWindowSlotUp = (
+  heap: Array<number>,
+  index: number,
+  compareSlots: (left: number, right: number) => number,
+): void => {
+  let current = index;
+  while (current > 0) {
+    const parent = Math.floor((current - 1) / 2);
+    if (compareSlots(heap[parent]!, heap[current]!) >= 0) {
+      return;
+    }
+    swapRawWindowHeapSlots(heap, parent, current);
+    current = parent;
+  }
+};
+
+const siftRawWindowSlotDown = (
+  heap: Array<number>,
+  index: number,
+  compareSlots: (left: number, right: number) => number,
+): void => {
+  let current = index;
+  while (true) {
+    const left = current * 2 + 1;
+    const right = left + 1;
+    let largest = current;
+    if (left < heap.length && compareSlots(heap[left]!, heap[largest]!) > 0) {
+      largest = left;
+    }
+    if (right < heap.length && compareSlots(heap[right]!, heap[largest]!) > 0) {
+      largest = right;
+    }
+    if (largest === current) {
+      return;
+    }
+    swapRawWindowHeapSlots(heap, current, largest);
+    current = largest;
+  }
+};
+
+const swapRawWindowHeapSlots = (heap: Array<number>, left: number, right: number): void => {
+  const value = heap[left]!;
+  heap[left] = heap[right]!;
+  heap[right] = value;
+};
+
 const rawPredicateMatchesSlot = (
   state: TopicRawWindowScanState,
   plan: TopicRawWindowScanPlan<object>,
@@ -284,7 +429,10 @@ const rawWindowScanResult = (
   };
 };
 
-const boundedRawWindowEnd = (plan: TopicRawWindowScanPlan<object>): number | undefined => {
+const boundedRawWindowStrategy = (
+  plan: TopicRawWindowScanPlan<object>,
+  candidateCount: number,
+): BoundedRawWindowStrategy | undefined => {
   if (plan.limit === undefined || plan.limit <= 0) {
     return undefined;
   }
@@ -292,8 +440,20 @@ const boundedRawWindowEnd = (plan: TopicRawWindowScanPlan<object>): number | und
     return undefined;
   }
   const windowEnd = plan.offset + plan.limit;
-  if (!Number.isSafeInteger(windowEnd) || windowEnd > maxBoundedRawWindowEnd) {
+  if (!Number.isSafeInteger(windowEnd)) {
     return undefined;
   }
-  return windowEnd;
+  if (windowEnd <= maxSortedBoundedRawWindowEnd) {
+    return {
+      kind: "sorted",
+      windowEnd,
+    };
+  }
+  if (windowEnd <= maxHeapBoundedRawWindowEnd && windowEnd * 4 <= candidateCount) {
+    return {
+      kind: "heap",
+      windowEnd,
+    };
+  }
+  return undefined;
 };
