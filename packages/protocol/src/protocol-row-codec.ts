@@ -2,6 +2,11 @@ import type { TopicDefinitions, ViewServerRuntimeError } from "@view-server/conf
 import { Effect, Schema } from "effect";
 import { decodeAggregateValue, encodeAggregateValue } from "./protocol-aggregate-row-codec";
 import { ViewServerWireRowSchema, type ViewServerWireRow } from "./protocol-event-schema";
+import {
+  decodeJsonFieldValue,
+  encodeJsonFieldValue,
+  type JsonFieldSchema,
+} from "./protocol-json-field-codec";
 import type { ViewServerEventGroupedQuery, ViewServerEventQuery } from "./protocol-query-schema";
 
 const invalidRow = (topic: string, message: string): ViewServerRuntimeError => ({
@@ -18,17 +23,13 @@ export const isViewServerEventGroupedQuery = (
 const encodeEventJsonFieldValue = Effect.fn("ViewServerProtocol.event.field.encode")(function* (
   topic: string,
   field: string,
-  schema: Schema.Codec<unknown>,
+  schema: JsonFieldSchema,
   value: unknown,
 ) {
-  const encoded = yield* Schema.encodeUnknownEffect(Schema.toCodecJson(schema))(value).pipe(
-    Effect.mapError((error) => invalidRow(topic, `Invalid field ${field}: ${error.message}`)),
-  );
-  return yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
-    Effect.mapError((error) =>
-      invalidRow(topic, `Field ${field} is not JSON-safe: ${error.message}`),
-    ),
-  );
+  return yield* encodeJsonFieldValue(schema, value, {
+    invalid: (message) => invalidRow(topic, `Invalid field ${field}: ${message}`),
+    notJsonSafe: (message) => invalidRow(topic, `Field ${field} is not JSON-safe: ${message}`),
+  });
 });
 
 export const encodeProjectedRow = Effect.fn("ViewServerProtocol.row.project.encode")(function* <
@@ -84,9 +85,9 @@ export const decodeProjectedRow = Effect.fn("ViewServerProtocol.row.project.deco
       );
     }
     const fieldSchema = config.topics[topic]!.schema.fields[field]!;
-    output[field] = yield* Schema.decodeUnknownEffect(Schema.toCodecJson(fieldSchema))(value).pipe(
-      Effect.mapError((error) => invalidRow(topic, `Invalid field ${field}: ${error.message}`)),
-    );
+    output[field] = yield* decodeJsonFieldValue(fieldSchema, value, {
+      invalid: (message) => invalidRow(topic, `Invalid field ${field}: ${message}`),
+    });
   }
   return output;
 });
@@ -168,11 +169,9 @@ export const decodeGroupedRow = Effect.fn("ViewServerProtocol.row.grouped.decode
   for (const [field, value] of Object.entries(row)) {
     if (groupFields.has(field)) {
       const fieldSchema = topicSchema.fields[field]!;
-      output[field] = yield* Schema.decodeUnknownEffect(Schema.toCodecJson(fieldSchema))(
-        value,
-      ).pipe(
-        Effect.mapError((error) => invalidRow(topic, `Invalid field ${field}: ${error.message}`)),
-      );
+      output[field] = yield* decodeJsonFieldValue(fieldSchema, value, {
+        invalid: (message) => invalidRow(topic, `Invalid field ${field}: ${message}`),
+      });
     } else if (aggregateAliases.has(field)) {
       const aggregate = query.aggregates[field];
       if (aggregate === undefined) {

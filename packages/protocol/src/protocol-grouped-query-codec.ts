@@ -10,7 +10,7 @@ import type {
 } from "@view-server/config";
 import { viewServerSchemaFieldMetadata } from "@view-server/config";
 import { Effect, Schema } from "effect";
-import type { JsonFieldSchema } from "./protocol-field-filter-codec";
+import type { JsonFieldSchema } from "./protocol-json-field-codec";
 import {
   decodeWhere,
   encodeWhere,

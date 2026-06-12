@@ -113,6 +113,8 @@ const forbiddenPackageDeepImports = [
   "@view-server/in-memory/dist/index.js",
   "@view-server/protocol/src/index",
   "@view-server/protocol/dist/index.js",
+  "@view-server/protocol/src/protocol-json-field-codec",
+  "@view-server/protocol/protocol-json-field-codec",
   "@view-server/protocol/src/protocol-row-codec",
   "@view-server/protocol/protocol-row-codec",
   "@view-server/react/src/index",
