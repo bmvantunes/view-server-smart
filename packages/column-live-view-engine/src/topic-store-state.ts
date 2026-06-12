@@ -1,5 +1,10 @@
-import { Schema, Semaphore } from "effect";
-import type { ActiveQueryStoreState } from "./active-query";
+import { Effect, Schema, Semaphore } from "effect";
+import {
+  activeStoreQueryExecutionCounts,
+  clearStoreRawQueryExecutions,
+  type ActiveQueryExecutionCounts,
+  type ActiveQueryStoreState,
+} from "./active-query";
 import { ColumnarTopicStore } from "./columnar-topic-store";
 import { createTopicHealthLedger } from "./topic-health-ledger";
 import type { TopicStoreMutationState } from "./topic-store-mutation";
@@ -16,6 +21,12 @@ export type TopicStoreSubscriptionPermit = {
 export type TopicStoreState = TopicStoreMutationState;
 
 const topicStoreStates = new WeakMap<TopicStore, TopicStoreState>();
+
+export type TopicStoreHealthSource = {
+  readonly healthLedger: ReturnType<typeof createTopicHealthLedger>;
+  readonly subscribers: ReadonlySet<LiveTopicSubscriber>;
+  readonly topic: string;
+};
 
 export class TopicStore {
   declare private readonly topicStoreBrand: void;
@@ -51,8 +62,63 @@ export const makeTopicStoreSubscriptionPermit = (
   store,
 });
 
+export const openTopicStoreSubscriber = (
+  permit: TopicStoreSubscriptionPermit,
+  subscriber: LiveTopicSubscriber,
+): void => {
+  const state = topicStoreState(permit.store);
+  state.healthLedger.openSubscription(subscriber);
+  state.subscribers.add(subscriber);
+};
+
+export const closeTopicStoreSubscriber = (
+  store: TopicStore,
+  subscriber: LiveTopicSubscriber,
+): void => {
+  const state = topicStoreState(store);
+  state.healthLedger.closeSubscription(subscriber);
+  state.subscribers.delete(subscriber);
+};
+
+export const updateTopicStoreSubscriberQueueDepth = (
+  store: TopicStore,
+  subscriber: LiveTopicSubscriber,
+  queueDepth: number,
+): void => {
+  topicStoreState(store).healthLedger.updateQueueDepth(subscriber, queueDepth);
+  subscriber.maxQueueDepth = Math.max(subscriber.maxQueueDepth, queueDepth);
+};
+
+export const markTopicStoreSubscriberBackpressure = (
+  store: TopicStore,
+  subscriber: LiveTopicSubscriber,
+): void => {
+  topicStoreState(store).healthLedger.markBackpressure(subscriber);
+  subscriber.backpressureEvents += 1;
+};
+
+export const topicStoreHealthSource = (store: TopicStore): TopicStoreHealthSource => {
+  const state = topicStoreState(store);
+  return {
+    healthLedger: state.healthLedger,
+    subscribers: state.subscribers,
+    topic: store.topic,
+  };
+};
+
 export const topicStoreRawQueryMetadata = (store: TopicStore): RawQueryCompilerMetadata =>
   topicStoreState(store).storage.rawQueryMetadata;
 
 export const topicStoreReadModel = (store: TopicStore): ActiveQueryStoreState =>
   topicStoreState(store).storage.readModel;
+
+export const clearTopicStoreQueryExecutions = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.queryExecutions.clear",
+)((store: TopicStore) => clearStoreRawQueryExecutions(topicStoreReadModel(store)));
+
+export const collectTopicStoreActiveQueryCounts = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.queryExecutions.count",
+)(
+  (store: TopicStore): Effect.Effect<ActiveQueryExecutionCounts> =>
+    activeStoreQueryExecutionCounts(topicStoreReadModel(store)),
+);

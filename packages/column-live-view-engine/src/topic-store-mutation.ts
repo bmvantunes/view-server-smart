@@ -27,23 +27,48 @@ export type TopicStoreMutationContext = {
   readonly delete: (key: string) => number;
 };
 
+const withTopicStoreStateTransaction = <Success, Error, Requirements>(
+  state: TopicStoreMutationState,
+  effect: Effect.Effect<Success, Error, Requirements>,
+): Effect.Effect<Success, Error, Requirements> =>
+  state.mutationSemaphore.withPermits(1)(Effect.uninterruptible(effect));
+
+const withTopicStoreStateNotification = <Success, Error, Requirements>(
+  state: TopicStoreMutationState,
+  effect: Effect.Effect<Success, Error, Requirements>,
+): Effect.Effect<Success, Error, Requirements> =>
+  state.notificationSemaphore.withPermits(1)(Effect.uninterruptible(effect));
+
 export const withTopicStoreTransaction = Effect.fn("ColumnLiveViewEngine.topicStore.transaction")(
   function* <Success, Error, Requirements>(
-    state: TopicStoreMutationState,
+    store: TopicStore,
     effect: Effect.Effect<Success, Error, Requirements>,
   ) {
-    return yield* state.mutationSemaphore.withPermits(1)(Effect.uninterruptible(effect));
+    return yield* withTopicStoreStateTransaction(topicStoreState(store), effect);
   },
 );
 
 export const withTopicStoreNotification = Effect.fn("ColumnLiveViewEngine.topicStore.notification")(
   function* <Success, Error, Requirements>(
-    state: TopicStoreMutationState,
+    store: TopicStore,
     effect: Effect.Effect<Success, Error, Requirements>,
   ) {
-    return yield* state.notificationSemaphore.withPermits(1)(Effect.uninterruptible(effect));
+    return yield* withTopicStoreStateNotification(topicStoreState(store), effect);
   },
 );
+
+export const withTopicStoreStateTransition = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.stateTransition",
+)(function* <Success, Error, Requirements>(
+  store: TopicStore,
+  transition: (state: TopicStoreMutationState) => Effect.Effect<Success, Error, Requirements>,
+) {
+  const state = topicStoreState(store);
+  return yield* withTopicStoreStateNotification(
+    state,
+    withTopicStoreStateTransaction(state, transition(state)),
+  );
+});
 
 const commitTopicStoreState = (
   state: TopicStoreMutationState,
@@ -113,7 +138,7 @@ const notifyTopicStoreSubscribers = Effect.fn("ColumnLiveViewEngine.topicStore.n
   store: TopicStore,
   subscribers: ReadonlyArray<LiveTopicSubscriber>,
 ) {
-  yield* withTopicStoreNotification(
+  yield* withTopicStoreStateNotification(
     state,
     Effect.gen(function* () {
       for (const subscriber of subscribers) {
@@ -135,7 +160,7 @@ export const runTopicStoreMutationTransaction = Effect.fn(
   yield* withTopicStoreMutationBatch(
     state,
     Effect.gen(function* () {
-      const subscribers = yield* withTopicStoreTransaction(
+      const subscribers = yield* withTopicStoreStateTransaction(
         state,
         Effect.gen(function* () {
           const rowsChanged = yield* mutate(topicStoreMutationContext(state));

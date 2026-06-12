@@ -7,10 +7,13 @@ import {
 import type { LiveTopicSubscriber } from "./topic-subscriber";
 import { withTopicStoreNotification, withTopicStoreTransaction } from "./topic-store-mutation";
 import {
+  closeTopicStoreSubscriber,
+  markTopicStoreSubscriberBackpressure,
   makeTopicStoreSubscriptionPermit,
-  topicStoreState,
+  openTopicStoreSubscriber,
   type TopicStore,
   type TopicStoreSubscriptionPermit,
+  updateTopicStoreSubscriberQueueDepth,
 } from "./topic-store-state";
 
 export function acquireTopicStoreSubscription<
@@ -28,7 +31,7 @@ export function acquireTopicStoreSubscription<
   return acquireSubscriptionHandoff(
     (markAcquired: (subscription: Subscription) => Effect.Effect<void>) =>
       withTopicStoreTransaction(
-        topicStoreState(store),
+        store,
         acquire(makeTopicStoreSubscriptionPermit(store), markAcquired),
       ),
     options,
@@ -39,9 +42,7 @@ export const registerTopicStoreSubscription = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.add",
 )(function (permit: TopicStoreSubscriptionPermit, subscriber: LiveTopicSubscriber) {
   return Effect.sync(() => {
-    const state = topicStoreState(permit.store);
-    state.healthLedger.openSubscription(subscriber);
-    state.subscribers.add(subscriber);
+    openTopicStoreSubscriber(permit, subscriber);
   });
 });
 
@@ -49,9 +50,7 @@ const unregisterTopicStoreSubscription = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.remove",
 )(function (store: TopicStore, subscriber: LiveTopicSubscriber) {
   return Effect.sync(() => {
-    const state = topicStoreState(store);
-    state.healthLedger.closeSubscription(subscriber);
-    state.subscribers.delete(subscriber);
+    closeTopicStoreSubscriber(store, subscriber);
   });
 });
 
@@ -59,8 +58,7 @@ export const trackTopicStoreSubscriptionQueueDepth = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.queueDepth",
 )((store: TopicStore, subscriber: LiveTopicSubscriber, queueDepth: number) =>
   Effect.sync(() => {
-    topicStoreState(store).healthLedger.updateQueueDepth(subscriber, queueDepth);
-    subscriber.maxQueueDepth = Math.max(subscriber.maxQueueDepth, queueDepth);
+    updateTopicStoreSubscriberQueueDepth(store, subscriber, queueDepth);
   }),
 );
 
@@ -68,19 +66,17 @@ const reportTopicStoreSubscriptionBackpressure = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.backpressure",
 )((store: TopicStore, subscriber: LiveTopicSubscriber) =>
   Effect.sync(() => {
-    topicStoreState(store).healthLedger.markBackpressure(subscriber);
-    subscriber.backpressureEvents += 1;
+    markTopicStoreSubscriberBackpressure(store, subscriber);
   }),
 );
 
 export const closeTopicStoreSubscription = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.close",
 )(function* (store: TopicStore, subscriber: LiveTopicSubscriber, finalize: Effect.Effect<void>) {
-  const state = topicStoreState(store);
   yield* withTopicStoreNotification(
-    state,
+    store,
     withTopicStoreTransaction(
-      state,
+      store,
       Effect.gen(function* () {
         if (subscriber.closed) {
           return;
@@ -96,9 +92,8 @@ export const closeTopicStoreSubscription = Effect.fn(
 export const closeBackpressuredTopicStoreSubscription = Effect.fn(
   "ColumnLiveViewEngine.topicStore.subscribe.closeBackpressured",
 )(function* (store: TopicStore, subscriber: LiveTopicSubscriber, finalize: Effect.Effect<void>) {
-  const state = topicStoreState(store);
   yield* withTopicStoreTransaction(
-    state,
+    store,
     Effect.gen(function* () {
       if (subscriber.closed) {
         return;

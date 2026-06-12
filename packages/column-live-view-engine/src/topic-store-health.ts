@@ -1,9 +1,12 @@
 import { Clock, Effect } from "effect";
 import type { TopicRuntimeHealth } from "@view-server/config";
-import { activeStoreQueryExecutionCounts, type ActiveQueryExecutionCounts } from "./active-query";
-import type { createTopicHealthLedger } from "./topic-health-ledger";
-import { TopicStore, topicStoreReadModel, topicStoreState } from "./topic-store-state";
-import type { LiveTopicSubscriber } from "./topic-subscriber";
+import type { ActiveQueryExecutionCounts } from "./active-query";
+import {
+  collectTopicStoreActiveQueryCounts,
+  TopicStore,
+  topicStoreHealthSource,
+  type TopicStoreHealthSource,
+} from "./topic-store-state";
 
 export type TopicStoreHealthView = {
   readonly topic: string;
@@ -30,23 +33,7 @@ export type TopicStoreHealthView = {
 
 export type TopicStoreHealthState = {
   readonly activeQueries: ActiveQueryExecutionCounts;
-  readonly healthLedger: ReturnType<typeof createTopicHealthLedger>;
-  readonly subscribers: ReadonlySet<LiveTopicSubscriber>;
-  readonly topic: string;
-};
-
-const topicStoreHealthState = (
-  store: TopicStore,
-  activeQueries: ActiveQueryExecutionCounts,
-): TopicStoreHealthState => {
-  const state = topicStoreState(store);
-  return {
-    activeQueries,
-    healthLedger: state.healthLedger,
-    subscribers: state.subscribers,
-    topic: store.topic,
-  };
-};
+} & TopicStoreHealthSource;
 
 export const collectTopicStoreHealthView = Effect.fn(
   "ColumnLiveViewEngine.topicStore.healthView.collect",
@@ -90,7 +77,13 @@ export const collectTopicStoreHealthView = Effect.fn(
 
 export const collectTopicStoreHealth = Effect.fn("ColumnLiveViewEngine.topicStore.health")(
   function* (store: TopicStore, closed: boolean) {
-    const activeQueries = yield* activeStoreQueryExecutionCounts(topicStoreReadModel(store));
-    return yield* collectTopicStoreHealthView(topicStoreHealthState(store, activeQueries), closed);
+    const activeQueries = yield* collectTopicStoreActiveQueryCounts(store);
+    return yield* collectTopicStoreHealthView(
+      {
+        ...topicStoreHealthSource(store),
+        activeQueries,
+      },
+      closed,
+    );
   },
 );
