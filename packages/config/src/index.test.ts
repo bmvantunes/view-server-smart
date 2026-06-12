@@ -4,8 +4,13 @@ import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import { FieldDescriptorProto_Type, FileDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
-import type * as BigDecimal from "effect/BigDecimal";
-import { Config, Effect, Exit, Schema } from "effect";
+import * as BigDecimal from "effect/BigDecimal";
+import * as Duration from "effect/Duration";
+import * as HashMap from "effect/HashMap";
+import * as HashSet from "effect/HashSet";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
+import { Config, Effect, Exit, Schema, SchemaGetter, SchemaTransformation } from "effect";
 import {
   decodeKafkaCodec,
   decodeKafkaTopicMessage,
@@ -79,6 +84,1547 @@ const Position = Schema.Struct({
   price: Schema.BigDecimal,
   notional: Schema.Number,
   optionalNotional: Schema.Union([Schema.Number, Schema.Undefined]),
+});
+
+const AmbiguousJsonNestedPosition = Schema.Struct({
+  quantity: Schema.BigInt,
+  price: Schema.BigDecimal,
+  stringOrBigInt: Schema.Union([Schema.String, Schema.BigInt]),
+  stringOrBytes: Schema.Union([Schema.String, Schema.Uint8Array]),
+  stringOrNumber: Schema.Union([Schema.String, Schema.Number]),
+});
+
+const AmbiguousJsonNativeJsonPosition = Schema.Struct({
+  id: Schema.String,
+  jsonPayload: Schema.Json,
+  mutableJsonPayload: Schema.MutableJson,
+});
+
+class AmbiguousJsonClassPosition extends Schema.Class<AmbiguousJsonClassPosition>(
+  "AmbiguousJsonClassPosition",
+)({
+  quantity: Schema.BigInt,
+  stringOrBigInt: Schema.Union([Schema.String, Schema.BigInt]),
+}) {}
+
+class AmbiguousJsonEmptyClassPosition extends Schema.Class<AmbiguousJsonEmptyClassPosition>(
+  "AmbiguousJsonEmptyClassPosition",
+)({}) {}
+
+class AmbiguousJsonStringOnlyClassPosition extends Schema.Class<AmbiguousJsonStringOnlyClassPosition>(
+  "AmbiguousJsonStringOnlyClassPosition",
+)({
+  id: Schema.String,
+}) {}
+
+class InvalidAmbiguousJsonSuspendedRecordKeyClassPosition extends Schema.Class<InvalidAmbiguousJsonSuspendedRecordKeyClassPosition>(
+  "InvalidAmbiguousJsonSuspendedRecordKeyClassPosition",
+)({
+  id: Schema.String,
+  suspendedRecord: Schema.Record(
+    Schema.suspend(() => Schema.String),
+    Schema.BigInt,
+  ),
+}) {}
+
+const SuspendedAmbiguousJsonNestedPosition = Schema.suspend(() => AmbiguousJsonNestedPosition);
+
+const AmbiguousJsonSuspendedEmptyObjectPosition = Schema.Struct({
+  id: Schema.String,
+  empty: Schema.suspend(() => Schema.Struct({})),
+});
+
+const AmbiguousJsonSuspendedEmptyObjectTransformPosition = Schema.Struct({
+  id: Schema.String,
+  empty: Schema.suspend(() =>
+    Schema.String.pipe(
+      Schema.decodeTo(Schema.Struct({}), {
+        decode: SchemaGetter.transform(() => ({})),
+        encode: SchemaGetter.transform(() => "empty"),
+      }),
+    ),
+  ),
+});
+
+const AmbiguousJsonSuspendedOptionEmptyObjectTransformPosition = Schema.Struct({
+  id: Schema.String,
+  maybeEmpty: Schema.suspend(() =>
+    Schema.String.pipe(
+      Schema.decodeTo(Schema.Option(Schema.Struct({})), {
+        decode: SchemaGetter.transform(() => Option.some({})),
+        encode: SchemaGetter.transform(() => "empty"),
+      }),
+    ),
+  ),
+});
+
+const AmbiguousJsonSuspendedClassPosition = Schema.Struct({
+  id: Schema.String,
+  nested: Schema.suspend(() => AmbiguousJsonClassPosition),
+});
+
+const AmbiguousJsonSuspendedEmptyClassPosition = Schema.Struct({
+  id: Schema.String,
+  nested: Schema.suspend(() => AmbiguousJsonEmptyClassPosition),
+});
+
+const AmbiguousJsonSuspendedOptionPosition = Schema.Struct({
+  id: Schema.String,
+  optionQuantity: Schema.suspend(() => Schema.Option(Schema.BigInt)),
+});
+
+const AmbiguousJsonEncodedKeyNestedPosition = Schema.Struct({
+  quantity: Schema.BigInt,
+  quantityFromString: Schema.BigIntFromString,
+}).pipe(Schema.encodeKeys({ quantity: "qty", quantityFromString: "qty_from_string" }));
+
+const AmbiguousJsonComposedObjectTransformPosition = Schema.Struct({
+  quantity: Schema.BigInt,
+}).pipe(
+  Schema.decodeTo(Schema.Struct({ quantity: Schema.String }), {
+    decode: SchemaGetter.transform((value) => ({ quantity: String(value.quantity) })),
+    encode: SchemaGetter.transform((value) => ({ quantity: BigInt(value.quantity) })),
+  }),
+  Schema.decodeTo(Schema.Struct({ quantity: Schema.Number }), {
+    decode: SchemaGetter.transform((value) => ({ quantity: Number(value.quantity) })),
+    encode: SchemaGetter.transform((value) => ({ quantity: String(value.quantity) })),
+  }),
+);
+
+const AmbiguousJsonEncodedKeyObjectTransformPosition = Schema.Struct({
+  quantity: Schema.BigInt,
+}).pipe(
+  Schema.encodeKeys({ quantity: "qty" }),
+  Schema.decodeTo(Schema.Struct({ quantityText: Schema.String }), {
+    decode: SchemaGetter.transform((value) => ({ quantityText: String(value.quantity) })),
+    encode: SchemaGetter.transform((value) => ({ quantity: BigInt(value.quantityText) })),
+  }),
+);
+
+const AmbiguousJsonArrayTransformPosition = Schema.Array(Schema.String).pipe(
+  Schema.decodeTo(Schema.Array(Schema.BigInt), {
+    decode: SchemaGetter.transform((values) => values.map((value) => BigInt(value.trim()))),
+    encode: SchemaGetter.transform((values) => values.map((value) => String(value))),
+  }),
+);
+
+const AmbiguousJsonEncodedScalarInputPosition = Schema.BigInt.pipe(
+  Schema.decodeTo(Schema.String, {
+    decode: SchemaGetter.transform((value) => String(value)),
+    encode: SchemaGetter.transform((value) => BigInt(value)),
+  }),
+);
+
+const AmbiguousJsonEncodedArrayInputPosition = Schema.Array(Schema.BigInt).pipe(
+  Schema.decodeTo(Schema.Array(Schema.String), {
+    decode: SchemaGetter.transform((values) => values.map((value) => String(value))),
+    encode: SchemaGetter.transform((values) => values.map((value) => BigInt(value))),
+  }),
+);
+
+const AmbiguousJsonTransformUnionPosition = Schema.Union([
+  AmbiguousJsonEncodedScalarInputPosition,
+  Schema.Number,
+]);
+
+const AmbiguousJsonUnionPosition = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("primary"),
+    quantity: Schema.BigInt,
+    stringOrBigInt: Schema.Union([Schema.String, Schema.BigInt]),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("secondary"),
+    quantity: Schema.BigInt,
+  }),
+]);
+
+const AmbiguousJsonOneOfPosition = Schema.Union(
+  [
+    Schema.Struct({
+      quantity: Schema.BigInt,
+    }),
+    Schema.Struct({
+      quantity: Schema.BigInt,
+      note: Schema.String,
+    }),
+  ],
+  { mode: "oneOf" },
+);
+
+const AmbiguousJsonUntaggedStructuredUnionPosition = Schema.Union([
+  Schema.Struct({
+    quantity: Schema.BigInt,
+    stringOrBigInt: Schema.String,
+  }),
+  Schema.Struct({
+    quantity: Schema.BigInt,
+    stringOrBigInt: Schema.BigInt,
+  }),
+]);
+
+const AmbiguousJsonSentinelUnionPosition = Schema.Union([
+  Schema.Struct({
+    id: Schema.BigInt,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("b"),
+    id: Schema.BigDecimal,
+  }),
+]);
+
+const AmbiguousJsonOptionalSentinelUnionPosition = Schema.Union([
+  Schema.Struct({
+    id: Schema.BigInt,
+  }),
+  Schema.Struct({
+    kind: Schema.optionalKey(Schema.Literal("b")),
+    id: Schema.BigDecimal,
+  }),
+]);
+
+const AmbiguousJsonPosition = Schema.Struct({
+  id: Schema.String,
+  quantity: Schema.BigInt,
+  quantityFromString: Schema.BigIntFromString,
+  stringOrBigInt: Schema.Union([Schema.String, Schema.BigInt]),
+  stringOrBytes: Schema.Union([Schema.String, Schema.Uint8Array]),
+  stringOrNumber: Schema.Union([Schema.String, Schema.Number]),
+  bigDecimalOrBigInt: Schema.Union([Schema.BigDecimal, Schema.BigInt]),
+  nested: AmbiguousJsonNestedPosition,
+  nestedRows: Schema.Array(AmbiguousJsonNestedPosition),
+  nestedUnion: AmbiguousJsonUnionPosition,
+  structuredOrString: Schema.Union([Schema.String, AmbiguousJsonNestedPosition]),
+  scalarOrStructured: Schema.Union([Schema.BigInt, AmbiguousJsonNestedPosition]),
+  validOneOf: AmbiguousJsonOneOfPosition,
+  classOrString: Schema.Union([AmbiguousJsonClassPosition, Schema.String]),
+  untaggedStructuredUnion: AmbiguousJsonUntaggedStructuredUnionPosition,
+  sentinelUnion: AmbiguousJsonSentinelUnionPosition,
+  optionalSentinelUnion: AmbiguousJsonOptionalSentinelUnionPosition,
+  suspendedNested: SuspendedAmbiguousJsonNestedPosition,
+  classNested: AmbiguousJsonClassPosition,
+  optionNested: Schema.Option(AmbiguousJsonNestedPosition),
+  optionFromNullNested: Schema.OptionFromNullOr(AmbiguousJsonNestedPosition),
+  optionFromNullishNested: Schema.OptionFromNullishOr(AmbiguousJsonNestedPosition),
+  encodedNested: AmbiguousJsonEncodedKeyNestedPosition,
+  composedObjectTransform: AmbiguousJsonComposedObjectTransformPosition,
+  encodedKeyObjectTransform: AmbiguousJsonEncodedKeyObjectTransformPosition,
+  arrayTransform: AmbiguousJsonArrayTransformPosition,
+  encodedScalarInput: AmbiguousJsonEncodedScalarInputPosition,
+  encodedArrayInput: AmbiguousJsonEncodedArrayInputPosition,
+  transformUnion: AmbiguousJsonTransformUnionPosition,
+  amountsByAccount: Schema.Record(Schema.String, Schema.BigInt),
+  pricesByAccount: Schema.Record(Schema.String, Schema.BigDecimal),
+  amountsByNumericAccount: Schema.Record(Schema.Number, Schema.BigInt),
+  amountsByPrefixedAccount: Schema.Record(
+    Schema.TemplateLiteral(["account-", Schema.Number]),
+    Schema.BigInt,
+  ),
+  amountsByUnionKeyAccount: Schema.Record(
+    Schema.Union([
+      Schema.Number,
+      Schema.TemplateLiteral([
+        "account-",
+        Schema.Union([Schema.Literal("open"), Schema.Literal("closed")]),
+      ]),
+    ]),
+    Schema.BigInt,
+  ),
+  amountsByNestedTemplateAccount: Schema.Record(
+    Schema.TemplateLiteral([
+      "book-",
+      Schema.TemplateLiteral([
+        "account-",
+        Schema.Union([Schema.Literal("open"), Schema.Literal("closed")]),
+      ]),
+    ]),
+    Schema.BigInt,
+  ),
+  amountsByLiteralAccount: Schema.Record(Schema.Literal("account1"), Schema.BigInt),
+  amountsBySymbolAccount: Schema.Record(Schema.Symbol, Schema.BigInt),
+});
+
+const AmbiguousJsonOptionPosition = Schema.Struct({
+  id: Schema.String,
+  optionNested: Schema.Option(AmbiguousJsonNestedPosition),
+  optionQuantityFromString: Schema.Option(Schema.BigIntFromString),
+});
+
+const AmbiguousJsonRepeatedRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  amountsByRepeatedAccount: Schema.Record(
+    Schema.Union([Schema.String, Schema.String]),
+    Schema.BigInt,
+  ),
+});
+
+const AmbiguousJsonDeclaredQuantity = Schema.declare<
+  typeof Schema.BigIntFromString.Type,
+  typeof Schema.BigIntFromString.Encoded
+>((value): value is typeof Schema.BigIntFromString.Type => typeof value === "bigint", {
+  toCodecJson: () =>
+    Schema.link<typeof Schema.BigIntFromString.Type>()(
+      Schema.BigIntFromString,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonParametricDeclaredString = Schema.declareConstructor<string>()(
+  [Schema.String],
+  () => (value) => Effect.succeed(String(value)),
+  {
+    toCodecJson: () => Schema.link<string>()(Schema.String, SchemaTransformation.passthrough()),
+  },
+);
+
+const AmbiguousJsonDeclaredCodecPosition = Schema.Struct({
+  id: Schema.String,
+  declaredQuantity: AmbiguousJsonDeclaredQuantity,
+});
+
+const AmbiguousJsonSuspendedScalarCodecPosition = Schema.Struct({
+  id: Schema.String,
+  scalarCodecs: Schema.suspend(() =>
+    Schema.Struct({
+      declaredQuantity: AmbiguousJsonDeclaredQuantity,
+      declaredText: AmbiguousJsonParametricDeclaredString,
+      quantityFromString: Schema.BigIntFromString,
+    }),
+  ),
+});
+
+const AmbiguousJsonDeclaredRepeatedStringUnionEncoded = Schema.Union([
+  Schema.String,
+  Schema.String,
+]);
+
+const AmbiguousJsonDeclaredRepeatedStringUnion = Schema.declare<
+  typeof AmbiguousJsonDeclaredRepeatedStringUnionEncoded.Type,
+  typeof AmbiguousJsonDeclaredRepeatedStringUnionEncoded.Encoded
+>(
+  (value): value is typeof AmbiguousJsonDeclaredRepeatedStringUnionEncoded.Type => {
+    return typeof value === "string";
+  },
+  {
+    toCodecJson: () =>
+      Schema.link<typeof AmbiguousJsonDeclaredRepeatedStringUnionEncoded.Type>()(
+        AmbiguousJsonDeclaredRepeatedStringUnionEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const AmbiguousJsonDeclaredStringArrayEncoded = Schema.Array(Schema.String);
+
+const AmbiguousJsonDeclaredStringArray = Schema.declare<
+  typeof AmbiguousJsonDeclaredStringArrayEncoded.Type,
+  typeof AmbiguousJsonDeclaredStringArrayEncoded.Encoded
+>(Array.isArray, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonDeclaredStringArrayEncoded.Type>()(
+      AmbiguousJsonDeclaredStringArrayEncoded,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonDeclaredScalarToObjectTarget = Schema.String.pipe(
+  Schema.decodeTo(Schema.Struct({ id: Schema.String }), {
+    decode: SchemaGetter.transform((value) => ({ id: value })),
+    encode: SchemaGetter.transform((value) => value.id),
+  }),
+);
+
+const AmbiguousJsonDeclaredScalarToObject = Schema.declare<
+  typeof AmbiguousJsonDeclaredScalarToObjectTarget.Type,
+  typeof AmbiguousJsonDeclaredScalarToObjectTarget.Encoded
+>((_value): _value is typeof AmbiguousJsonDeclaredScalarToObjectTarget.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonDeclaredScalarToObjectTarget.Type>()(
+      AmbiguousJsonDeclaredScalarToObjectTarget,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonDeclaredScalarToObjectKeywordTarget = Schema.String.pipe(
+  Schema.decodeTo(Schema.ObjectKeyword, {
+    decode: SchemaGetter.transform((value) => ({ id: value })),
+    encode: SchemaGetter.transform((value) => String(Reflect.get(value, "id"))),
+  }),
+);
+
+const AmbiguousJsonDeclaredScalarToObjectKeyword = Schema.declare<
+  typeof AmbiguousJsonDeclaredScalarToObjectKeywordTarget.Type,
+  typeof AmbiguousJsonDeclaredScalarToObjectKeywordTarget.Encoded
+>((_value): _value is typeof AmbiguousJsonDeclaredScalarToObjectKeywordTarget.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonDeclaredScalarToObjectKeywordTarget.Type>()(
+      AmbiguousJsonDeclaredScalarToObjectKeywordTarget,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonDeclaredScalarToUnknownTarget = Schema.String.pipe(
+  Schema.decodeTo(Schema.Unknown, {
+    decode: SchemaGetter.transform((value) => ({ id: value })),
+    encode: SchemaGetter.transform((value) => String(Reflect.get(Object(value), "id"))),
+  }),
+);
+
+const AmbiguousJsonDeclaredScalarToUnknown = Schema.declare<
+  typeof AmbiguousJsonDeclaredScalarToUnknownTarget.Type,
+  typeof AmbiguousJsonDeclaredScalarToUnknownTarget.Encoded
+>((_value): _value is typeof AmbiguousJsonDeclaredScalarToUnknownTarget.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonDeclaredScalarToUnknownTarget.Type>()(
+      AmbiguousJsonDeclaredScalarToUnknownTarget,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonDeclaredTemplateTarget = Schema.TemplateLiteral(["template-", Schema.String]);
+
+const AmbiguousJsonDeclaredTemplate = Schema.declare<
+  typeof AmbiguousJsonDeclaredTemplateTarget.Type,
+  typeof AmbiguousJsonDeclaredTemplateTarget.Encoded
+>((_value): _value is typeof AmbiguousJsonDeclaredTemplateTarget.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonDeclaredTemplateTarget.Type>()(
+      AmbiguousJsonDeclaredTemplateTarget,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonInnerDeclaredString = Schema.declareConstructor<string>()(
+  [Schema.String],
+  () => (value) => Effect.succeed(String(value)),
+);
+
+const AmbiguousJsonDeclaredNestedDeclaration = Schema.declare<
+  typeof AmbiguousJsonInnerDeclaredString.Type,
+  typeof AmbiguousJsonInnerDeclaredString.Encoded
+>((_value): _value is typeof AmbiguousJsonInnerDeclaredString.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonInnerDeclaredString.Type>()(
+      AmbiguousJsonInnerDeclaredString,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonDeclaredScalarCollectionsPosition = Schema.Struct({
+  id: Schema.String,
+  declaredText: AmbiguousJsonDeclaredRepeatedStringUnion,
+  declaredTags: AmbiguousJsonDeclaredStringArray,
+  declaredObject: AmbiguousJsonDeclaredScalarToObject,
+  declaredObjectKeyword: AmbiguousJsonDeclaredScalarToObjectKeyword,
+  declaredUnknown: AmbiguousJsonDeclaredScalarToUnknown,
+  declaredTemplate: AmbiguousJsonDeclaredTemplate,
+});
+
+const AmbiguousJsonDeclaredNestedDeclarationPosition = Schema.Struct({
+  id: Schema.String,
+  declaredNested: AmbiguousJsonDeclaredNestedDeclaration,
+});
+
+const AmbiguousJsonOpaqueDeclaredString = Schema.declare<string>(
+  (value): value is string => typeof value === "string",
+);
+
+const AmbiguousJsonDeclaredOpaqueDeclaration = Schema.declare<
+  typeof AmbiguousJsonOpaqueDeclaredString.Type,
+  typeof AmbiguousJsonOpaqueDeclaredString.Encoded
+>((_value): _value is typeof AmbiguousJsonOpaqueDeclaredString.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonOpaqueDeclaredString.Type>()(
+      AmbiguousJsonOpaqueDeclaredString,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonDeclaredOpaqueDeclarationPosition = Schema.Struct({
+  id: Schema.String,
+  declaredOpaque: AmbiguousJsonDeclaredOpaqueDeclaration,
+});
+
+const AmbiguousJsonDurationPosition = Schema.Struct({
+  id: Schema.String,
+  latency: Schema.Duration,
+});
+
+const AmbiguousJsonAnnotatedDurationPosition = Schema.Struct({
+  id: Schema.String,
+  latency: Schema.Duration.annotate({ title: "latency" }),
+});
+
+const AmbiguousJsonErrorObjectsPosition = Schema.Struct({
+  id: Schema.String,
+  error: Schema.Error.annotate({ title: "error" }),
+  errorWithStack: Schema.ErrorWithStack,
+  pattern: Schema.RegExp,
+});
+
+const AmbiguousJsonFilePosition = Schema.Struct({
+  id: Schema.String,
+  attachment: Schema.File,
+});
+
+const AmbiguousJsonFormDataPosition = Schema.Struct({
+  id: Schema.String,
+  formData: Schema.FormData,
+});
+
+const AmbiguousJsonEffectCollectionsPosition = Schema.Struct({
+  id: Schema.String,
+  readonlySet: Schema.ReadonlySet(AmbiguousJsonNestedPosition),
+  hashSet: Schema.HashSet(AmbiguousJsonNestedPosition),
+  chunk: Schema.Chunk(AmbiguousJsonNestedPosition),
+});
+
+const AmbiguousJsonRedactedPosition = Schema.Struct({
+  id: Schema.String,
+  secret: Schema.Redacted(Schema.String),
+});
+
+const AmbiguousJsonRedactedObjectPosition = Schema.Struct({
+  id: Schema.String,
+  redactedDuration: Schema.Redacted(Schema.Duration),
+  redactedNested: Schema.Redacted(AmbiguousJsonNestedPosition),
+});
+
+const AmbiguousJsonSuspendedStringMapKeyPosition = Schema.Struct({
+  id: Schema.String,
+  readonlyMap: Schema.ReadonlyMap(
+    Schema.suspend(() => Schema.String),
+    Schema.BigInt,
+  ),
+  hashMap: Schema.HashMap(
+    Schema.suspend(() => Schema.String),
+    Schema.BigInt,
+  ),
+});
+
+const AmbiguousJsonSuspendedTupleWithRestPosition = Schema.Struct({
+  id: Schema.String,
+  tuple: Schema.suspend(() =>
+    Schema.TupleWithRest(Schema.Tuple([AmbiguousJsonParametricDeclaredString]), [Schema.String]),
+  ),
+});
+
+const AmbiguousJsonTaggedUnionPosition = Schema.Struct({
+  id: Schema.String,
+  tagged: Schema.TaggedUnion({
+    quantity: {
+      amount: Schema.BigInt,
+    },
+    note: {
+      text: Schema.String,
+    },
+  }),
+});
+
+const InvalidAmbiguousJsonArrayPosition = Schema.Struct({
+  id: Schema.String,
+  nestedRows: Schema.Array(AmbiguousJsonNestedPosition),
+});
+
+const InvalidAmbiguousJsonArrayTransformPosition = Schema.Struct({
+  id: Schema.String,
+  arrayTransform: AmbiguousJsonArrayTransformPosition,
+});
+
+const InvalidAmbiguousJsonEncodedArrayInputPosition = Schema.Struct({
+  id: Schema.String,
+  encodedArrayInput: AmbiguousJsonEncodedArrayInputPosition,
+});
+
+const InvalidAmbiguousJsonSymbolRecordPosition = Schema.Struct({
+  id: Schema.String,
+  amountsBySymbolAccount: Schema.Record(Schema.Symbol, Schema.BigInt),
+});
+
+const InvalidAmbiguousJsonNestedPosition = Schema.Struct({
+  id: Schema.String,
+  nested: AmbiguousJsonNestedPosition,
+});
+
+const InvalidAmbiguousJsonTuplePosition = Schema.Struct({
+  id: Schema.String,
+  tuple: Schema.Tuple([Schema.BigInt]),
+});
+
+const InvalidAmbiguousJsonUnionPosition = Schema.Struct({
+  id: Schema.String,
+  nestedUnion: AmbiguousJsonUnionPosition,
+});
+
+const InvalidAmbiguousJsonUnionWithInvalidRecordPosition = Schema.Struct({
+  id: Schema.String,
+  unionWithInvalidRecord: Schema.Union([
+    Schema.Record(Schema.Literal(1), Schema.BigInt),
+    Schema.Struct({
+      kind: Schema.Literal("ok"),
+      value: Schema.String,
+    }),
+  ]),
+});
+
+const InvalidAmbiguousJsonRecordPosition = Schema.Struct({
+  id: Schema.String,
+  amountsByAccount: Schema.Record(Schema.String, Schema.BigInt),
+});
+
+const InvalidAmbiguousJsonNumericLiteralRecordPosition = Schema.Struct({
+  id: Schema.String,
+  amountsByNumericLiteralAccount: Schema.Record(Schema.Literal(1), Schema.BigInt),
+});
+
+const InvalidAmbiguousJsonDeclaredRecordEncoded = Schema.Record(Schema.Literal(1), Schema.BigInt);
+
+const InvalidAmbiguousJsonDeclaredRecord = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredRecordEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredRecordEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredRecordEncoded.Type => {
+    return typeof value === "object" && value !== null;
+  },
+  {
+    toCodecJson: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredRecordEncoded.Type>()(
+        InvalidAmbiguousJsonDeclaredRecordEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const InvalidAmbiguousJsonDeclaredRecordPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredRecord,
+});
+
+const InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded = Schema.Record(
+  Schema.suspend(() => Schema.String),
+  Schema.BigInt,
+);
+
+const InvalidAmbiguousJsonDeclaredSuspendedRecordKey = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Type =>
+    typeof value === "object" && value !== null,
+  {
+    toCodecJson: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Type>()(
+        InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const InvalidAmbiguousJsonDeclaredSuspendedRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredSuspendedRecordKey,
+});
+
+const InvalidAmbiguousJsonDeclaredSuspendedRecordKeyTarget = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Type =>
+    typeof value === "object" && value !== null,
+  {
+    toCodecJson: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded.Type>()(
+        Schema.suspend(() => InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded),
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const InvalidAmbiguousJsonDeclaredSuspendedRecordKeyTargetPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredSuspendedRecordKeyTarget,
+});
+
+const InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyEncoded = Schema.Struct({
+  nested: Schema.Record(
+    Schema.suspend(() => Schema.String),
+    Schema.BigInt,
+  ),
+});
+
+const InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKey = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyEncoded.Type =>
+    typeof value === "object" && value !== null,
+  {
+    toCodecJson: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyEncoded.Type>()(
+        InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKey,
+});
+
+const InvalidAmbiguousJsonDeclaredPartialRecordKeyEncoded = Schema.Record(
+  Schema.Union([Schema.Literal("fixed"), Schema.suspend(() => Schema.String)]),
+  Schema.BigInt,
+);
+
+const InvalidAmbiguousJsonDeclaredPartialRecordKey = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredPartialRecordKeyEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredPartialRecordKeyEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredPartialRecordKeyEncoded.Type =>
+    typeof value === "object" && value !== null,
+  {
+    toCodecJson: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredPartialRecordKeyEncoded.Type>()(
+        InvalidAmbiguousJsonDeclaredPartialRecordKeyEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const InvalidAmbiguousJsonDeclaredPartialRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredPartialRecordKey,
+});
+
+const InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded = Schema.Record(
+  Schema.Union([Schema.Literal("fixed"), Schema.suspend(() => Schema.String)]),
+  Schema.BigInt,
+);
+
+const InvalidAmbiguousJsonDeclaredSpoofedTypeConstructor = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Type =>
+    typeof value === "object" && value !== null,
+  {
+    typeConstructor: { _tag: "effect/Duration" },
+    toCodecJson: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Type>()(
+        InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredSpoofedTypeConstructor,
+});
+
+const InvalidAmbiguousJsonDeclaredSpoofedOptionWithValue = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Type =>
+    typeof value === "object" && value !== null,
+  {
+    typeConstructor: { _tag: "effect/Option" },
+    toCodecJson: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded.Type>()(
+        InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+Object.defineProperty(InvalidAmbiguousJsonDeclaredSpoofedOptionWithValue, "value", {
+  configurable: true,
+  enumerable: true,
+  value: Schema.String,
+});
+
+const InvalidAmbiguousJsonDeclaredSpoofedOptionWithValuePosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredSpoofedOptionWithValue,
+});
+
+const InvalidAmbiguousJsonOptionAnnotationSource = Object(
+  Schema.Option(Schema.String).ast.annotations,
+);
+
+const InvalidAmbiguousJsonDeclaredSpoofedOptionBuiltInToCodec = Schema.declareConstructor<object>()(
+  [Schema.String],
+  () => (value) => Effect.succeed(Object(value)),
+  {
+    typeConstructor: Reflect.get(InvalidAmbiguousJsonOptionAnnotationSource, "typeConstructor"),
+    toCodec: Reflect.get(InvalidAmbiguousJsonOptionAnnotationSource, "toCodec"),
+  },
+);
+
+Object.defineProperty(InvalidAmbiguousJsonDeclaredSpoofedOptionBuiltInToCodec, "value", {
+  configurable: true,
+  enumerable: true,
+  value: Schema.String,
+});
+
+const InvalidAmbiguousJsonDeclaredSpoofedOptionBuiltInToCodecPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredSpoofedOptionBuiltInToCodec,
+});
+
+const InvalidAmbiguousJsonDeclaredDurationTarget = Schema.declare<
+  typeof Schema.Duration.Type,
+  typeof Schema.Duration.Encoded
+>((_value): _value is typeof Schema.Duration.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof Schema.Duration.Type>()(Schema.Duration, SchemaTransformation.passthrough()),
+});
+
+const InvalidAmbiguousJsonDeclaredDurationTargetPosition = Schema.Struct({
+  id: Schema.String,
+  declaredDuration: InvalidAmbiguousJsonDeclaredDurationTarget,
+});
+
+const InvalidAmbiguousJsonDeclaredOptionRecordTargetEncoded = Schema.Option(
+  Schema.Record(Schema.String, Schema.BigInt),
+);
+
+const InvalidAmbiguousJsonDeclaredOptionRecordTarget = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredOptionRecordTargetEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredOptionRecordTargetEncoded.Encoded
+>((_value): _value is typeof InvalidAmbiguousJsonDeclaredOptionRecordTargetEncoded.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof InvalidAmbiguousJsonDeclaredOptionRecordTargetEncoded.Type>()(
+      InvalidAmbiguousJsonDeclaredOptionRecordTargetEncoded,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const InvalidAmbiguousJsonDeclaredOptionRecordTargetPosition = Schema.Struct({
+  id: Schema.String,
+  declaredOptionRecord: InvalidAmbiguousJsonDeclaredOptionRecordTarget,
+});
+
+const InvalidAmbiguousJsonAnnotatedDurationOverridePosition = Schema.Struct({
+  id: Schema.String,
+  latency: Schema.Duration.annotate({
+    toCodecJson: () =>
+      Schema.link<typeof Schema.Duration.Type>()(
+        Schema.Struct({ value: Schema.String }),
+        SchemaTransformation.transform({
+          decode: () => Duration.millis(0),
+          encode: () => ({ value: "0" }),
+        }),
+      ),
+  }),
+});
+
+const InvalidAmbiguousJsonAnnotatedOptionOverridePosition = Schema.Struct({
+  id: Schema.String,
+  maybe: Schema.Option(Schema.String).annotate({
+    toCodecJson: () =>
+      Schema.link<Option.Option<string>>()(
+        Schema.Struct({ value: Schema.String }),
+        SchemaTransformation.transform({
+          decode: ({ value }) => Option.some(value),
+          encode: (value) => ({ value: Option.getOrElse(value, () => "") }),
+        }),
+      ),
+  }),
+});
+
+const InvalidAmbiguousJsonAnnotatedReadonlyMapOverridePosition = Schema.Struct({
+  id: Schema.String,
+  map: Schema.ReadonlyMap(Schema.String, Schema.String).annotate({
+    toCodecJson: () =>
+      Schema.link<ReadonlyMap<string, string>>()(
+        Schema.Struct({ value: Schema.String }),
+        SchemaTransformation.transform({
+          decode: (): ReadonlyMap<string, string> => new Map<string, string>(),
+          encode: () => ({ value: "" }),
+        }),
+      ),
+  }),
+});
+
+const InvalidAmbiguousJsonAnnotatedOptionToCodecOverridePosition = Schema.Struct({
+  id: Schema.String,
+  maybe: Schema.Option(Schema.String).annotate({
+    toCodec: () =>
+      Schema.link<Option.Option<string>>()(
+        Schema.Struct({ value: Schema.String }),
+        SchemaTransformation.transform({
+          decode: ({ value }) => Option.some(value),
+          encode: (value) => ({ value: Option.getOrElse(value, () => "") }),
+        }),
+      ),
+  }),
+});
+
+const InvalidAmbiguousJsonAnnotatedOptionToCodecSpoofedSourcePosition = (() => {
+  const spoofedToCodec = () =>
+    Schema.link<Option.Option<string>>()(
+      Schema.Struct({ value: Schema.String }),
+      SchemaTransformation.transform({
+        decode: ({ value }) => Option.some(value),
+        encode: (value) => ({ value: Option.getOrElse(value, () => "") }),
+      }),
+    );
+  Object.defineProperty(spoofedToCodec, "toString", {
+    value: () =>
+      String(Reflect.get(Object(Schema.Option(Schema.String).ast.annotations), "toCodec")),
+  });
+  return Schema.Struct({
+    id: Schema.String,
+    maybe: Schema.Option(Schema.String).annotate({
+      toCodec: spoofedToCodec,
+    }),
+  });
+})();
+
+const InvalidAmbiguousJsonAnnotatedReadonlyMapToCodecOverridePosition = Schema.Struct({
+  id: Schema.String,
+  map: Schema.ReadonlyMap(Schema.String, Schema.String).annotate({
+    toCodec: () =>
+      Schema.link<ReadonlyMap<string, string>>()(
+        Schema.Struct({ value: Schema.String }),
+        SchemaTransformation.transform({
+          decode: (): ReadonlyMap<string, string> => new Map<string, string>(),
+          encode: () => ({ value: "" }),
+        }),
+      ),
+  }),
+});
+
+const InvalidAmbiguousJsonDeclaredToCodecRecordEncoded = Schema.Record(
+  Schema.Union([Schema.Literal("fixed"), Schema.suspend(() => Schema.String)]),
+  Schema.BigInt,
+);
+
+const InvalidAmbiguousJsonDeclaredToCodecRecord = Schema.declare<
+  typeof InvalidAmbiguousJsonDeclaredToCodecRecordEncoded.Type,
+  typeof InvalidAmbiguousJsonDeclaredToCodecRecordEncoded.Encoded
+>(
+  (value): value is typeof InvalidAmbiguousJsonDeclaredToCodecRecordEncoded.Type =>
+    typeof value === "object" && value !== null,
+  {
+    toCodec: () =>
+      Schema.link<typeof InvalidAmbiguousJsonDeclaredToCodecRecordEncoded.Type>()(
+        InvalidAmbiguousJsonDeclaredToCodecRecordEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const InvalidAmbiguousJsonDeclaredToCodecRecordPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecord: InvalidAmbiguousJsonDeclaredToCodecRecord,
+});
+
+const UnsupportedAmbiguousJsonDeclaredEmptyStruct = Schema.declare<{}>(
+  (value): value is {} => typeof value === "object" && value !== null,
+  {
+    toCodecJson: () => Schema.link<{}>()(Schema.Struct({}), SchemaTransformation.passthrough()),
+  },
+);
+
+const UnsupportedAmbiguousJsonDeclaredEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  declaredEmpty: UnsupportedAmbiguousJsonDeclaredEmptyStruct,
+});
+
+const UnsupportedAmbiguousJsonDeclaredSuspendedEmptyStruct = Schema.declare<{}>(
+  (value): value is {} => typeof value === "object" && value !== null,
+  {
+    toCodecJson: () =>
+      Schema.link<{}>()(
+        Schema.suspend(() => Schema.Struct({})),
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const UnsupportedAmbiguousJsonDeclaredSuspendedEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  declaredEmpty: UnsupportedAmbiguousJsonDeclaredSuspendedEmptyStruct,
+});
+
+const UnsupportedAmbiguousJsonSuspendedDeclaredEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  declaredEmpty: Schema.suspend(() => UnsupportedAmbiguousJsonDeclaredEmptyStruct),
+});
+
+const UnsupportedAmbiguousJsonSuspendedStructDeclaredEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() =>
+    Schema.Struct({
+      nested: UnsupportedAmbiguousJsonDeclaredEmptyStruct,
+    }),
+  ),
+});
+
+const UnsupportedAmbiguousJsonSuspendedArrayDeclaredEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() => Schema.Array(UnsupportedAmbiguousJsonDeclaredEmptyStruct)),
+});
+
+const UnsupportedAmbiguousJsonSuspendedUnionDeclaredEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() =>
+    Schema.Union([Schema.String, UnsupportedAmbiguousJsonDeclaredEmptyStruct]),
+  ),
+});
+
+const UnsupportedAmbiguousJsonSuspendedRecordDeclaredEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() =>
+    Schema.Record(
+      Schema.TemplateLiteral(["nested-", Schema.String]),
+      UnsupportedAmbiguousJsonDeclaredEmptyStruct,
+    ),
+  ),
+});
+
+const UnsupportedAmbiguousJsonDeclaredClassAnnotationSpoof = Schema.declare<{}>(
+  (value): value is {} => typeof value === "object" && value !== null,
+  {
+    "~effect/Schema/Class": true,
+    toCodecJson: () => Schema.link<{}>()(Schema.Struct({}), SchemaTransformation.passthrough()),
+  },
+);
+
+const UnsupportedAmbiguousJsonSuspendedClassAnnotationSpoofPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() =>
+    Schema.Struct({
+      nested: UnsupportedAmbiguousJsonDeclaredClassAnnotationSpoof,
+    }),
+  ),
+});
+
+const unsupportedAmbiguousJsonEmptyObjectStringTransformation = SchemaTransformation.transform<
+  {},
+  string
+>({
+  decode: () => ({}),
+  encode: () => "spoof",
+});
+
+const UnsupportedAmbiguousJsonDeclaredClassAnnotationStringParameterSpoof =
+  Schema.declareConstructor<{}>()([Schema.String], () => (value) => Effect.succeed(Object(value)), {
+    "~effect/Schema/Class": () =>
+      Schema.link<{}>()(Schema.String, unsupportedAmbiguousJsonEmptyObjectStringTransformation),
+    toCodec: () =>
+      Schema.link<{}>()(Schema.String, unsupportedAmbiguousJsonEmptyObjectStringTransformation),
+    toCodecJson: () => Schema.link<{}>()(Schema.Struct({}), SchemaTransformation.passthrough()),
+  });
+
+const UnsupportedAmbiguousJsonSuspendedClassAnnotationStringParameterSpoofPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() =>
+    Schema.Struct({
+      nested: UnsupportedAmbiguousJsonDeclaredClassAnnotationStringParameterSpoof,
+    }),
+  ),
+});
+
+const UnsupportedAmbiguousJsonDeclaredFieldsSpoof = Schema.declare<{}>(
+  (value): value is {} => typeof value === "object" && value !== null,
+  {
+    toCodecJson: () => Schema.link<{}>()(Schema.Struct({}), SchemaTransformation.passthrough()),
+  },
+);
+
+Object.defineProperty(UnsupportedAmbiguousJsonDeclaredFieldsSpoof, "fields", {
+  configurable: true,
+  enumerable: true,
+  value: {},
+});
+
+const UnsupportedAmbiguousJsonDeclaredFieldsSpoofPosition = Schema.Struct({
+  id: Schema.String,
+  declaredEmpty: UnsupportedAmbiguousJsonDeclaredFieldsSpoof,
+});
+
+const UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructEncoded = Schema.Struct({}).pipe(
+  Schema.decodeTo(Schema.String, {
+    decode: SchemaGetter.transform(() => "decoded"),
+    encode: SchemaGetter.transform(() => ({})),
+  }),
+);
+
+const UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStruct = Schema.declare<
+  typeof UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructEncoded.Type,
+  typeof UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructEncoded.Encoded
+>(
+  (value): value is typeof UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructEncoded.Type =>
+    typeof value === "string",
+  {
+    toCodecJson: () =>
+      Schema.link<typeof UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructEncoded.Type>()(
+        UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructPosition = Schema.Struct({
+  id: Schema.String,
+  declaredTransformed: UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStruct,
+});
+
+const UnsupportedAmbiguousJsonDeclaredObjectTupleEncoded = Schema.Tuple([Schema.Struct({})]);
+
+const UnsupportedAmbiguousJsonDeclaredObjectTuple = Schema.declare<
+  typeof UnsupportedAmbiguousJsonDeclaredObjectTupleEncoded.Type,
+  typeof UnsupportedAmbiguousJsonDeclaredObjectTupleEncoded.Encoded
+>(
+  (value): value is typeof UnsupportedAmbiguousJsonDeclaredObjectTupleEncoded.Type =>
+    Array.isArray(value) && value.length === 1 && typeof value[0] === "object" && value[0] !== null,
+  {
+    toCodecJson: () =>
+      Schema.link<typeof UnsupportedAmbiguousJsonDeclaredObjectTupleEncoded.Type>()(
+        UnsupportedAmbiguousJsonDeclaredObjectTupleEncoded,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+);
+
+const UnsupportedAmbiguousJsonDeclaredObjectTuplePosition = Schema.Struct({
+  id: Schema.String,
+  declaredTuple: UnsupportedAmbiguousJsonDeclaredObjectTuple,
+});
+
+const UnsupportedAmbiguousJsonDeclaredObjectKeyword = Schema.declare<
+  typeof Schema.ObjectKeyword.Type,
+  typeof Schema.ObjectKeyword.Encoded
+>((_value): _value is typeof Schema.ObjectKeyword.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof Schema.ObjectKeyword.Type>()(
+      Schema.ObjectKeyword,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const UnsupportedAmbiguousJsonDeclaredObjectKeywordPosition = Schema.Struct({
+  id: Schema.String,
+  declaredObjectKeyword: UnsupportedAmbiguousJsonDeclaredObjectKeyword,
+});
+
+const UnsupportedAmbiguousJsonDeclaredJson = Schema.declare<
+  typeof Schema.Json.Type,
+  typeof Schema.Json.Encoded
+>((_value): _value is typeof Schema.Json.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof Schema.Json.Type>()(Schema.Json, SchemaTransformation.passthrough()),
+});
+
+const UnsupportedAmbiguousJsonDeclaredJsonPosition = Schema.Struct({
+  id: Schema.String,
+  declaredJson: UnsupportedAmbiguousJsonDeclaredJson,
+});
+
+const UnsupportedAmbiguousJsonDeclaredMutableJson = Schema.declare<
+  typeof Schema.MutableJson.Type,
+  typeof Schema.MutableJson.Encoded
+>((_value): _value is typeof Schema.MutableJson.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof Schema.MutableJson.Type>()(
+      Schema.MutableJson,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const UnsupportedAmbiguousJsonDeclaredMutableJsonPosition = Schema.Struct({
+  id: Schema.String,
+  declaredMutableJson: UnsupportedAmbiguousJsonDeclaredMutableJson,
+});
+
+const UnsupportedAmbiguousJsonDeclaredUnknown = Schema.declare<
+  typeof Schema.Unknown.Type,
+  typeof Schema.Unknown.Encoded
+>((_value): _value is typeof Schema.Unknown.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof Schema.Unknown.Type>()(Schema.Unknown, SchemaTransformation.passthrough()),
+});
+
+const UnsupportedAmbiguousJsonDeclaredUnknownPosition = Schema.Struct({
+  id: Schema.String,
+  declaredUnknown: UnsupportedAmbiguousJsonDeclaredUnknown,
+});
+
+const UnsupportedAmbiguousJsonDeclaredAny = Schema.declare<
+  typeof Schema.Any.Type,
+  typeof Schema.Any.Encoded
+>((_value): _value is typeof Schema.Any.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof Schema.Any.Type>()(Schema.Any, SchemaTransformation.passthrough()),
+});
+
+const UnsupportedAmbiguousJsonDeclaredAnyPosition = Schema.Struct({
+  id: Schema.String,
+  declaredAny: UnsupportedAmbiguousJsonDeclaredAny,
+});
+
+const InvalidAmbiguousJsonDeclaredRecordKey = Schema.declare<PropertyKey>(
+  (value): value is PropertyKey =>
+    typeof value === "string" || typeof value === "number" || typeof value === "symbol",
+);
+
+const InvalidAmbiguousJsonDeclaredRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  declaredRecordKey: Schema.Record(InvalidAmbiguousJsonDeclaredRecordKey, Schema.BigInt),
+});
+
+const InvalidAmbiguousJsonSuspendedStructDeclaredRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() =>
+    Schema.Struct({
+      declaredRecordKey: Schema.Record(InvalidAmbiguousJsonDeclaredRecordKey, Schema.BigInt),
+    }),
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordPosition = Schema.Struct({
+  id: Schema.String,
+  suspendedRecord: Schema.suspend(() => Schema.Record(Schema.Literal(1), Schema.BigInt)),
+});
+
+const InvalidAmbiguousJsonSuspendedStringRecordKey = Schema.Record(
+  Schema.suspend(() => Schema.String),
+  Schema.BigInt,
+);
+
+class AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition extends Schema.Class<AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition>(
+  "AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition",
+)({
+  id: Schema.String,
+  decodedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey,
+}) {}
+
+const AmbiguousJsonScalarToBadRecordKeyClassTarget = Schema.String.pipe(
+  Schema.decodeTo(AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition, {
+    decode: SchemaGetter.transform(
+      (id) =>
+        new AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition({
+          id,
+          decodedRecord: {
+            account1: 1n,
+          },
+        }),
+    ),
+    encode: SchemaGetter.transform((value) => value.id),
+  }),
+);
+
+const AmbiguousJsonSuspendedScalarToBadRecordKeyClassPosition = Schema.Struct({
+  id: Schema.String,
+  nested: Schema.suspend(() => AmbiguousJsonScalarToBadRecordKeyClassTarget),
+});
+
+const AmbiguousJsonDeclaredScalarToBadRecordKeyClass = Schema.declare<
+  typeof AmbiguousJsonScalarToBadRecordKeyClassTarget.Type,
+  typeof AmbiguousJsonScalarToBadRecordKeyClassTarget.Encoded
+>((_value): _value is typeof AmbiguousJsonScalarToBadRecordKeyClassTarget.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonScalarToBadRecordKeyClassTarget.Type>()(
+      AmbiguousJsonScalarToBadRecordKeyClassTarget,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const AmbiguousJsonDeclaredScalarToBadRecordKeyClassPosition = Schema.Struct({
+  id: Schema.String,
+  declaredClass: AmbiguousJsonDeclaredScalarToBadRecordKeyClass,
+});
+
+const AmbiguousJsonDecodedSideSuspendedRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  decodedRecord: Schema.String.pipe(
+    Schema.decodeTo(InvalidAmbiguousJsonSuspendedStringRecordKey, {
+      decode: SchemaGetter.transform(() => ({
+        account1: 9007199254741041n,
+      })),
+      encode: SchemaGetter.transform(() => "encoded"),
+    }),
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedStringRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  suspendedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey,
+});
+
+const InvalidAmbiguousJsonDeclaredClassTarget = Schema.declare<
+  typeof AmbiguousJsonClassPosition.Type,
+  typeof AmbiguousJsonClassPosition.Encoded
+>((_value): _value is typeof AmbiguousJsonClassPosition.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonClassPosition.Type>()(
+      AmbiguousJsonClassPosition,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const InvalidAmbiguousJsonDeclaredClassTargetPosition = Schema.Struct({
+  id: Schema.String,
+  declaredClass: InvalidAmbiguousJsonDeclaredClassTarget,
+});
+
+const InvalidAmbiguousJsonDeclaredStringOnlyClassTarget = Schema.declare<
+  typeof AmbiguousJsonStringOnlyClassPosition.Type,
+  typeof AmbiguousJsonStringOnlyClassPosition.Encoded
+>((_value): _value is typeof AmbiguousJsonStringOnlyClassPosition.Type => true, {
+  toCodecJson: () =>
+    Schema.link<typeof AmbiguousJsonStringOnlyClassPosition.Type>()(
+      AmbiguousJsonStringOnlyClassPosition,
+      SchemaTransformation.passthrough(),
+    ),
+});
+
+const InvalidAmbiguousJsonDeclaredStringOnlyClassTargetPosition = Schema.Struct({
+  id: Schema.String,
+  declaredClass: InvalidAmbiguousJsonDeclaredStringOnlyClassTarget,
+});
+
+const InvalidAmbiguousJsonCustomJsonCodecClassJson = Schema.Struct({
+  id: Schema.String,
+  suspendedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey,
+});
+
+class InvalidAmbiguousJsonCustomJsonCodecClassPosition extends Schema.Class<InvalidAmbiguousJsonCustomJsonCodecClassPosition>(
+  "InvalidAmbiguousJsonCustomJsonCodecClassPosition",
+)(
+  {
+    id: Schema.String,
+  },
+  {
+    toCodecJson: () =>
+      Schema.link<object>()(InvalidAmbiguousJsonCustomJsonCodecClassJson, {
+        decode: SchemaGetter.transform((value) => ({
+          id: value.id,
+        })),
+        encode: SchemaGetter.transform(() => ({
+          id: "encoded",
+          suspendedRecord: {
+            account1: 1n,
+          },
+        })),
+      }),
+  },
+) {}
+
+const InvalidAmbiguousJsonSuspendedStructStringRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  wrapper: Schema.suspend(() =>
+    Schema.Struct({
+      suspendedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey,
+    }),
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedLiteralRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  suspendedRecord: Schema.Record(
+    Schema.suspend(() => Schema.Literal(1)),
+    Schema.BigInt,
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyArrayPosition = Schema.Struct({
+  id: Schema.String,
+  suspendedRecords: Schema.Array(InvalidAmbiguousJsonSuspendedStringRecordKey),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyUnionPosition = Schema.Struct({
+  id: Schema.String,
+  suspendedRecordOrNote: Schema.Union([
+    InvalidAmbiguousJsonSuspendedStringRecordKey,
+    Schema.String,
+  ]),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyTaggedUnionPosition = Schema.Struct({
+  id: Schema.String,
+  tagged: Schema.TaggedUnion({
+    bad: {
+      record: InvalidAmbiguousJsonSuspendedStringRecordKey,
+    },
+    ok: {
+      note: Schema.String,
+    },
+  }),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyTransformPosition = Schema.Struct({
+  id: Schema.String,
+  transformedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey.pipe(
+    Schema.decodeTo(Schema.String, {
+      decode: SchemaGetter.transform(() => "decoded"),
+      encode: SchemaGetter.transform(() => ({})),
+    }),
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyDeclarationTransformPosition = Schema.Struct({
+  id: Schema.String,
+  transformedDuration: Schema.suspend(() =>
+    InvalidAmbiguousJsonSuspendedStringRecordKey.pipe(
+      Schema.decodeTo(Schema.Duration, {
+        decode: SchemaGetter.transform(() => Duration.millis(0)),
+        encode: SchemaGetter.transform(() => ({ account1: 1n })),
+      }),
+    ),
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey = Schema.suspend(
+  () => Schema.String,
+).pipe(
+  Schema.decodeTo(Schema.String, {
+    decode: SchemaGetter.transform((value) => value),
+    encode: SchemaGetter.transform((value) => value),
+  }),
+);
+
+const InvalidAmbiguousJsonSuspendedRecordKeySourceTransformPosition = Schema.Struct({
+  id: Schema.String,
+  transformedRecord: Schema.Record(
+    InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey,
+    Schema.BigInt,
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformKey = Schema.String.pipe(
+  Schema.decodeTo(
+    Schema.suspend(() => Schema.String),
+    {
+      decode: SchemaGetter.transform((value) => value),
+      encode: SchemaGetter.transform((value) => value),
+    },
+  ),
+);
+
+const InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformPosition = Schema.Struct({
+  id: Schema.String,
+  transformedRecord: Schema.Record(
+    InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformKey,
+    Schema.BigInt,
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformKey = Schema.String.pipe(
+  Schema.decodeTo(
+    Schema.Union([
+      Schema.Literal("fixed"),
+      InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey,
+    ]),
+    {
+      decode: SchemaGetter.transform((value) => value),
+      encode: SchemaGetter.transform((value) => value),
+    },
+  ),
+);
+
+const InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformPosition = Schema.Struct({
+  id: Schema.String,
+  transformedRecord: Schema.Record(
+    InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformKey,
+    Schema.BigInt,
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeySourceTransformUnionPosition = Schema.Struct({
+  id: Schema.String,
+  transformedRecord: Schema.Record(
+    Schema.Union([
+      Schema.Literal("fixed"),
+      InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey,
+    ]),
+    Schema.BigInt,
+  ),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyTuplePosition = Schema.Struct({
+  id: Schema.String,
+  suspendedTuple: Schema.Tuple([InvalidAmbiguousJsonSuspendedStringRecordKey]),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyTupleRestPosition = Schema.Struct({
+  id: Schema.String,
+  suspendedTupleRest: Schema.TupleWithRest(Schema.Tuple([Schema.String]), [
+    InvalidAmbiguousJsonSuspendedStringRecordKey,
+  ]),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyStructRestPosition = Schema.Struct({
+  id: Schema.String,
+  suspendedStructRest: Schema.StructWithRest(Schema.Struct({ fixed: Schema.String }), [
+    InvalidAmbiguousJsonSuspendedStringRecordKey,
+  ]),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyResultPosition = Schema.Struct({
+  id: Schema.String,
+  result: Schema.Result(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyReadonlyMapPosition = Schema.Struct({
+  id: Schema.String,
+  map: Schema.ReadonlyMap(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.BigInt),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyHashMapPosition = Schema.Struct({
+  id: Schema.String,
+  map: Schema.HashMap(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.BigInt),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyCausePosition = Schema.Struct({
+  id: Schema.String,
+  cause: Schema.Cause(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonErrorPosition = Schema.Struct({
+  id: Schema.String,
+  reason: Schema.CauseReason(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonDefectPosition = Schema.Struct({
+  id: Schema.String,
+  reason: Schema.CauseReason(Schema.String, InvalidAmbiguousJsonSuspendedStringRecordKey),
+});
+
+const InvalidAmbiguousJsonSuspendedRecordKeyExitPosition = Schema.Struct({
+  id: Schema.String,
+  exit: Schema.Exit(Schema.String, InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
+});
+
+const InvalidAmbiguousJsonOneOfPosition = Schema.Struct({
+  id: Schema.String,
+  nestedOneOf: AmbiguousJsonOneOfPosition,
+});
+
+const InvalidAmbiguousJsonBroadOneOfPosition = Schema.Struct({
+  id: Schema.String,
+  broadOneOf: Schema.Union(
+    [
+      Schema.Struct({
+        id: Schema.BigInt,
+      }),
+      Schema.Struct({
+        kind: Schema.Literal("b"),
+        id: Schema.BigDecimal,
+      }),
+    ],
+    { mode: "oneOf" },
+  ),
+});
+
+const InvalidAmbiguousJsonScalarOneOfPosition = Schema.Struct({
+  id: Schema.String,
+  scalarOneOf: Schema.Union([Schema.String, Schema.BigInt], { mode: "oneOf" }),
 });
 
 const OrderWithExtraSourceField = Schema.Struct({
@@ -485,6 +2031,7 @@ describe("defineViewServerConfig", () => {
       const stringCodec = kafka.string();
       const stringKeyCodec = kafka.stringKey();
       const jsonCodec = kafka.json(Order);
+      const jsonPositionCodec = kafka.json(Position);
       const protobufCodec = kafka.protobuf(ordersValueSchema);
       const customCodec = kafka.codec({
         name: "custom-order-value",
@@ -548,6 +2095,860 @@ describe("defineViewServerConfig", () => {
         region: "usa",
         updatedAt: 1,
       });
+      const decodedJsonPosition = yield* decodeKafkaCodec(jsonPositionCodec, {
+        bytes: textEncoder.encode(
+          JSON.stringify({
+            id: "position-1",
+            accountId: "account-1",
+            symbol: "AAPL",
+            active: true,
+            quantity: "9007199254740993",
+            optionalQuantity: "9007199254740995",
+            price: "1234567890.123456789",
+            notional: 10,
+            optionalNotional: 20,
+          }),
+        ),
+        metadata: kafkaTestMetadata("usa"),
+      });
+      expect(BigDecimal.isBigDecimal(decodedJsonPosition.price)).toBe(true);
+      expect({
+        ...decodedJsonPosition,
+        price: BigDecimal.format(decodedJsonPosition.price),
+      }).toStrictEqual({
+        id: "position-1",
+        accountId: "account-1",
+        symbol: "AAPL",
+        active: true,
+        quantity: 9007199254740993n,
+        optionalQuantity: 9007199254740995n,
+        price: "1234567890.123456789",
+        notional: 10,
+        optionalNotional: 20,
+      });
+      const decodedAmbiguousJsonPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-2",
+              quantity: "9007199254740997",
+              quantityFromString: "9007199254740998",
+              stringOrBigInt: "9007199254740999",
+              stringOrBytes: "AQID",
+              stringOrNumber: "NaN",
+              bigDecimalOrBigInt: "9007199254741000",
+              nested: {
+                quantity: "9007199254741001",
+                price: "987654321.123456789",
+                stringOrBigInt: "9007199254741003",
+                stringOrBytes: "AQID",
+                stringOrNumber: "NaN",
+              },
+              nestedRows: [
+                {
+                  quantity: "9007199254741005",
+                  price: "123.456",
+                  stringOrBigInt: "9007199254741007",
+                  stringOrBytes: "AQID",
+                  stringOrNumber: "NaN",
+                },
+              ],
+              nestedUnion: {
+                kind: "primary",
+                quantity: "9007199254741009",
+                stringOrBigInt: "9007199254741011",
+              },
+              structuredOrString: {
+                quantity: "9007199254741012",
+                price: "222.333",
+                stringOrBigInt: "9007199254741012",
+                stringOrBytes: "AQID",
+                stringOrNumber: "NaN",
+              },
+              scalarOrStructured: "9007199254741012",
+              validOneOf: {
+                quantity: "9007199254741012",
+              },
+              classOrString: {
+                quantity: "9007199254741012",
+                stringOrBigInt: "9007199254741012",
+              },
+              untaggedStructuredUnion: {
+                quantity: "9007199254741012",
+                stringOrBigInt: "9007199254741012",
+              },
+              sentinelUnion: {
+                kind: "b",
+                id: "123.456",
+              },
+              optionalSentinelUnion: {
+                kind: "b",
+                id: "123",
+              },
+              suspendedNested: {
+                quantity: "9007199254741012",
+                price: "333.444",
+                stringOrBigInt: "9007199254741012",
+                stringOrBytes: "AQID",
+                stringOrNumber: "NaN",
+              },
+              classNested: {
+                quantity: "9007199254741012",
+                stringOrBigInt: "9007199254741012",
+              },
+              optionNested: {
+                _tag: "Some",
+                value: {
+                  quantity: "9007199254741012",
+                  price: "444.555",
+                  stringOrBigInt: "9007199254741012",
+                  stringOrBytes: "AQID",
+                  stringOrNumber: "NaN",
+                },
+              },
+              optionFromNullNested: {
+                quantity: "9007199254741012",
+                price: "555.666",
+                stringOrBigInt: "9007199254741012",
+                stringOrBytes: "AQID",
+                stringOrNumber: "NaN",
+              },
+              optionFromNullishNested: null,
+              encodedNested: {
+                qty: "9007199254741012",
+                qty_from_string: "9007199254741013",
+              },
+              composedObjectTransform: {
+                quantity: "123",
+              },
+              encodedKeyObjectTransform: {
+                qty: "9007199254741014",
+              },
+              arrayTransform: [" 9007199254741014 "],
+              encodedScalarInput: "9007199254741015",
+              encodedArrayInput: ["9007199254741015"],
+              transformUnion: "9007199254741015",
+              amountsByAccount: {
+                account1: "9007199254741013",
+              },
+              pricesByAccount: {
+                account1: "77.123456789",
+              },
+              amountsByNumericAccount: {
+                1: "9007199254741015",
+                ignored: "not-a-bigint",
+              },
+              amountsByPrefixedAccount: {
+                "account-1": "9007199254741016",
+                ignored: "not-a-bigint",
+              },
+              amountsByUnionKeyAccount: {
+                2: "9007199254741017",
+                "account-open": "9007199254741018",
+                ignored: "not-a-bigint",
+              },
+              amountsByNestedTemplateAccount: {
+                "book-account-closed": "9007199254741019",
+                ignored: "not-a-bigint",
+              },
+              amountsByLiteralAccount: {
+                account1: "9007199254741020",
+              },
+              amountsBySymbolAccount: {
+                "Symbol(account1)": "9007199254741021",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      const decodedStructuredOrString = yield* Schema.decodeUnknownEffect(
+        AmbiguousJsonNestedPosition,
+      )(decodedAmbiguousJsonPosition.structuredOrString);
+      expect({
+        ...decodedAmbiguousJsonPosition,
+        nested: {
+          ...decodedAmbiguousJsonPosition.nested,
+          price: BigDecimal.format(decodedAmbiguousJsonPosition.nested.price),
+        },
+        nestedRows: decodedAmbiguousJsonPosition.nestedRows.map((row) => ({
+          ...row,
+          price: BigDecimal.format(row.price),
+        })),
+        structuredOrString: {
+          ...decodedStructuredOrString,
+          price: BigDecimal.format(decodedStructuredOrString.price),
+        },
+        suspendedNested: {
+          ...decodedAmbiguousJsonPosition.suspendedNested,
+          price: BigDecimal.format(decodedAmbiguousJsonPosition.suspendedNested.price),
+        },
+      }).toStrictEqual({
+        id: "position-2",
+        quantity: 9007199254740997n,
+        quantityFromString: 9007199254740998n,
+        stringOrBigInt: 9007199254740999n,
+        stringOrBytes: "AQID",
+        stringOrNumber: "NaN",
+        bigDecimalOrBigInt: 9007199254741000n,
+        nested: {
+          quantity: 9007199254741001n,
+          price: "987654321.123456789",
+          stringOrBigInt: 9007199254741003n,
+          stringOrBytes: "AQID",
+          stringOrNumber: "NaN",
+        },
+        nestedRows: [
+          {
+            quantity: 9007199254741005n,
+            price: "123.456",
+            stringOrBigInt: 9007199254741007n,
+            stringOrBytes: "AQID",
+            stringOrNumber: "NaN",
+          },
+        ],
+        nestedUnion: {
+          kind: "primary",
+          quantity: 9007199254741009n,
+          stringOrBigInt: 9007199254741011n,
+        },
+        structuredOrString: {
+          quantity: 9007199254741012n,
+          price: "222.333",
+          stringOrBigInt: 9007199254741012n,
+          stringOrBytes: "AQID",
+          stringOrNumber: "NaN",
+        },
+        scalarOrStructured: 9007199254741012n,
+        validOneOf: {
+          quantity: 9007199254741012n,
+        },
+        classOrString: new AmbiguousJsonClassPosition({
+          quantity: 9007199254741012n,
+          stringOrBigInt: 9007199254741012n,
+        }),
+        untaggedStructuredUnion: {
+          quantity: 9007199254741012n,
+          stringOrBigInt: "9007199254741012",
+        },
+        sentinelUnion: {
+          kind: "b",
+          id: BigDecimal.fromStringUnsafe("123.456"),
+        },
+        optionalSentinelUnion: {
+          id: 123n,
+        },
+        suspendedNested: {
+          quantity: 9007199254741012n,
+          price: "333.444",
+          stringOrBigInt: 9007199254741012n,
+          stringOrBytes: "AQID",
+          stringOrNumber: "NaN",
+        },
+        classNested: new AmbiguousJsonClassPosition({
+          quantity: 9007199254741012n,
+          stringOrBigInt: 9007199254741012n,
+        }),
+        optionNested: Option.some({
+          quantity: 9007199254741012n,
+          price: BigDecimal.fromStringUnsafe("444.555"),
+          stringOrBigInt: 9007199254741012n,
+          stringOrBytes: "AQID",
+          stringOrNumber: "NaN",
+        }),
+        optionFromNullNested: Option.some({
+          quantity: 9007199254741012n,
+          price: BigDecimal.fromStringUnsafe("555.666"),
+          stringOrBigInt: 9007199254741012n,
+          stringOrBytes: "AQID",
+          stringOrNumber: "NaN",
+        }),
+        optionFromNullishNested: Option.none(),
+        encodedNested: {
+          quantity: 9007199254741012n,
+          quantityFromString: 9007199254741013n,
+        },
+        composedObjectTransform: {
+          quantity: 123,
+        },
+        encodedKeyObjectTransform: {
+          quantityText: "9007199254741014",
+        },
+        arrayTransform: [9007199254741014n],
+        encodedScalarInput: "9007199254741015",
+        encodedArrayInput: ["9007199254741015"],
+        transformUnion: "9007199254741015",
+        amountsByAccount: {
+          account1: 9007199254741013n,
+        },
+        pricesByAccount: {
+          account1: BigDecimal.fromStringUnsafe("77.123456789"),
+        },
+        amountsByNumericAccount: {
+          1: 9007199254741015n,
+        },
+        amountsByPrefixedAccount: {
+          "account-1": 9007199254741016n,
+        },
+        amountsByUnionKeyAccount: {
+          2: 9007199254741017n,
+          "account-open": 9007199254741018n,
+        },
+        amountsByNestedTemplateAccount: {
+          "book-account-closed": 9007199254741019n,
+        },
+        amountsByLiteralAccount: {
+          account1: 9007199254741020n,
+        },
+        amountsBySymbolAccount: {
+          [Symbol.for("account1")]: 9007199254741021n,
+        },
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonOptionPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-option-none",
+              optionNested: {
+                _tag: "None",
+              },
+              optionQuantityFromString: {
+                _tag: "Some",
+                value: "9007199254741022",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-option-none",
+        optionNested: Option.none(),
+        optionQuantityFromString: Option.some(9007199254741022n),
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonSuspendedOptionPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-option",
+              optionQuantity: {
+                _tag: "Some",
+                value: "9007199254741023",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-suspended-option",
+        optionQuantity: Option.some(9007199254741023n),
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonRepeatedRecordKeyPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-repeated-record-key",
+              amountsByRepeatedAccount: {
+                account1: "9007199254741024",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-repeated-record-key",
+        amountsByRepeatedAccount: {
+          account1: 9007199254741024n,
+        },
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonDeclaredCodecPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-declared-codec",
+              declaredQuantity: "9007199254741025",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-declared-codec",
+        declaredQuantity: 9007199254741025n,
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonNativeJsonPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-native-json",
+              jsonPayload: {
+                tags: ["json", "direct"],
+                quantity: 42,
+              },
+              mutableJsonPayload: {
+                tags: ["mutable-json", "direct"],
+                quantity: 43,
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-native-json",
+        jsonPayload: {
+          tags: ["json", "direct"],
+          quantity: 42,
+        },
+        mutableJsonPayload: {
+          tags: ["mutable-json", "direct"],
+          quantity: 43,
+        },
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonDeclaredScalarCollectionsPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-declared-scalar-collections",
+              declaredText: "ready",
+              declaredTags: ["fast", "typed"],
+              declaredObject: "decoded-object",
+              declaredObjectKeyword: "decoded-object-keyword",
+              declaredUnknown: "decoded-unknown",
+              declaredTemplate: "template-value",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-declared-scalar-collections",
+        declaredText: "ready",
+        declaredTags: ["fast", "typed"],
+        declaredObject: {
+          id: "decoded-object",
+        },
+        declaredObjectKeyword: {
+          id: "decoded-object-keyword",
+        },
+        declaredUnknown: {
+          id: "decoded-unknown",
+        },
+        declaredTemplate: "template-value",
+      });
+      const decodedDurationPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonDurationPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-duration",
+              latency: {
+                _tag: "Millis",
+                value: 42,
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect({
+        id: decodedDurationPosition.id,
+        latencyMillis: Duration.toMillis(decodedDurationPosition.latency),
+      }).toStrictEqual({
+        id: "position-duration",
+        latencyMillis: 42,
+      });
+      const decodedAnnotatedDurationPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonAnnotatedDurationPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-annotated-duration",
+              latency: {
+                _tag: "Millis",
+                value: 84,
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect({
+        id: decodedAnnotatedDurationPosition.id,
+        latencyMillis: Duration.toMillis(decodedAnnotatedDurationPosition.latency),
+      }).toStrictEqual({
+        id: "position-annotated-duration",
+        latencyMillis: 84,
+      });
+      const decodedErrorObjectsPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonErrorObjectsPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-error-objects",
+              error: {
+                message: "plain error",
+                name: "Error",
+              },
+              errorWithStack: {
+                message: "stacked error",
+                name: "RangeError",
+                stack: "RangeError: stacked error",
+              },
+              pattern: {
+                source: "orders-[0-9]+",
+                flags: "i",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect({
+        id: decodedErrorObjectsPosition.id,
+        errorMessage: decodedErrorObjectsPosition.error.message,
+        errorName: decodedErrorObjectsPosition.error.name,
+        errorWithStackMessage: decodedErrorObjectsPosition.errorWithStack.message,
+        errorWithStackName: decodedErrorObjectsPosition.errorWithStack.name,
+        errorWithStack: decodedErrorObjectsPosition.errorWithStack.stack,
+        patternSource: decodedErrorObjectsPosition.pattern.source,
+        patternFlags: decodedErrorObjectsPosition.pattern.flags,
+      }).toStrictEqual({
+        id: "position-error-objects",
+        errorMessage: "plain error",
+        errorName: "Error",
+        errorWithStackMessage: "stacked error",
+        errorWithStackName: "RangeError",
+        errorWithStack: "RangeError: stacked error",
+        patternSource: "orders-[0-9]+",
+        patternFlags: "i",
+      });
+      const decodedFilePosition = yield* decodeKafkaCodec(kafka.json(AmbiguousJsonFilePosition), {
+        bytes: textEncoder.encode(
+          JSON.stringify({
+            id: "position-file",
+            attachment: {
+              data: base64FromBytes(new Uint8Array([1, 2, 3])),
+              type: "application/octet-stream",
+              name: "payload.bin",
+              lastModified: 42,
+            },
+          }),
+        ),
+        metadata: kafkaTestMetadata("usa"),
+      });
+      expect({
+        id: decodedFilePosition.id,
+        attachmentName: decodedFilePosition.attachment.name,
+        attachmentType: decodedFilePosition.attachment.type,
+        attachmentSize: decodedFilePosition.attachment.size,
+        attachmentLastModified: decodedFilePosition.attachment.lastModified,
+      }).toStrictEqual({
+        id: "position-file",
+        attachmentName: "payload.bin",
+        attachmentType: "application/octet-stream",
+        attachmentSize: 3,
+        attachmentLastModified: 42,
+      });
+      const decodedFormDataPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonFormDataPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-form-data",
+              formData: [
+                ["note", { _tag: "String", value: "ready" }],
+                [
+                  "attachment",
+                  {
+                    _tag: "File",
+                    value: {
+                      data: base64FromBytes(new Uint8Array([4, 5])),
+                      type: "application/octet-stream",
+                      name: "form.bin",
+                      lastModified: 24,
+                    },
+                  },
+                ],
+              ],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect(decodedFormDataPosition.id).toBe("position-form-data");
+      expect(decodedFormDataPosition.formData.get("note")).toBe("ready");
+      expect(decodedFormDataPosition.formData.get("attachment")).toBeInstanceOf(File);
+      expect(decodedFormDataPosition.formData.get("attachment")).toHaveProperty("name", "form.bin");
+      const decodedEffectCollectionsPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonEffectCollectionsPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-effect-collections",
+              readonlySet: [
+                {
+                  quantity: "9007199254741051",
+                  price: "10.5",
+                  stringOrBigInt: "9007199254741052",
+                  stringOrBytes: "AQID",
+                  stringOrNumber: 11,
+                },
+              ],
+              hashSet: [
+                {
+                  quantity: "9007199254741053",
+                  price: "11.5",
+                  stringOrBigInt: "9007199254741054",
+                  stringOrBytes: "BAU=",
+                  stringOrNumber: 12,
+                },
+              ],
+              chunk: [
+                {
+                  quantity: "9007199254741055",
+                  price: "12.5",
+                  stringOrBigInt: "9007199254741056",
+                  stringOrBytes: "Bgc=",
+                  stringOrNumber: 13,
+                },
+              ],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect({
+        id: decodedEffectCollectionsPosition.id,
+        readonlySetSize: decodedEffectCollectionsPosition.readonlySet.size,
+        hashSetSize: HashSet.size(decodedEffectCollectionsPosition.hashSet),
+        chunkSize: Array.from(decodedEffectCollectionsPosition.chunk).length,
+      }).toStrictEqual({
+        id: "position-effect-collections",
+        readonlySetSize: 1,
+        hashSetSize: 1,
+        chunkSize: 1,
+      });
+      const decodedRedactedPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonRedactedPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-redacted",
+              secret: "classified",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect({
+        id: decodedRedactedPosition.id,
+        secret: Redacted.value(decodedRedactedPosition.secret),
+      }).toStrictEqual({
+        id: "position-redacted",
+        secret: "classified",
+      });
+      const decodedRedactedObjectPosition = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonRedactedObjectPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-redacted-object",
+              redactedDuration: {
+                _tag: "Millis",
+                value: 7,
+              },
+              redactedNested: {
+                quantity: "9007199254741057",
+                price: "13.5",
+                stringOrBigInt: "9007199254741058",
+                stringOrBytes: "CAk=",
+                stringOrNumber: 14,
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect({
+        id: decodedRedactedObjectPosition.id,
+        durationMillis: Duration.toMillis(
+          Redacted.value(decodedRedactedObjectPosition.redactedDuration),
+        ),
+        nestedQuantity: Redacted.value(decodedRedactedObjectPosition.redactedNested).quantity,
+        nestedPrice: BigDecimal.format(
+          Redacted.value(decodedRedactedObjectPosition.redactedNested).price,
+        ),
+      }).toStrictEqual({
+        id: "position-redacted-object",
+        durationMillis: 7,
+        nestedQuantity: 9007199254741057n,
+        nestedPrice: "13.5",
+      });
+      const decodedSuspendedStringMapKey = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonSuspendedStringMapKeyPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-string-map-key",
+              readonlyMap: [["account1", "9007199254741025"]],
+              hashMap: [["account2", "9007199254741026"]],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      );
+      expect({
+        id: decodedSuspendedStringMapKey.id,
+        readonlyMap: decodedSuspendedStringMapKey.readonlyMap,
+        hashMapEntries: HashMap.toEntries(decodedSuspendedStringMapKey.hashMap),
+      }).toStrictEqual({
+        id: "position-suspended-string-map-key",
+        readonlyMap: new Map([["account1", 9007199254741025n]]),
+        hashMapEntries: [["account2", 9007199254741026n]],
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonTaggedUnionPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-tagged-union",
+              tagged: {
+                _tag: "quantity",
+                amount: "9007199254741026",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-tagged-union",
+        tagged: {
+          _tag: "quantity",
+          amount: 9007199254741026n,
+        },
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonSuspendedClassPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-class",
+              nested: {
+                quantity: "9007199254741022",
+                stringOrBigInt: "9007199254741023",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-suspended-class",
+        nested: new AmbiguousJsonClassPosition({
+          quantity: 9007199254741022n,
+          stringOrBigInt: 9007199254741023n,
+        }),
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonSuspendedEmptyObjectTransformPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-empty-object-transform",
+              empty: "wire-empty",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-suspended-empty-object-transform",
+        empty: {},
+      });
+      expect(
+        yield* decodeKafkaCodec(
+          kafka.json(AmbiguousJsonSuspendedOptionEmptyObjectTransformPosition),
+          {
+            bytes: textEncoder.encode(
+              JSON.stringify({
+                id: "position-suspended-option-empty-object-transform",
+                maybeEmpty: "wire-empty",
+              }),
+            ),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ),
+      ).toStrictEqual({
+        id: "position-suspended-option-empty-object-transform",
+        maybeEmpty: Option.some({}),
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonSuspendedEmptyClassPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-empty-class",
+              nested: {},
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-suspended-empty-class",
+        nested: new AmbiguousJsonEmptyClassPosition({}),
+      });
+      expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonDecodedSideSuspendedRecordKeyPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-decoded-side-suspended-record-key",
+              decodedRecord: "wire-value",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-decoded-side-suspended-record-key",
+        decodedRecord: {
+          account1: 9007199254741041n,
+        },
+      });
+      expect(
+        yield* decodeKafkaCodec(
+          kafka.json(AmbiguousJsonSuspendedScalarToBadRecordKeyClassPosition),
+          {
+            bytes: textEncoder.encode(
+              JSON.stringify({
+                id: "position-suspended-scalar-to-bad-record-key-class",
+                nested: "nested-class",
+              }),
+            ),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ),
+      ).toStrictEqual({
+        id: "position-suspended-scalar-to-bad-record-key-class",
+        nested: new AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition({
+          id: "nested-class",
+          decodedRecord: {
+            account1: 1n,
+          },
+        }),
+      });
+      expect(
+        yield* decodeKafkaCodec(
+          kafka.json(AmbiguousJsonDeclaredScalarToBadRecordKeyClassPosition),
+          {
+            bytes: textEncoder.encode(
+              JSON.stringify({
+                id: "position-declared-scalar-to-bad-record-key-class",
+                declaredClass: "declared-class",
+              }),
+            ),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ),
+      ).toStrictEqual({
+        id: "position-declared-scalar-to-bad-record-key-class",
+        declaredClass: new AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition({
+          id: "declared-class",
+          decodedRecord: {
+            account1: 1n,
+          },
+        }),
+      });
       expect(
         yield* decodeKafkaCodec(protobufCodec, {
           bytes: toBinary(
@@ -583,11 +2984,849 @@ describe("defineViewServerConfig", () => {
           metadata: kafkaTestMetadata("usa"),
         }),
       );
+      const validSuspendedTupleWithRestMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonSuspendedTupleWithRestPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const validSuspendedScalarCodecMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonSuspendedScalarCodecPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const validNestedDeclarationMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonDeclaredNestedDeclarationPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const validOpaqueDeclarationMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonDeclaredOpaqueDeclarationPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedEmptyObjectJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(AmbiguousJsonSuspendedEmptyObjectPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-empty-object",
+              empty: {},
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
       const jsonSchemaFailure = yield* Effect.exit(
         decodeKafkaCodec(jsonCodec, {
           bytes: textEncoder.encode(
             JSON.stringify({
               id: "order-1",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const primitiveJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(jsonCodec, {
+          bytes: textEncoder.encode(JSON.stringify("order-1")),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidArrayJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonArrayPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-3",
+              nestedRows: "not-an-array",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidArrayTransformJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonArrayTransformPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-array-transform",
+              arrayTransform: [123],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidEncodedArrayInputJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonEncodedArrayInputPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-encoded-array-input",
+              encodedArrayInput: [123],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidSymbolRecordJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonSymbolRecordPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-symbol-record",
+              amountsBySymbolAccount: {
+                "1": "not-a-symbol-key",
+                "Symbol(account1)": "9007199254741021",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidNestedJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonNestedPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-4",
+              nested: {
+                quantity: "9007199254741013",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidNestedShapeJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonNestedPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-5",
+              nested: "not-an-object",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidTupleJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonTuplePosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-6",
+              tuple: ["9007199254741015", "extra"],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidUnionJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonUnionPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-7",
+              nestedUnion: {
+                kind: "unknown",
+                quantity: "9007199254741017",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidUnionWithInvalidRecordJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonUnionWithInvalidRecordPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-invalid-union-record",
+              unionWithInvalidRecord: {
+                kind: "ok",
+                value: "would otherwise match the second branch",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidRecordJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonRecordPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-8",
+              amountsByAccount: {
+                account1: "not-a-bigint",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidNumericLiteralRecordJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonNumericLiteralRecordPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-numeric-literal-record",
+              amountsByNumericLiteralAccount: {
+                "1": "9007199254741025",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidDeclaredRecordJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonDeclaredRecordPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-declared-record",
+              declaredRecord: {
+                "1": "9007199254741027",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidDeclaredRecordJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredRecordPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-declared-record-error",
+              declaredRecord: {
+                "1": "9007199254741027",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredRecordMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredRecordPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredSuspendedRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredSuspendedRecordKeyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredSuspendedRecordKeyTargetMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredSuspendedRecordKeyTargetPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredNestedSuspendedRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredPartialRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredPartialRecordKeyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredSpoofedTypeConstructorMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredSpoofedOptionWithValueMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredSpoofedOptionWithValuePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredSpoofedOptionBuiltInToCodecMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredSpoofedOptionBuiltInToCodecPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredDurationTargetMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredDurationTargetPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredOptionRecordTargetMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredOptionRecordTargetPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidAnnotatedDurationOverrideMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonAnnotatedDurationOverridePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidAnnotatedOptionOverrideMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonAnnotatedOptionOverridePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidAnnotatedReadonlyMapOverrideMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonAnnotatedReadonlyMapOverridePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidAnnotatedOptionToCodecOverrideMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonAnnotatedOptionToCodecOverridePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidAnnotatedOptionToCodecSpoofedSourceMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonAnnotatedOptionToCodecSpoofedSourcePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidAnnotatedReadonlyMapToCodecOverrideMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonAnnotatedReadonlyMapToCodecOverridePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredToCodecRecordMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredToCodecRecordPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredEmptyStructMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredEmptyStructPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredSuspendedEmptyStructMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredSuspendedEmptyStructPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedSuspendedDeclaredEmptyStructMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonSuspendedDeclaredEmptyStructPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedSuspendedStructDeclaredEmptyStructMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(UnsupportedAmbiguousJsonSuspendedStructDeclaredEmptyStructPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const unsupportedSuspendedArrayDeclaredEmptyStructMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(UnsupportedAmbiguousJsonSuspendedArrayDeclaredEmptyStructPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const unsupportedSuspendedUnionDeclaredEmptyStructMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(UnsupportedAmbiguousJsonSuspendedUnionDeclaredEmptyStructPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const unsupportedSuspendedRecordDeclaredEmptyStructMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(UnsupportedAmbiguousJsonSuspendedRecordDeclaredEmptyStructPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const unsupportedSuspendedClassAnnotationSpoofMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonSuspendedClassAnnotationSpoofPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedSuspendedClassAnnotationStringParameterSpoofMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(UnsupportedAmbiguousJsonSuspendedClassAnnotationStringParameterSpoofPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const unsupportedDeclaredFieldsSpoofMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredFieldsSpoofPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredTransformFromEmptyStructMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredTransformFromEmptyStructPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredObjectTupleMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredObjectTuplePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredObjectKeywordMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredObjectKeywordPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredJsonMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredJsonPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredMutableJsonMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredMutableJsonPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredUnknownMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredUnknownPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const unsupportedDeclaredAnyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(UnsupportedAmbiguousJsonDeclaredAnyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredRecordKeyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedStructDeclaredRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedStructDeclaredRecordKeyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-error",
+              suspendedRecord: {
+                "1": "9007199254741029",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyClassMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyClassPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredClassTargetMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredClassTargetPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidDeclaredStringOnlyClassTargetMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredStringOnlyClassTargetPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidCustomJsonCodecClassMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonCustomJsonCodecClassPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedStringRecordKeyJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedStringRecordKeyPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-string-key-record-error",
+              suspendedRecord: {
+                account1: "9007199254741029",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedStructStringRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedStructStringRecordKeyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedLiteralRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedLiteralRecordKeyPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyArrayJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyArrayPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-key-array-error",
+              suspendedRecords: [
+                {
+                  account1: "9007199254741031",
+                },
+              ],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyUnionJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyUnionPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-key-union-error",
+              suspendedRecordOrNote: {
+                account1: "9007199254741033",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyTaggedUnionMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTaggedUnionPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyTransformMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTransformPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyDeclarationTransformMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyDeclarationTransformPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeySourceTransformMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeySourceTransformPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyDecodedTransformMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyNestedDecodedTransformMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeySourceTransformUnionMalformedJsonError =
+        yield* decodeKafkaCodec(
+          kafka.json(InvalidAmbiguousJsonSuspendedRecordKeySourceTransformUnionPosition),
+          {
+            bytes: textEncoder.encode("{"),
+            metadata: kafkaTestMetadata("usa"),
+          },
+        ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyTupleJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTuplePosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-key-tuple-error",
+              suspendedTuple: [
+                {
+                  account1: "9007199254741035",
+                },
+              ],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyTupleRestJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTupleRestPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-key-tuple-rest-error",
+              suspendedTupleRest: [
+                "fixed",
+                {
+                  account1: "9007199254741037",
+                },
+              ],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyStructRestMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyStructRestPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyResultJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyResultPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-key-result-error",
+              result: {
+                _tag: "Success",
+                success: {
+                  account1: "9007199254741043",
+                },
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyResultMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyResultPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyReadonlyMapJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyReadonlyMapPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-key-readonly-map-error",
+              map: [
+                [
+                  {
+                    account1: "9007199254741045",
+                  },
+                  "9007199254741047",
+                ],
+              ],
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyHashMapMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyHashMapPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyCauseMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyCausePosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyCauseReasonErrorJsonSchemaError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonErrorPosition),
+        {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-suspended-record-key-cause-reason-error",
+              reason: {
+                _tag: "Fail",
+                error: {
+                  account1: "9007199254741049",
+                },
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyCauseReasonDefectMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonDefectPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidSuspendedRecordKeyExitMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyExitPosition),
+        {
+          bytes: textEncoder.encode("{"),
+          metadata: kafkaTestMetadata("usa"),
+        },
+      ).pipe(Effect.flip);
+      const invalidOneOfJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonOneOfPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-9",
+              nestedOneOf: {
+                quantity: "9007199254741019",
+                note: "matches both oneOf members",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidBroadOneOfJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonBroadOneOfPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-10",
+              broadOneOf: {
+                kind: "b",
+                id: "123",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidScalarOneOfJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonScalarOneOfPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-11",
+              scalarOneOf: "9007199254741023",
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidOptionPrimitiveJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(AmbiguousJsonOptionPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-option-primitive",
+              optionNested: "not-an-option",
+              optionQuantityFromString: {
+                _tag: "None",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidOptionTagJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(AmbiguousJsonOptionPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-option-tag",
+              optionNested: {
+                _tag: "Unknown",
+              },
+              optionQuantityFromString: {
+                _tag: "None",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const invalidOptionMissingValueJsonSchemaFailure = yield* Effect.exit(
+        decodeKafkaCodec(kafka.json(AmbiguousJsonOptionPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-option-missing-value",
+              optionNested: {
+                _tag: "Some",
+              },
+              optionQuantityFromString: {
+                _tag: "None",
+              },
             }),
           ),
           metadata: kafkaTestMetadata("usa"),
@@ -606,7 +3845,239 @@ describe("defineViewServerConfig", () => {
         }),
       );
       expect(Exit.isFailure(jsonParseFailure)).toBe(true);
+      expect(validSuspendedTupleWithRestMalformedJsonError.message).toBe(
+        "Failed to parse Kafka JSON payload",
+      );
+      expect(validSuspendedScalarCodecMalformedJsonError.message).toBe(
+        "Failed to parse Kafka JSON payload",
+      );
+      expect(validNestedDeclarationMalformedJsonError.message).toBe(
+        "Failed to parse Kafka JSON payload",
+      );
+      expect(validOpaqueDeclarationMalformedJsonError.message).toBe(
+        "Failed to parse Kafka JSON payload",
+      );
+      expect(invalidSuspendedEmptyObjectJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
       expect(Exit.isFailure(jsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(primitiveJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidArrayJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidArrayTransformJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidEncodedArrayInputJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidSymbolRecordJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidNestedJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidNestedShapeJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidTupleJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidUnionJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidUnionWithInvalidRecordJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidRecordJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidNumericLiteralRecordJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidDeclaredRecordJsonSchemaFailure)).toBe(true);
+      expect(invalidDeclaredRecordJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredRecordMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredSuspendedRecordKeyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredSuspendedRecordKeyTargetMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredNestedSuspendedRecordKeyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredPartialRecordKeyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredSpoofedTypeConstructorMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredSpoofedOptionWithValueMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredSpoofedOptionBuiltInToCodecMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredDurationTargetMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredOptionRecordTargetMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidAnnotatedDurationOverrideMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidAnnotatedOptionOverrideMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidAnnotatedReadonlyMapOverrideMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidAnnotatedOptionToCodecOverrideMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidAnnotatedOptionToCodecSpoofedSourceMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidAnnotatedReadonlyMapToCodecOverrideMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredToCodecRecordMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredSuspendedEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedSuspendedDeclaredEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedSuspendedStructDeclaredEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedSuspendedArrayDeclaredEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedSuspendedUnionDeclaredEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedSuspendedRecordDeclaredEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedSuspendedClassAnnotationSpoofMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(
+        unsupportedSuspendedClassAnnotationStringParameterSpoofMalformedJsonError.message,
+      ).toBe("Kafka JSON schema is not JSON-compatible");
+      expect(unsupportedDeclaredFieldsSpoofMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredTransformFromEmptyStructMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredObjectTupleMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredObjectKeywordMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredJsonMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredMutableJsonMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredUnknownMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(unsupportedDeclaredAnyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredRecordKeyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedStructDeclaredRecordKeyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyClassMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredClassTargetMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidDeclaredStringOnlyClassTargetMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidCustomJsonCodecClassMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedStringRecordKeyJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedStructStringRecordKeyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedLiteralRecordKeyMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyArrayJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyUnionJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyTaggedUnionMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyTransformMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyDeclarationTransformMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeySourceTransformMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyDecodedTransformMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyNestedDecodedTransformMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeySourceTransformUnionMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyTupleJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyTupleRestJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyStructRestMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyResultJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyResultMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyReadonlyMapJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyHashMapMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyCauseMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyCauseReasonErrorJsonSchemaError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyCauseReasonDefectMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(invalidSuspendedRecordKeyExitMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
+      );
+      expect(Exit.isFailure(invalidOneOfJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidBroadOneOfJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidScalarOneOfJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidOptionPrimitiveJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidOptionTagJsonSchemaFailure)).toBe(true);
+      expect(Exit.isFailure(invalidOptionMissingValueJsonSchemaFailure)).toBe(true);
       expect(Exit.isFailure(protobufFailure)).toBe(true);
       expect(Exit.isFailure(customFailure)).toBe(true);
 

@@ -1,6 +1,6 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import type { DescMessage, MessageShape } from "@bufbuild/protobuf";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, SchemaAST } from "effect";
 import type { Config } from "effect";
 import type { RowSchema, TopicRow } from "./topic-contract";
 
@@ -40,6 +40,7 @@ const KafkaCodecDecodeTypeId = Symbol("@view-server/config/KafkaCodecDecode");
 const KafkaTopicDefinitionTypeId = Symbol("@view-server/config/KafkaTopicDefinition");
 const KafkaTopicDecodeTypeId = Symbol("@view-server/config/KafkaTopicDecode");
 const KafkaTopicSchemaTypeId = Symbol("@view-server/config/KafkaTopicSchema");
+const EffectSchemaClassAnnotationKey = "~effect/Schema/Class";
 
 export type KafkaDecodeError = {
   readonly _tag: "KafkaDecodeError";
@@ -199,6 +200,657 @@ const kafkaMappingError = (message: string, cause: unknown): KafkaMappingError =
   cause,
 });
 
+const isInspectableObject = (value: unknown): value is object =>
+  (typeof value === "object" && value !== null) || typeof value === "function";
+
+const isSupportedJsonObjectRecordKeyAst = (ast: SchemaAST.AST): boolean => {
+  if (SchemaAST.isLiteral(ast)) {
+    return typeof ast.literal === "string" || typeof ast.literal === "symbol";
+  }
+  if (SchemaAST.isUniqueSymbol(ast) || SchemaAST.isTemplateLiteral(ast)) {
+    return true;
+  }
+  if (SchemaAST.isUnion(ast)) {
+    return (
+      ast.types.length > 0 && ast.types.every((member) => isSupportedJsonObjectRecordKeyAst(member))
+    );
+  }
+  return ast._tag === "String" || ast._tag === "Number" || ast._tag === "Symbol";
+};
+
+const isSupportedJsonObjectRecordKeySourceSchema = (schema: object): boolean => {
+  const from = Reflect.get(schema, "from");
+  if (isInspectableObject(from)) {
+    return isSupportedJsonObjectRecordKeySourceSchema(from);
+  }
+  const members = Reflect.get(schema, "members");
+  if (Array.isArray(members)) {
+    return (
+      members.length > 0 &&
+      members.every(
+        (member) =>
+          isInspectableObject(member) && isSupportedJsonObjectRecordKeySourceSchema(member),
+      )
+    );
+  }
+  return isSupportedJsonObjectRecordKeyAst(Reflect.get(schema, "ast"));
+};
+
+const isSupportedJsonObjectRecordKeyDecodedSchema = (schema: object): boolean => {
+  const to = Reflect.get(schema, "to");
+  if (isInspectableObject(to)) {
+    return isSupportedJsonObjectRecordKeyDecodedSchema(to);
+  }
+  const members = Reflect.get(schema, "members");
+  if (Array.isArray(members)) {
+    return (
+      members.length > 0 &&
+      members.every(
+        (member) => isInspectableObject(member) && isSupportedJsonObjectRecordKeySchema(member),
+      )
+    );
+  }
+  return isSupportedJsonObjectRecordKeyAst(Reflect.get(schema, "ast"));
+};
+
+const isSupportedJsonObjectRecordKeySchema = (schema: object): boolean =>
+  isSupportedJsonObjectRecordKeyAst(Reflect.get(schema, "ast")) &&
+  isSupportedJsonObjectRecordKeySourceSchema(schema) &&
+  isSupportedJsonObjectRecordKeyDecodedSchema(schema);
+
+const isJsonLikeDeclarationAst = (ast: SchemaAST.AST): boolean =>
+  SchemaAST.isDeclaration(ast) &&
+  ast.typeParameters.length === 0 &&
+  ast.encoding !== undefined &&
+  ast.encoding.some((link) => SchemaAST.isUnknown(link.to));
+
+const isObjectLikeJsonCodecTargetAst = (ast: SchemaAST.AST): boolean =>
+  SchemaAST.isObjects(ast) ||
+  SchemaAST.isObjectKeyword(ast) ||
+  SchemaAST.isUnknown(ast) ||
+  SchemaAST.isAny(ast) ||
+  isJsonLikeDeclarationAst(ast);
+
+const validateCustomDeclarationJsonCodecTargetAst = (
+  ast: SchemaAST.AST,
+  seen: Set<SchemaAST.AST>,
+  requiresConcreteWireShape = false,
+): boolean => {
+  if (seen.has(ast)) {
+    return false;
+  }
+  seen.add(ast);
+  if (SchemaAST.isSuspend(ast)) {
+    return validateCustomDeclarationJsonCodecTargetAst(
+      ast.thunk(),
+      seen,
+      requiresConcreteWireShape,
+    );
+  }
+  if (ast.encoding !== undefined) {
+    const classTarget =
+      SchemaAST.isDeclaration(ast) && isSchemaClassDeclarationAst(ast)
+        ? ast.typeParameters[0]
+        : undefined;
+    let hasJsonWireLink = false;
+    for (const link of ast.encoding) {
+      if (link.to !== classTarget) {
+        hasJsonWireLink =
+          validateCustomDeclarationJsonCodecTargetAst(
+            link.to,
+            seen,
+            isObjectLikeJsonCodecTargetAst(ast),
+          ) || hasJsonWireLink;
+      }
+    }
+    if (classTarget !== undefined && !hasJsonWireLink && SchemaAST.isObjects(classTarget)) {
+      validateCustomDeclarationJsonCodecTargetAst(classTarget, seen);
+    }
+    if (isObjectLikeJsonCodecTargetAst(ast) && !hasJsonWireLink) {
+      throw new Error("Declaration JSON codecs must not produce object-like codecs");
+    }
+    return hasJsonWireLink;
+  }
+  if (isObjectLikeJsonCodecTargetAst(ast)) {
+    throw new Error("Declaration JSON codecs must not produce object-like codecs");
+  }
+  if (SchemaAST.isDeclaration(ast) && requiresConcreteWireShape) {
+    return false;
+  }
+  if (SchemaAST.isArrays(ast)) {
+    for (const element of ast.elements) {
+      validateCustomDeclarationJsonCodecTargetAst(element, seen);
+    }
+    for (const rest of ast.rest) {
+      validateCustomDeclarationJsonCodecTargetAst(rest, seen);
+    }
+    return true;
+  }
+  if (SchemaAST.isUnion(ast)) {
+    for (const member of ast.types) {
+      validateCustomDeclarationJsonCodecTargetAst(member, seen);
+    }
+    return true;
+  }
+  if (SchemaAST.isTemplateLiteral(ast)) {
+    for (const part of ast.parts) {
+      validateCustomDeclarationJsonCodecTargetAst(part, seen);
+    }
+  }
+  return true;
+};
+
+const declarationJsonLink = (ast: SchemaAST.AST): unknown =>
+  Reflect.get(Object(Reflect.get(ast, "annotations")), "toCodecJson") ??
+  Reflect.get(Object(Reflect.get(ast, "annotations")), "toCodec");
+
+const effectDeclarationDescriptor = (schema: { readonly ast: SchemaAST.AST }) => ({
+  run: Reflect.get(schema.ast, "run"),
+  link: declarationJsonLink(schema.ast),
+});
+
+const knownEffectJsonDeclarations = [
+  Schema.BigDecimal,
+  Schema.Date,
+  Schema.Duration,
+  Schema.Error,
+  Schema.ErrorWithStack,
+  Schema.File,
+  Schema.FormData,
+  Schema.Json,
+  Schema.MutableJson,
+  Schema.RegExp,
+  Schema.URL,
+  Schema.URLSearchParams,
+].map(effectDeclarationDescriptor) satisfies ReadonlyArray<{
+  readonly run: unknown;
+  readonly link: unknown;
+}>;
+
+const parametricDeclarationKey = (tag: string, shape: string): string => `${tag}\n${shape}`;
+
+const functionSource = (fn: unknown): string => Function.prototype.toString.call(fn);
+
+// Effect v4 beta does not expose stable constructor identities for parametric declarations.
+// Kafka topic schemas are trusted application config; this guard catches accidental/custom
+// declaration drift while preserving real Effect JSON codecs such as Option and ReadonlyMap.
+const declarationLinkSource = (schema: { readonly ast: SchemaAST.Declaration }): string =>
+  functionSource(declarationJsonLink(schema.ast));
+
+const declarationParserSource = (schema: { readonly ast: SchemaAST.Declaration }): string =>
+  functionSource(schema.ast.run(schema.ast.typeParameters));
+
+type ParametricDeclarationDescriptor = {
+  readonly annotationKey: "toCodec" | "toCodecJson";
+  readonly parameterKeys: ReadonlyArray<string>;
+  readonly parameterPaths: ReadonlyArray<string>;
+  readonly parserSources: ReadonlyArray<string>;
+  readonly sources: ReadonlyArray<string>;
+};
+
+const parametricDeclarationDescriptor = (
+  schema: { readonly ast: SchemaAST.Declaration },
+  annotationKey: "toCodec" | "toCodecJson",
+  parameterKeys: ReadonlyArray<string>,
+  parameterPaths: ReadonlyArray<string> = parameterKeys,
+): ParametricDeclarationDescriptor => ({
+  annotationKey,
+  parameterKeys,
+  parameterPaths,
+  parserSources: [declarationParserSource(schema)],
+  sources: [declarationLinkSource(schema)],
+});
+
+const knownEffectParametricDeclarationSources = new Map<string, ParametricDeclarationDescriptor>([
+  [
+    parametricDeclarationKey("ReadonlyMap", "key,value,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.ReadonlyMap(Schema.String, Schema.String), "toCodec", [
+      "key",
+      "value",
+    ]),
+  ],
+  [
+    parametricDeclarationKey("ReadonlySet", "value,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.ReadonlySet(Schema.String), "toCodec", ["value"]),
+  ],
+  [
+    parametricDeclarationKey("effect/Cause", "error,defect,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.Cause(Schema.String, Schema.String), "toCodec", [
+      "error",
+      "defect",
+    ]),
+  ],
+  [
+    parametricDeclarationKey(
+      "effect/Cause/Failure",
+      "error,defect,ast,rebuild,makeEffect,make,makeOption",
+    ),
+    parametricDeclarationDescriptor(Schema.CauseReason(Schema.String, Schema.String), "toCodec", [
+      "error",
+      "defect",
+    ]),
+  ],
+  [
+    parametricDeclarationKey("effect/Chunk", "value,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.Chunk(Schema.String), "toCodec", ["value"]),
+  ],
+  [
+    parametricDeclarationKey(
+      "effect/Exit",
+      "value,error,defect,ast,rebuild,makeEffect,make,makeOption",
+    ),
+    parametricDeclarationDescriptor(
+      Schema.Exit(Schema.String, Schema.String, Schema.String),
+      "toCodec",
+      ["value", "error", "defect"],
+    ),
+  ],
+  [
+    parametricDeclarationKey("effect/HashMap", "key,value,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.HashMap(Schema.String, Schema.String), "toCodec", [
+      "key",
+      "value",
+    ]),
+  ],
+  [
+    parametricDeclarationKey("effect/HashSet", "value,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.HashSet(Schema.String), "toCodec", ["value"]),
+  ],
+  [
+    parametricDeclarationKey("effect/Option", "value,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.Option(Schema.String), "toCodec", ["value"]),
+  ],
+  [
+    parametricDeclarationKey("effect/Option", "from,to,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(
+      Schema.OptionFromNullOr(Schema.String),
+      "toCodec",
+      ["from", "to"],
+      ["to.value"],
+    ),
+  ],
+  [
+    parametricDeclarationKey("effect/Redacted", "value,ast,rebuild,makeEffect,make,makeOption"),
+    parametricDeclarationDescriptor(Schema.Redacted(Schema.String), "toCodecJson", ["value"]),
+  ],
+  [
+    parametricDeclarationKey(
+      "effect/Result",
+      "success,failure,ast,rebuild,makeEffect,make,makeOption",
+    ),
+    parametricDeclarationDescriptor(Schema.Result(Schema.String, Schema.String), "toCodec", [
+      "success",
+      "failure",
+    ]),
+  ],
+]);
+
+const knownEffectParametricDeclarationAstDescriptors = Array.from(
+  knownEffectParametricDeclarationSources,
+  ([key, descriptor]) => ({
+    parameterKeys: descriptor.parameterKeys,
+    tag: key.slice(0, key.indexOf("\n")),
+  }),
+);
+
+const schemaParametersMatchDeclarationAst = (
+  schema: object,
+  ast: SchemaAST.Declaration,
+  parameterPaths: ReadonlyArray<string>,
+): boolean =>
+  parameterPaths.length === ast.typeParameters.length &&
+  parameterPaths.every((path, index) => {
+    const parameterSchema = path
+      .split(".")
+      .reduce<unknown>((current, key) => Reflect.get(Object(current), key), schema);
+    return (
+      isInspectableObject(parameterSchema) &&
+      Reflect.get(parameterSchema, "ast") === ast.typeParameters[index]
+    );
+  });
+
+const isKnownEffectParametricJsonDeclarationSchema = (
+  schema: object,
+  ast: SchemaAST.Declaration,
+  getLink: unknown,
+): boolean => {
+  const annotations = Object(ast.annotations);
+  const typeConstructor = Reflect.get(annotations, "typeConstructor");
+  if (!isInspectableObject(typeConstructor)) {
+    return false;
+  }
+  const expectedSources = knownEffectParametricDeclarationSources.get(
+    parametricDeclarationKey(
+      String(Reflect.get(typeConstructor, "_tag")),
+      Object.keys(schema).join(","),
+    ),
+  );
+  return (
+    expectedSources !== undefined &&
+    schemaParametersMatchDeclarationAst(schema, ast, expectedSources.parameterPaths) &&
+    (expectedSources.annotationKey === "toCodecJson" ||
+      Reflect.get(annotations, "toCodecJson") === undefined) &&
+    getLink === Reflect.get(annotations, expectedSources.annotationKey) &&
+    expectedSources.parserSources.includes(functionSource(ast.run(ast.typeParameters))) &&
+    expectedSources.sources.includes(functionSource(getLink))
+  );
+};
+
+const isKnownEffectParametricJsonDeclarationAst = (
+  ast: SchemaAST.Declaration,
+  getLink: unknown,
+): boolean => {
+  const annotations = Object(ast.annotations);
+  const typeConstructor = Reflect.get(annotations, "typeConstructor");
+  if (!isInspectableObject(typeConstructor)) {
+    return false;
+  }
+  const typeConstructorTag = String(Reflect.get(typeConstructor, "_tag"));
+  return knownEffectParametricDeclarationAstDescriptors.some(({ parameterKeys, tag }) => {
+    if (tag !== typeConstructorTag || parameterKeys.length !== ast.typeParameters.length) {
+      return false;
+    }
+    const syntheticSchema = Schema.make(
+      ast,
+      Object.fromEntries(
+        ast.typeParameters.map((typeParameter, index) => [
+          String(parameterKeys[index]),
+          Schema.make(typeParameter),
+        ]),
+      ),
+    );
+    return isKnownEffectParametricJsonDeclarationSchema(syntheticSchema, ast, getLink);
+  });
+};
+
+const isKnownEffectJsonDeclarationSchema = (
+  schema: object,
+  ast: SchemaAST.Declaration,
+  getLink: unknown,
+): boolean =>
+  knownEffectJsonDeclarations.some(
+    (declaration) => declaration.run === ast.run && declaration.link === getLink,
+  ) || isKnownEffectParametricJsonDeclarationSchema(schema, ast, getLink);
+
+const isKnownEffectJsonDeclarationAst = (ast: SchemaAST.Declaration, getLink: unknown): boolean =>
+  knownEffectJsonDeclarations.some(
+    (declaration) => declaration.run === ast.run && declaration.link === getLink,
+  ) || isKnownEffectParametricJsonDeclarationAst(ast, getLink);
+
+const isSchemaClassDeclarationAst = (ast: SchemaAST.Declaration): boolean => {
+  const classLink = Reflect.get(Object(ast.annotations), EffectSchemaClassAnnotationKey);
+  const toCodecLink = Reflect.get(Object(ast.annotations), "toCodec");
+  if (
+    typeof classLink !== "function" ||
+    typeof toCodecLink !== "function" ||
+    ast.typeParameters.length !== 1
+  ) {
+    return false;
+  }
+  const classTarget = ast.typeParameters[0];
+  if (classTarget === undefined || !SchemaAST.isObjects(classTarget)) {
+    return false;
+  }
+  const classLinkResult = classLink([classTarget]);
+  const toCodecLinkResult = toCodecLink([Schema.make(classTarget)]);
+  return (
+    isInspectableObject(classLinkResult) &&
+    isInspectableObject(toCodecLinkResult) &&
+    Reflect.get(classLinkResult, "to") === classTarget &&
+    Reflect.get(toCodecLinkResult, "to") === classTarget
+  );
+};
+
+const isDefaultSchemaClassDeclarationAst = (ast: SchemaAST.Declaration): boolean =>
+  Reflect.get(Object(ast.annotations), "toCodecJson") === undefined &&
+  isSchemaClassDeclarationAst(ast);
+
+const rejectSuspendedRecordKeySchemas = (schema: unknown): void => {
+  const customDeclarationJsonCodecTargetAstFromAst = (ast: SchemaAST.Declaration): unknown => {
+    const getLink = declarationJsonLink(ast);
+    if (
+      typeof getLink !== "function" ||
+      isKnownEffectJsonDeclarationAst(ast, getLink) ||
+      isDefaultSchemaClassDeclarationAst(ast)
+    ) {
+      return undefined;
+    }
+    const link = getLink(
+      ast.typeParameters.map((typeParameter) => Schema.make(SchemaAST.toEncoded(typeParameter))),
+    );
+    return Schema.toCodecJson(Schema.make(link.to)).ast;
+  };
+  const visitAst = (root: SchemaAST.AST): void => {
+    const seen = new Set<SchemaAST.AST>();
+    const visitCurrentAst = (current: SchemaAST.AST): void => {
+      if (seen.has(current)) {
+        return;
+      }
+      seen.add(current);
+      if (SchemaAST.isSuspend(current)) {
+        visitCurrentAst(current.thunk());
+        return;
+      }
+      if (!SchemaAST.isDeclaration(current) && current.encoding !== undefined) {
+        for (const link of current.encoding) {
+          visitCurrentAst(link.to);
+        }
+        return;
+      }
+      if (SchemaAST.isDeclaration(current)) {
+        const isSchemaClass = isSchemaClassDeclarationAst(current);
+        const classTarget = isSchemaClass ? current.typeParameters[0] : undefined;
+        const customJsonCodecTargetAst = customDeclarationJsonCodecTargetAstFromAst(current);
+        if (SchemaAST.isAST(customJsonCodecTargetAst)) {
+          validateCustomDeclarationJsonCodecTargetAst(customJsonCodecTargetAst, new Set());
+        }
+        let inspectedDeclarationEncoding = false;
+        if (current.encoding !== undefined) {
+          for (const link of current.encoding) {
+            if (!isSchemaClass || link.to !== classTarget) {
+              visitCurrentAst(link.to);
+              inspectedDeclarationEncoding = true;
+            }
+          }
+        }
+        if (inspectedDeclarationEncoding) {
+          return;
+        }
+        if (isSchemaClass) {
+          if (
+            classTarget !== undefined &&
+            SchemaAST.isObjects(classTarget) &&
+            classTarget.propertySignatures.length === 0 &&
+            classTarget.indexSignatures.length === 0
+          ) {
+            return;
+          }
+        }
+        for (const typeParameter of current.typeParameters) {
+          visitCurrentAst(typeParameter);
+        }
+        return;
+      }
+      if (SchemaAST.isArrays(current)) {
+        for (const element of current.elements) {
+          visitCurrentAst(element);
+        }
+        for (const rest of current.rest) {
+          visitCurrentAst(rest);
+        }
+        return;
+      }
+      if (SchemaAST.isObjects(current)) {
+        // Effect erases unsupported record-key schemas inside Suspend to Objects without
+        // stable source metadata. Reject the ambiguous empty shape instead of silently
+        // accepting a schema whose JSON codec can skip record-value decoding.
+        // Non-empty erased record-key unions are indistinguishable from ordinary suspended
+        // structs at this boundary; Kafka schemas are trusted config and must avoid those.
+        if (current.propertySignatures.length === 0 && current.indexSignatures.length === 0) {
+          throw new Error("Suspended empty object schemas are not supported by Kafka JSON codecs");
+        }
+        for (const property of current.propertySignatures) {
+          visitCurrentAst(property.type);
+        }
+        for (const index of current.indexSignatures) {
+          visitCurrentAst(index.parameter);
+          visitCurrentAst(index.type);
+        }
+        return;
+      }
+      if (SchemaAST.isUnion(current)) {
+        for (const member of current.types) {
+          visitCurrentAst(member);
+        }
+        return;
+      }
+      if (SchemaAST.isTemplateLiteral(current)) {
+        for (const part of current.parts) {
+          visitCurrentAst(part);
+        }
+      }
+    };
+    visitCurrentAst(root);
+  };
+  const customDeclarationJsonCodecTargetAst = (current: object): unknown => {
+    const ast = Reflect.get(current, "ast");
+    if (!SchemaAST.isAST(ast) || !SchemaAST.isDeclaration(ast)) {
+      return undefined;
+    }
+    const getLink = declarationJsonLink(ast);
+    if (
+      typeof getLink !== "function" ||
+      isKnownEffectJsonDeclarationSchema(current, ast, getLink) ||
+      isDefaultSchemaClassDeclarationAst(ast)
+    ) {
+      return undefined;
+    }
+    const link = getLink(
+      ast.typeParameters.map((typeParameter) => Schema.make(SchemaAST.toEncoded(typeParameter))),
+    );
+    return Schema.toCodecJson(Schema.make(link.to)).ast;
+  };
+  const visitChild = (current: object, key: string): void => {
+    visit(Reflect.get(current, key));
+  };
+  const visitChildren = (current: object, key: string): void => {
+    const children = Reflect.get(current, key);
+    if (Array.isArray(children)) {
+      for (const child of children) {
+        visit(child);
+      }
+    }
+  };
+  const visitRecordChildren = (current: object, key: string): void => {
+    const children = Reflect.get(current, key);
+    if (isInspectableObject(children)) {
+      for (const child of Object.values(children)) {
+        visit(child);
+      }
+    }
+  };
+  const visit = (current: unknown): void => {
+    if (!isInspectableObject(current)) {
+      return;
+    }
+    const customJsonCodecTargetAst = customDeclarationJsonCodecTargetAst(current);
+    if (SchemaAST.isAST(customJsonCodecTargetAst)) {
+      validateCustomDeclarationJsonCodecTargetAst(customJsonCodecTargetAst, new Set());
+    }
+    const key = Reflect.get(current, "key");
+    const ast = Reflect.get(current, "ast");
+    if (SchemaAST.isAST(ast) && SchemaAST.isSuspend(ast)) {
+      visitAst(ast);
+    }
+    if (
+      SchemaAST.isAST(ast) &&
+      SchemaAST.isObjects(ast) &&
+      Object.hasOwn(current, "key") &&
+      (!isInspectableObject(key) || !isSupportedJsonObjectRecordKeySchema(key))
+    ) {
+      throw new Error("Unsupported record key schemas are not supported by Kafka JSON codecs");
+    }
+    visitChild(current, "key");
+    visitChild(current, "value");
+    visitChild(current, "schema");
+    visitChild(current, "from");
+    visitChild(current, "success");
+    visitChild(current, "failure");
+    visitChild(current, "error");
+    visitChild(current, "defect");
+    visitChildren(current, "members");
+    visitChildren(current, "elements");
+    visitChildren(current, "rest");
+    visitChildren(current, "records");
+    visitRecordChildren(current, "cases");
+    const fields = Reflect.get(current, "fields");
+    if (isInspectableObject(fields)) {
+      for (const fieldSchema of Object.values(fields)) {
+        visit(fieldSchema);
+      }
+    }
+  };
+  visit(schema);
+};
+
+const forceSuspendedJsonCodecBranches = (ast: SchemaAST.AST): void => {
+  const seen = new Set<SchemaAST.AST>();
+  const visit = (current: SchemaAST.AST): SchemaAST.AST => {
+    if (seen.has(current)) {
+      return current;
+    }
+    seen.add(current);
+    if (current.encoding !== undefined) {
+      for (const link of current.encoding) {
+        visit(link.to);
+      }
+    }
+    if (SchemaAST.isSuspend(current)) {
+      visit(current.thunk());
+      return current;
+    }
+    if (SchemaAST.isDeclaration(current)) {
+      for (const typeParameter of current.typeParameters) {
+        visit(typeParameter);
+      }
+      return current;
+    }
+    if (SchemaAST.isArrays(current)) {
+      for (const element of current.elements) {
+        visit(element);
+      }
+      for (const rest of current.rest) {
+        visit(rest);
+      }
+      return current;
+    }
+    if (SchemaAST.isObjects(current)) {
+      for (const property of current.propertySignatures) {
+        visit(property.type);
+      }
+      for (const index of current.indexSignatures) {
+        visit(index.parameter);
+        visit(index.type);
+      }
+      return current;
+    }
+    if (SchemaAST.isUnion(current)) {
+      for (const member of current.types) {
+        visit(member);
+      }
+      return current;
+    }
+    if (SchemaAST.isTemplateLiteral(current)) {
+      for (const part of current.parts) {
+        visit(part);
+      }
+      return current;
+    }
+    return current;
+  };
+  visit(ast);
+};
+
 const makeKafkaCodec = <A, E, Format extends string>(
   format: Format,
   decode: (input: KafkaCodecDecodeInput) => Effect.Effect<A, E>,
@@ -224,23 +876,48 @@ export const kafka = {
     ),
   json: <const SourceSchema extends RowSchema>(
     schema: SourceSchema & SupportedKafkaJsonSchema<SourceSchema>,
-  ): KafkaJsonCodec<SourceSchema> => ({
-    ...makeKafkaCodec<SourceSchema["Type"], KafkaDecodeError, "json">("json", (input) =>
-      Effect.gen(function* () {
-        const rowSchema: SourceSchema = schema;
-        const decodedJson = yield* Effect.try({
-          try: (): unknown => JSON.parse(utf8Decoder.decode(input.bytes)),
-          catch: (cause) => kafkaDecodeError("Failed to parse Kafka JSON payload", cause),
-        });
-        return yield* Schema.decodeUnknownEffect(rowSchema)(decodedJson).pipe(
-          Effect.mapError((cause) =>
-            kafkaDecodeError("Failed to decode Kafka JSON payload", cause),
-          ),
-        );
-      }),
-    ),
-    schema,
-  }),
+  ): KafkaJsonCodec<SourceSchema> => {
+    const jsonDecoder = (() => {
+      try {
+        rejectSuspendedRecordKeySchemas(schema);
+        forceSuspendedJsonCodecBranches(schema.ast);
+        const jsonCodec = Schema.toCodecJson(schema);
+        rejectSuspendedRecordKeySchemas(jsonCodec);
+        forceSuspendedJsonCodecBranches(jsonCodec.ast);
+        const decodeJsonRow = Schema.decodeUnknownEffect(jsonCodec);
+        return {
+          _tag: "valid",
+          decodeJsonRow,
+        } as const;
+      } catch (cause) {
+        return {
+          _tag: "invalid",
+          error: kafkaDecodeError("Kafka JSON schema is not JSON-compatible", cause),
+        } as const;
+      }
+    })();
+    return {
+      ...makeKafkaCodec<SourceSchema["Type"], KafkaDecodeError, "json">("json", (input) =>
+        Effect.gen(function* () {
+          if (jsonDecoder._tag === "invalid") {
+            return yield* Effect.fail(jsonDecoder.error);
+          }
+          const decodedJson = yield* Effect.try({
+            try: (): unknown => JSON.parse(utf8Decoder.decode(input.bytes)),
+            catch: (cause) => kafkaDecodeError("Failed to parse Kafka JSON payload", cause),
+          });
+          return yield* jsonDecoder
+            .decodeJsonRow(decodedJson)
+            .pipe(
+              Effect.mapError((cause) =>
+                kafkaDecodeError("Failed to decode Kafka JSON payload", cause),
+              ),
+            );
+        }),
+      ),
+      schema,
+    };
+  },
   protobuf: <const Proto extends DescMessage>(
     descriptor: Proto & SupportedKafkaProtobufInput<Proto>,
   ): KafkaProtobufCodec<Proto> => ({
