@@ -174,6 +174,14 @@ _Avoid_: Location string, environment, cluster unless discussing infrastructure
 The typed function that transforms a source message, key, region, schema, and metadata into a Topic Row for a View Server Topic.
 _Avoid_: Serializer, mapper when it obscures the target Topic Row contract
 
+**Kafka Delivery Contract**:
+The operational guarantee for Kafka ingestion. During a live process, a message is committed only after the mapped Topic Row is published into the Runtime Core; success health is recorded after commit. Across process restarts, the in-memory Runtime Core has no durable row checkpoint yet, so committed consumer-group resume is not a full rebuild strategy by itself.
+_Avoid_: Exactly-once claim, durable recovery, database replication
+
+**Kafka Consumer Group Assumption**:
+The current runtime starts one consumer per configured Region using the configured consumer group. It records assignments and lag for the current process, but does not yet implement a full rebalance/revoke recovery story or durable checkpoint handoff between consumers.
+_Avoid_: Clustered recovery, multi-consumer partition handoff
+
 **Publish**:
 A server-side mutation that inserts or replaces a Topic Row in a View Server Topic.
 _Avoid_: Browser write, send, emit
@@ -210,6 +218,8 @@ _Avoid_: Browser write, send, emit
 - A **Real View Server** and **In-Memory View Server** differ only by transport and ingress **Adapters**, not by query, storage, health, or subscription logic.
 - A **Source Topic** uses one **Kafka Source Codec** for its value and optionally one **Kafka Source Codec** for its key.
 - A **Source Topic** is mapped into a **View Server Topic** through a **Mapping**.
+- The current **Kafka Delivery Contract** is live-process at-least-once after successful publish-then-commit sequencing, but not durable restart recovery unless Kafka is replayed from an authoritative position.
+- A **Kafka Consumer Group Assumption** must be documented anywhere runtime options expose consumer-group resume behavior.
 - **Health Ledger** state feeds engine health, runtime health, transport health, and React health.
 
 ## Example Dialogue
@@ -231,3 +241,4 @@ _Avoid_: Browser write, send, emit
 - "subscription" is not a WebSocket connection; a single connection can carry multiple **Subscriptions**.
 - "health" should specify **Health Ledger**, engine health, runtime health, transport health, or React health when the owner matters.
 - "view" is overloaded in database/UI language; prefer **Live Query**, **Snapshot**, or **Grouped Query** depending on the intended concept.
+- "Kafka consumer group resume" is not equivalent to **View Server** recovery until durable checkpoints/WAL exist. If the runtime must rebuild rows after restart, replay Kafka from an authoritative position such as the beginning of the relevant Source Topics.

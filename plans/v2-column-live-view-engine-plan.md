@@ -454,7 +454,6 @@ type ViewServerHealth = {
       string,
       {
         status: "ready" | "degraded" | "starting";
-        topic: string;
         rowCount: number;
         liveRowCount: number;
         deletedRowCount: number;
@@ -463,10 +462,13 @@ type ViewServerHealth = {
         mutationsPerSecond: number;
         rowsPerSecond: number;
         pendingMutationBatches: number;
+        activeFallbackGroupedViews: number;
+        activeIncrementalGroupedViews: number;
         activeViews: number;
         activeSubscriptions: number;
         queuedEvents: number;
         maxQueueDepth: number;
+        backpressureEvents: number;
         memoryBytes: number;
         tombstoneCount: number;
         compactionPending: boolean;
@@ -500,12 +502,12 @@ type ViewServerHealth = {
             bytesPerSecond: number;
             decodedMessagesPerSecond: number;
             decodeFailuresPerSecond: number;
+            mappingFailuresPerSecond: number;
+            processingFailuresPerSecond: number;
             lastMessageAt: number | null;
             lastCommitAt: number | null;
-            consumerLagMessages: number | null;
-            consumerLagMs: number | null;
+            consumerLagMessages: bigint | null;
             lagSampledAt: number | null;
-            highWatermarkOffset: string | null;
             committedOffset: string | null;
             lastError: string | null;
           }
@@ -552,7 +554,7 @@ Kafka lag policy:
 - Sample lag on the same cached health cadence, around once per second.
 - Do not add per-message or per-batch broker round trips just to compute lag.
 - If precise lag is expensive, expose the best cheap approximation and mark the sample time with `lagSampledAt`.
-- If lag cannot be obtained cheaply, return `consumerLagMessages: null` / `consumerLagMs: null` rather than harming ingest throughput.
+- If lag cannot be obtained cheaply, return `consumerLagMessages: null` rather than harming ingest throughput.
 - Lag should never be computed in the row ingestion hot loop.
 
 Health snapshot cadence:
@@ -1103,16 +1105,21 @@ The runtime is in-memory first, but production needs an explicit recovery story.
 Initial policy:
 
 - Kafka is the source of truth.
-- On startup, runtime rebuilds in-memory state by consuming configured topics from the configured start position.
-- The default production start policy should be explicit, not magic:
+- Current implementation status: the runtime exposes a configured Kafka consumer group, consumes committed offsets with an earliest fallback for a new group, and commits only after successful publish; success health records the committed offset after commit.
+- Current restart contract: because Runtime Core rows are in memory and no durable WAL/checkpoint exists yet, committed consumer-group resume can skip rows that were committed before process death. It is a live-process ingestion mode, not a lossless full rebuild strategy.
+- Until WAL/checkpoints exist, production deployments that need rebuild-after-restart semantics must replay Kafka from an authoritative position, such as earliest offsets for the Source Topics or a dedicated rebuild group.
+- Future startup policy: runtime rebuilds in-memory state by consuming configured topics from a configured start position.
+- The future production start policy should be explicit, not magic:
 
 ```ts
 startFrom: "earliest" | "latest" | { committedConsumerGroup: string };
 ```
 
 - If `startFrom: "latest"`, health should clearly show topics are not backfilled.
+- If `startFrom: { committedConsumerGroup }`, health and docs must clearly state that this assumes durable View Server state already exists or that skipped committed rows are acceptable.
 - WAL/checkpoints are allowed later, but should not be required for the first production milestone.
 - The engine must expose hooks that would allow future checkpoints without changing `useLiveQuery`.
+- Current consumer-group assumption: one runtime process owns the configured Region consumers for the group. Full rebalance/revoke handoff, multiple active consumers in one group, and checkpoint handoff are roadmap items, not current guarantees.
 
 Recovery tests:
 
