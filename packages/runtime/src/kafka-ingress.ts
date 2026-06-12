@@ -408,9 +408,6 @@ export const closeKafkaMessageStreamFiber = Effect.fn("ViewServerRuntime.kafka.s
     fiber: Fiber.Fiber<void, ViewServerKafkaIngressError>,
     closeResources: Effect.Effect<void, ViewServerKafkaIngressError>,
   ) {
-    const interruptFiber = yield* Fiber.interrupt(fiber).pipe(
-      Effect.forkChild({ startImmediately: true }),
-    );
     const awaitTargetExit = Fiber.await(fiber).pipe(
       Effect.andThen((exit) =>
         Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
@@ -418,7 +415,14 @@ export const closeKafkaMessageStreamFiber = Effect.fn("ViewServerRuntime.kafka.s
           : Effect.void,
       ),
     );
-    yield* runAllFinalizers([closeResources, Fiber.join(interruptFiber), awaitTargetExit]);
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        yield* Effect.sync(() => {
+          fiber.interruptUnsafe();
+        });
+        yield* runAllFinalizers([closeResources, awaitTargetExit]);
+      }),
+    );
   },
 );
 

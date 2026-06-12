@@ -9,7 +9,7 @@ import {
 } from "@view-server/config";
 import { makeViewServerRuntimeCore } from "@view-server/runtime-core";
 import { Buffer } from "node:buffer";
-import { Cause, Effect, Exit, Fiber, Logger, References, Schema, Scope } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Logger, References, Schema, Scope } from "effect";
 import { makeViewServerKafkaHealthLedger } from "./kafka-health";
 import type { ViewServerKafkaHealthLedger } from "./kafka-health";
 import {
@@ -638,11 +638,56 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
-  it.effect("waits for Kafka stream fiber finalizers before close completes", () =>
+  it.effect("requests Kafka stream interruption before closing resources", () =>
     Effect.gen(function* () {
       let closeResourcesCount = 0;
       let streamFinalizerCount = 0;
+      const interruptStarted = yield* Deferred.make<void>();
+      const releaseStreamFinalizer = yield* Deferred.make<void>();
+      const resourceCloseObservedInterrupt = yield* Deferred.make<boolean>();
       const streamFiber = yield* Effect.never.pipe(
+        Effect.onInterrupt(() => Deferred.succeed(interruptStarted, undefined)),
+        Effect.ensuring(
+          Deferred.await(releaseStreamFinalizer).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                streamFinalizerCount += 1;
+              }),
+            ),
+          ),
+        ),
+        Effect.forkChild({ startImmediately: true }),
+      );
+
+      yield* closeKafkaMessageStreamFiber(
+        streamFiber,
+        Effect.gen(function* () {
+          closeResourcesCount += 1;
+          yield* Deferred.await(interruptStarted);
+          yield* Deferred.succeed(resourceCloseObservedInterrupt, true);
+          yield* Deferred.succeed(releaseStreamFinalizer, undefined);
+        }),
+      );
+
+      expect({
+        closeResourcesCount,
+        resourceCloseObservedInterrupt: yield* Deferred.await(resourceCloseObservedInterrupt),
+        streamFinalizerCount,
+      }).toStrictEqual({
+        closeResourcesCount: 1,
+        resourceCloseObservedInterrupt: true,
+        streamFinalizerCount: 1,
+      });
+    }),
+  );
+
+  it.effect("closes Kafka resources to unblock a pending stream before awaiting finalizers", () =>
+    Effect.gen(function* () {
+      let closeResourcesCount = 0;
+      let streamFinalizerCount = 0;
+      const unblockPendingStreamRead = yield* Deferred.make<void>();
+      const streamFiber = yield* Deferred.await(unblockPendingStreamRead).pipe(
+        Effect.uninterruptible,
         Effect.ensuring(
           Effect.sync(() => {
             streamFinalizerCount += 1;
@@ -653,10 +698,11 @@ describe("@view-server/runtime Kafka ingress internals", () => {
 
       yield* closeKafkaMessageStreamFiber(
         streamFiber,
-        Effect.sync(() => {
+        Effect.gen(function* () {
           closeResourcesCount += 1;
+          yield* Deferred.succeed(unblockPendingStreamRead, undefined);
         }),
-      );
+      ).pipe(Effect.timeout("1 second"));
 
       expect({
         closeResourcesCount,
@@ -666,6 +712,51 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         streamFinalizerCount: 1,
       });
     }),
+  );
+
+  it.effect(
+    "continues Kafka stream cleanup when close is interrupted during resource cleanup",
+    () =>
+      Effect.gen(function* () {
+        let closeResourcesCount = 0;
+        let streamFinalizerCount = 0;
+        const closeResourcesStarted = yield* Deferred.make<void>();
+        const releaseCloseResources = yield* Deferred.make<void>();
+        const unblockPendingStreamRead = yield* Deferred.make<void>();
+        const streamFiber = yield* Deferred.await(unblockPendingStreamRead).pipe(
+          Effect.uninterruptible,
+          Effect.ensuring(
+            Effect.sync(() => {
+              streamFinalizerCount += 1;
+            }),
+          ),
+          Effect.forkChild({ startImmediately: true }),
+        );
+        const closeFiber = yield* closeKafkaMessageStreamFiber(
+          streamFiber,
+          Effect.gen(function* () {
+            closeResourcesCount += 1;
+            yield* Deferred.succeed(closeResourcesStarted, undefined);
+            yield* Deferred.await(releaseCloseResources);
+            yield* Deferred.succeed(unblockPendingStreamRead, undefined);
+          }),
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+
+        yield* Deferred.await(closeResourcesStarted).pipe(Effect.timeout("1 second"));
+        const interruptCloseFiber = yield* Fiber.interrupt(closeFiber).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.succeed(releaseCloseResources, undefined);
+        yield* Fiber.join(interruptCloseFiber);
+
+        expect({
+          closeResourcesCount,
+          streamFinalizerCount,
+        }).toStrictEqual({
+          closeResourcesCount: 1,
+          streamFinalizerCount: 1,
+        });
+      }),
   );
 
   it.effect("waits for Kafka stream fiber finalizers when resource cleanup defects", () =>
