@@ -258,7 +258,7 @@ Preferred shape:
 
 ```ts
 // runtime.ts
-import { Effect } from "effect";
+import { NodeRuntime } from "@effect/platform-node";
 import {
   ordersBufProtoKey,
   ordersBufProtoValue,
@@ -323,7 +323,7 @@ export const runtime = viewServer.createRuntime({
   },
 });
 
-Effect.runPromise(runtime);
+NodeRuntime.runMain(runtime);
 ```
 
 ## In-Memory Browser/Test API
@@ -1080,7 +1080,7 @@ Do not defer the in-memory provider. It is a core production testing feature.
 
 Runtime must support:
 
-- `Effect.runPromise(runtime)` for server start.
+- `NodeRuntime.runMain(runtime)` for Node server entrypoints so process signals interrupt the main fiber and run Effect finalizers.
 - Graceful shutdown on interruption.
 - Stop Kafka consumers before destroying engine state.
 - Close WebSocket sessions and subscriptions.
