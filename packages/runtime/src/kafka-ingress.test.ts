@@ -269,7 +269,7 @@ describe("@view-server/runtime Kafka ingress", () => {
                     },
                   ],
                   totalRows: 2,
-                  version: 2,
+                  version: 1,
                 },
                 tradesSnapshot: {
                   status: "ready",
