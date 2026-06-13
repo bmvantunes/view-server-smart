@@ -548,13 +548,25 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
       try: () => Promise.resolve(message.commit()),
       catch: (cause) => kafkaMessageCommitError(region, sourceTopic, cause),
     }).pipe(
-      Effect.andThen(
-        health.messageDecoded(sourceTopic, region, {
-          bytes: messageBytes,
-          committedOffset: String(message.offset + 1n),
-          nowMillis,
-        }),
-      ),
+      Effect.matchEffect({
+        onFailure: (error) =>
+          health
+            .messageProcessingFailed(sourceTopic, region, {
+              bytes: messageBytes,
+              message: `${error.message}: ${messageFromUnknown(error.cause)}`,
+              nowMillis,
+            })
+            .pipe(
+              Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
+              Effect.andThen(Effect.fail(error)),
+            ),
+        onSuccess: () =>
+          health.messageDecoded(sourceTopic, region, {
+            bytes: messageBytes,
+            committedOffset: String(message.offset + 1n),
+            nowMillis,
+          }),
+      }),
       Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
     ),
   );
