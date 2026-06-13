@@ -61,6 +61,7 @@ import {
   selectedPredicateCandidateSlots,
 } from "./topic-predicate-candidate-index";
 import {
+  columnScalarEqualityKey,
   columnValue,
   createTopicColumnValues,
   createTopicColumnValuesFromArray,
@@ -334,6 +335,18 @@ it("derives topic column vectors from schema metadata and preserves slot mutatio
   expect(columnValue(decimalPrice, 0)).toStrictEqual(fromStringUnsafe("1.25"));
   expect(columnValue(decimalPrice, 1)).toBeUndefined();
   expect(generic.length).toBe(0);
+
+  expect(columnScalarEqualityKey(optionalPrice, 0)).toBe("number:1");
+  expect(columnScalarEqualityKey(optionalPrice, 1)).toBeUndefined();
+  expect(columnScalarEqualityKey(quantity, 0)).toBe("bigint:1");
+  expect(columnScalarEqualityKey(quantity, -1)).toBeUndefined();
+  expect(columnScalarEqualityKey(decimalPrice, 0)).toBe("bigDecimal:1.25");
+  expect(columnScalarEqualityKey(decimalPrice, 1)).toBeUndefined();
+
+  generic.set(0, "generic");
+  generic.set(1, { unsupported: true });
+  expect(columnScalarEqualityKey(generic, 0)).toBe("string:7:generic");
+  expect(columnScalarEqualityKey(generic, 1)).toBeUndefined();
 });
 
 it("keeps scalar range helpers exact for numeric runtime domains", () => {

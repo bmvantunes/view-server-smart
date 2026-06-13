@@ -1,4 +1,5 @@
 import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
+import { scalarEqualityKey } from "./row-values";
 import { isBigDecimal, type BigDecimal } from "effect/BigDecimal";
 
 export type TopicColumnKind = "generic" | "string" | "number" | "bigint" | "bigDecimal";
@@ -287,6 +288,29 @@ class BigDecimalTopicColumn implements MutableBigDecimalTopicColumnValues {
 }
 
 export const columnValue = (column: TopicColumnValues, slot: number): unknown => column.get(slot);
+
+export const columnScalarEqualityKey = (
+  column: TopicColumnValues,
+  slot: number,
+): string | undefined => {
+  if (column.kind === "string") {
+    const value = column.stringAt(slot);
+    return value === undefined ? undefined : scalarEqualityKey(value);
+  }
+  if (column.kind === "number") {
+    const value = column.numberAt(slot);
+    return value === undefined ? undefined : scalarEqualityKey(value);
+  }
+  if (column.kind === "bigint") {
+    const value = column.bigintAt(slot);
+    return value === undefined ? undefined : scalarEqualityKey(value);
+  }
+  if (column.kind === "bigDecimal") {
+    const value = column.bigDecimalAt(slot);
+    return value === undefined ? undefined : scalarEqualityKey(value);
+  }
+  return scalarEqualityKey(column.get(slot));
+};
 
 export const createTopicColumnValues = (
   field: string,

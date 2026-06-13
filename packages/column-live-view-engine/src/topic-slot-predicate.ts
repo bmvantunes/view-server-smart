@@ -1,14 +1,18 @@
 import type { TopicRawPredicateFilterPlan } from "./raw-predicate-plan";
 import type { TopicRawWindowScanPlan } from "./raw-window-scan";
 import type { TopicRowEntry } from "./row-scan";
-import { scalarEqualityKey, valuesEqual } from "./row-values";
+import { valuesEqual } from "./row-values";
 import {
   columnValueDoesNotEqual,
   compareExactRangeColumnValue,
   compareRangeColumnValue,
   isComparableRangeValue,
 } from "./topic-range-value";
-import { columnValue, type TopicColumnValues } from "./topic-column-vector";
+import {
+  columnScalarEqualityKey,
+  columnValue,
+  type TopicColumnValues,
+} from "./topic-column-vector";
 import { equals as bigDecimalEquals, isBigDecimal } from "effect/BigDecimal";
 
 type RowObject = object;
@@ -134,7 +138,7 @@ const slotFilterMatcher = (
       if (filter.valueKeys !== undefined) {
         const valueKeys = filter.valueKeys;
         return (slot) => {
-          const key = scalarEqualityKey(columnValue(column, slot));
+          const key = columnScalarEqualityKey(column, slot);
           return key !== undefined && valueKeys.has(key);
         };
       }

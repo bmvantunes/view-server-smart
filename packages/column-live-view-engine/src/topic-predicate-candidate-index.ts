@@ -10,7 +10,7 @@ import {
   rangeBoundsAreEmpty,
 } from "./topic-ordered-window";
 import { scalarEqualityKey } from "./row-values";
-import { columnValue, type TopicColumnValues } from "./topic-column-vector";
+import { columnScalarEqualityKey, type TopicColumnValues } from "./topic-column-vector";
 
 type RangePredicateFilter = TopicRawPredicateFilterPlan & {
   readonly operator: "gt" | "gte" | "lt" | "lte";
@@ -247,7 +247,7 @@ const unionScalarPredicateSlots = (
     missingBuckets.set(key, new Set());
   }
   for (let slot = 0; slot < column.length; slot += 1) {
-    const key = scalarEqualityKey(columnValue(column, slot));
+    const key = columnScalarEqualityKey(column, slot);
     if (key === undefined) {
       continue;
     }
@@ -295,7 +295,7 @@ const ensureScalarPredicateBucket = (
 
   const bucket = new Set<number>();
   for (let slot = 0; slot < column.length; slot += 1) {
-    if (scalarEqualityKey(columnValue(column, slot)) !== valueKey) {
+    if (columnScalarEqualityKey(column, slot) !== valueKey) {
       continue;
     }
     bucket.add(slot);
@@ -370,7 +370,7 @@ const addSlotToScalarPredicateIndex = (
   if (column === undefined) {
     return;
   }
-  const key = scalarEqualityKey(columnValue(column, slot));
+  const key = columnScalarEqualityKey(column, slot);
   if (key === undefined || !index.indexedKeys.has(key)) {
     return;
   }
@@ -389,7 +389,7 @@ const removeSlotFromScalarPredicateIndex = (
   if (column === undefined) {
     return;
   }
-  const key = scalarEqualityKey(columnValue(column, slot));
+  const key = columnScalarEqualityKey(column, slot);
   if (key === undefined || !index.indexedKeys.has(key)) {
     return;
   }
