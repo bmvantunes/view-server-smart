@@ -1,4 +1,5 @@
 import type {
+  KafkaStartFromHealth,
   TopicRuntimeHealth,
   TransportHealth,
   ViewServerHealthSummaryRow,
@@ -46,6 +47,24 @@ const TransportHealthSchema: Schema.Codec<TransportHealth> = Schema.Struct({
   lastError: StringOrNull,
 });
 
+const KafkaStartFromHealthSchema: Schema.Codec<KafkaStartFromHealth> = Schema.Union([
+  Schema.Struct({
+    consumerGroupId: Schema.String,
+    mode: Schema.Literal("earliest"),
+    fallbackMode: Schema.Literal("earliest"),
+  }),
+  Schema.Struct({
+    consumerGroupId: Schema.String,
+    mode: Schema.Literal("latest"),
+    fallbackMode: Schema.Literal("latest"),
+  }),
+  Schema.Struct({
+    consumerGroupId: Schema.String,
+    mode: Schema.Literal("committed"),
+    fallbackMode: Schema.Literals(["earliest", "latest", "fail"]),
+  }),
+]);
+
 export const ViewServerHealthSchema = Schema.Struct({
   status: Schema.Literals(["ready", "degraded", "starting", "stopping"]),
   version: Schema.Number,
@@ -55,6 +74,7 @@ export const ViewServerHealthSchema = Schema.Struct({
   }),
   kafka: Schema.optionalKey(
     Schema.Struct({
+      startFrom: KafkaStartFromHealthSchema,
       regions: Schema.Record(
         Schema.String,
         Schema.Struct({

@@ -1,5 +1,6 @@
 import type {
   KafkaRegionHealth,
+  KafkaStartFromHealth,
   KafkaTopicHealth,
   KafkaTopicRegionHealth,
   ViewServerHealth,
@@ -256,6 +257,7 @@ const mergeRuntimeStatus = <Topics extends ViewServerRuntimeTopicDefinitions>(
 export const makeViewServerKafkaHealthLedger = <
   const Topics extends ViewServerRuntimeTopicDefinitions,
 >(input: {
+  readonly startFrom: KafkaStartFromHealth;
   readonly regions: Readonly<Record<string, string>>;
   readonly topics: Readonly<
     Record<
@@ -324,6 +326,7 @@ export const makeViewServerKafkaHealthLedger = <
     }
 
     return {
+      startFrom: input.startFrom,
       regions: regionHealth,
       topics: topicHealth,
     };

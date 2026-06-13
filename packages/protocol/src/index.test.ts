@@ -103,6 +103,12 @@ const topicHealth = {
   compactionPending: false,
 } as const;
 
+const kafkaStartFromHealth = {
+  consumerGroupId: "view-server-test",
+  fallbackMode: "latest",
+  mode: "latest",
+} as const;
+
 const wireHealth = {
   status: "ready",
   version: 1,
@@ -262,6 +268,7 @@ describe("@view-server/protocol", () => {
           },
         },
         kafka: {
+          startFrom: kafkaStartFromHealth,
           regions: {},
           topics: {
             orders: {
@@ -308,9 +315,26 @@ describe("@view-server/protocol", () => {
         2,
       );
       const encodedLagHealth = yield* Schema.encodeUnknownEffect(ViewServerHealthSchema)(lagHealth);
+      expect(lagHealth.kafka?.startFrom).toStrictEqual(kafkaStartFromHealth);
       expect(encodedLagHealth.kafka?.topics["orders"]?.regions["usa"]?.consumerLagMessages).toBe(
         largeLag.toString(),
       );
+      expect(encodedLagHealth.kafka?.startFrom).toStrictEqual(kafkaStartFromHealth);
+      const impossibleKafkaStartFromHealth = yield* Effect.flip(
+        Schema.decodeUnknownEffect(ViewServerHealthSchema)({
+          ...wireHealth,
+          kafka: {
+            startFrom: {
+              consumerGroupId: "view-server-invalid-latest-fail",
+              fallbackMode: "fail",
+              mode: "latest",
+            },
+            regions: {},
+            topics: {},
+          },
+        }),
+      );
+      expect(String(impossibleKafkaStartFromHealth)).toContain("fallbackMode");
 
       const snapshot = yield* Schema.decodeUnknownEffect(ViewServerWireEventSchema)({
         type: "snapshot",
@@ -2514,6 +2538,7 @@ describe("@view-server/protocol", () => {
       const validKafkaViewServerTopic = yield* viewServerDecodeHealth(viewServer, {
         ...wireHealth,
         kafka: {
+          startFrom: kafkaStartFromHealth,
           regions: {},
           topics: {
             ordersSource: {
@@ -2533,6 +2558,7 @@ describe("@view-server/protocol", () => {
         viewServerDecodeHealth(viewServer, {
           ...wireHealth,
           kafka: {
+            startFrom: kafkaStartFromHealth,
             regions: {},
             topics: {
               ordersSource: {

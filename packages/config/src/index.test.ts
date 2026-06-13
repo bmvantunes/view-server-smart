@@ -28,6 +28,7 @@ import {
   type KafkaCodec,
   type KafkaMappingInput,
   type KafkaMessageMetadata,
+  type KafkaStartFromHealth,
   type KafkaCodecError,
   type KafkaCodecType,
   type KafkaDecodeError,
@@ -1771,6 +1772,55 @@ const runtimeTopicHealth = (
   memoryBytes: 0,
   tombstoneCount: 0,
   compactionPending: false,
+});
+
+const kafkaStartFromHealth = {
+  consumerGroupId: "view-server-test",
+  fallbackMode: "earliest",
+  mode: "committed",
+} as const;
+
+const kafkaLatestStartFromHealth = {
+  consumerGroupId: "view-server-latest",
+  fallbackMode: "latest",
+  mode: "latest",
+} satisfies KafkaStartFromHealth;
+
+const kafkaEarliestStartFromHealth = {
+  consumerGroupId: "view-server-earliest",
+  fallbackMode: "earliest",
+  mode: "earliest",
+} satisfies KafkaStartFromHealth;
+
+const kafkaCommittedFailStartFromHealth = {
+  consumerGroupId: "view-server-committed",
+  fallbackMode: "fail",
+  mode: "committed",
+} satisfies KafkaStartFromHealth;
+
+describe("Kafka health start policy", () => {
+  it("types only normalized start policy combinations", () => {
+    expectTypeOf<{
+      readonly consumerGroupId: "view-server-invalid-latest-fail";
+      readonly fallbackMode: "fail";
+      readonly mode: "latest";
+    }>().not.toMatchTypeOf<KafkaStartFromHealth>();
+    expect(kafkaLatestStartFromHealth).toStrictEqual({
+      consumerGroupId: "view-server-latest",
+      fallbackMode: "latest",
+      mode: "latest",
+    });
+    expect(kafkaEarliestStartFromHealth).toStrictEqual({
+      consumerGroupId: "view-server-earliest",
+      fallbackMode: "earliest",
+      mode: "earliest",
+    });
+    expect(kafkaCommittedFailStartFromHealth).toStrictEqual({
+      consumerGroupId: "view-server-committed",
+      fallbackMode: "fail",
+      mode: "committed",
+    });
+  });
 });
 
 type LiveQueryCall<Topics extends object> = {
@@ -4216,6 +4266,7 @@ describe("public type surface", () => {
         },
       },
       kafka: {
+        startFrom: kafkaStartFromHealth,
         regions: {
           usa: {
             status: "connected",
@@ -4326,6 +4377,7 @@ describe("public type surface", () => {
         },
       },
       kafka: {
+        startFrom: kafkaStartFromHealth,
         regions: {
           usa: {
             status: "connected",
@@ -5475,6 +5527,7 @@ const assertCompileTimeContracts = () => {
     websocketPort: 8080,
     kafka: {
       consumerGroupId: "view-server-type-test",
+      startFrom: "latest",
       regions: {
         usa: "broker-a:9092",
       },
@@ -5686,6 +5739,70 @@ const assertCompileTimeContracts = () => {
     websocketPort: 8080,
     kafka: {
       consumerGroupId: "view-server-type-test",
+      startFrom: {
+        committedConsumerGroup: "view-server-existing-group",
+        fallback: "fail",
+      },
+      regions: {
+        usa: "broker-a:9092",
+      },
+      topics: {},
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    kafka: {
+      consumerGroupId: "view-server-type-test",
+      // @ts-expect-error committed Kafka start config requires committedConsumerGroup.
+      startFrom: {
+        fallback: "earliest",
+      },
+      regions: {
+        usa: "broker-a:9092",
+      },
+      topics: {},
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    kafka: {
+      consumerGroupId: "view-server-type-test",
+      // @ts-expect-error runtime Kafka startFrom only accepts earliest, latest, or committed group config.
+      startFrom: "middle",
+      regions: {
+        usa: "broker-a:9092",
+      },
+      topics: {},
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    kafka: {
+      consumerGroupId: "view-server-type-test",
+      startFrom: {
+        committedConsumerGroup: "view-server-existing-group",
+        // @ts-expect-error committed Kafka start fallback must be earliest, latest, or fail.
+        fallback: "middle",
+      },
+      regions: {
+        usa: "broker-a:9092",
+      },
+      topics: {},
+    },
+  });
+
+  viewServer.defineRuntimeOptions({
+    websocketPort: 8080,
+    kafka: {
+      consumerGroupId: "view-server-type-test",
+      startFrom: {
+        committedConsumerGroup: "view-server-existing-group",
+        // @ts-expect-error committed Kafka start config rejects unknown keys.
+        committedConsumerGroupId: "view-server-typo",
+      },
       regions: {
         usa: "broker-a:9092",
       },

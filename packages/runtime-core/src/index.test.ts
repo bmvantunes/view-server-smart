@@ -463,6 +463,11 @@ describe("@view-server/runtime-core", () => {
           ...health,
           status: "degraded",
           kafka: {
+            startFrom: {
+              consumerGroupId: "view-server-test",
+              fallbackMode: "earliest",
+              mode: "committed",
+            },
             regions: {
               local: {
                 status: "connected",

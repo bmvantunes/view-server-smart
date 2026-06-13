@@ -51,6 +51,7 @@ export const makeDefaultRuntimeDependencies = <
   makeServer: makeViewServerWebSocketServer,
   makeKafkaHealthLedger: (_config, options) =>
     makeViewServerKafkaHealthLedger({
+      startFrom: options.consume,
       regions: options.regions,
       topics: Object.fromEntries(
         Object.entries(options.topics).map(([sourceTopic, topic]) => [

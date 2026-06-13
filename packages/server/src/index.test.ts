@@ -123,6 +123,12 @@ const edgeViewServer = defineViewServerConfig({
 
 const createServerTestRuntime = createViewServerRuntimeCore;
 
+const kafkaStartFromHealth = {
+  consumerGroupId: "view-server-test",
+  fallbackMode: "latest",
+  mode: "latest",
+} as const;
+
 type OrderRow = typeof Order.Type;
 type TradeRow = typeof Trade.Type;
 type QuoteRow = typeof Quote.Type;
@@ -561,6 +567,7 @@ describe("@view-server/server", () => {
             Effect.succeed({
               ...baseHealth,
               kafka: {
+                startFrom: kafkaStartFromHealth,
                 regions: {},
                 topics: {
                   source_orders: {
@@ -598,6 +605,7 @@ describe("@view-server/server", () => {
         ...baseHealth,
         status: "degraded",
         kafka: {
+          startFrom: kafkaStartFromHealth,
           regions: {},
           topics: {
             source_orders: {
@@ -653,6 +661,7 @@ describe("@view-server/server", () => {
         ...baseHealth,
         status: "degraded",
         kafka: {
+          startFrom: kafkaStartFromHealth,
           regions: {},
           topics: {
             source_orders: {
@@ -1519,6 +1528,7 @@ describe("@view-server/server", () => {
             Effect.succeed({
               ...baseHealth,
               kafka: {
+                startFrom: kafkaStartFromHealth,
                 regions: {},
                 topics: {
                   source_orders: {

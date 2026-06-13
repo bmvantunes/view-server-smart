@@ -1,6 +1,11 @@
 import type { ViewServerRuntimeCoreOptionsFor } from "@view-server/runtime-core";
 import type { ViewServerWebSocketServerOptions } from "@view-server/server";
-import type { RuntimeRegions, RuntimeValue } from "@view-server/config";
+import type {
+  KafkaStartFromHealth,
+  RuntimeRegions,
+  RuntimeValue,
+  ViewServerKafkaStartFrom,
+} from "@view-server/config";
 import { Config, Effect } from "effect";
 import type {
   ViewServerKafkaRuntimeOptions,
@@ -22,12 +27,43 @@ export type ResolvedViewServerKafkaRuntimeOptions<
   Regions extends RuntimeRegions = RuntimeRegions,
 > = {
   readonly consumerGroupId: string;
+  readonly startFrom: ViewServerKafkaStartFrom;
+  readonly consume: KafkaStartFromHealth;
   readonly regions: Record<string, string>;
   readonly topics: ViewServerKafkaRuntimeOptions<Topics, Regions>["topics"];
 };
 
 const resolveRuntimeValue = <A>(value: RuntimeValue<A>): Effect.Effect<A, Config.ConfigError> =>
   Config.isConfig(value) ? value : Effect.succeed(value);
+
+const defaultKafkaStartFrom = (consumerGroupId: string): ViewServerKafkaStartFrom => ({
+  committedConsumerGroup: consumerGroupId,
+});
+
+const normalizeKafkaConsumePolicy = (
+  consumerGroupId: string,
+  startFrom: ViewServerKafkaStartFrom,
+): ResolvedViewServerKafkaRuntimeOptions<ViewServerRuntimeTopicDefinitions>["consume"] => {
+  if (startFrom === "earliest") {
+    return {
+      consumerGroupId,
+      fallbackMode: "earliest",
+      mode: "earliest",
+    };
+  }
+  if (startFrom === "latest") {
+    return {
+      consumerGroupId,
+      fallbackMode: "latest",
+      mode: "latest",
+    };
+  }
+  return {
+    consumerGroupId: startFrom.committedConsumerGroup,
+    fallbackMode: startFrom.fallback ?? "earliest",
+    mode: "committed",
+  };
+};
 
 const resolveKafkaOptions: <
   const Topics extends ViewServerRuntimeTopicDefinitions,
@@ -46,9 +82,12 @@ const resolveKafkaOptions: <
     for (const [region, bootstrap] of entries) {
       regions[region] = bootstrap;
     }
+    const startFrom = options.startFrom ?? defaultKafkaStartFrom(options.consumerGroupId);
     return {
       consumerGroupId: options.consumerGroupId,
+      consume: normalizeKafkaConsumePolicy(options.consumerGroupId, startFrom),
       regions,
+      startFrom,
       topics: options.topics,
     };
   });

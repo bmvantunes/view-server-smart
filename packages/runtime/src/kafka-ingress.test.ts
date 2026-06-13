@@ -289,6 +289,11 @@ describe("@view-server/runtime Kafka ingress", () => {
                   trades: 1,
                 },
                 kafka: {
+                  startFrom: {
+                    consumerGroupId,
+                    fallbackMode: "earliest",
+                    mode: "committed",
+                  },
                   regions: nullRecord({
                     local: {
                       status: "connected",

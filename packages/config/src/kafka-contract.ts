@@ -1314,6 +1314,13 @@ type ValidateKafkaTopics<
   >;
 };
 
+export type ViewServerKafkaCommittedStartFrom = {
+  readonly committedConsumerGroup: string;
+  readonly fallback?: "earliest" | "latest" | "fail";
+};
+
+export type ViewServerKafkaStartFrom = "earliest" | "latest" | ViewServerKafkaCommittedStartFrom;
+
 export type RuntimeOptions<
   Topics extends KafkaTopicSchemaRegistry,
   Regions extends RuntimeRegions,
@@ -1322,6 +1329,7 @@ export type RuntimeOptions<
   readonly websocketPort: RuntimeValue<number>;
   readonly kafka: {
     readonly consumerGroupId: string;
+    readonly startFrom?: ViewServerKafkaStartFrom;
     readonly regions: Regions;
     readonly topics: ValidateKafkaTopics<Topics, Regions, KafkaTopics>;
   };
@@ -1331,6 +1339,7 @@ export type RuntimeOptionsCandidate = {
   readonly websocketPort: RuntimeValue<number>;
   readonly kafka: {
     readonly consumerGroupId: string;
+    readonly startFrom?: ViewServerKafkaStartFrom;
     readonly regions: RuntimeRegions;
     readonly topics: Record<string, object>;
   };
@@ -1360,10 +1369,26 @@ type RejectExtraRuntimeKafkaKeys<Options, Shape> = Options extends {
     : unknown
   : unknown;
 
+type RejectExtraRuntimeKafkaStartFromKeys<Options> = Options extends {
+  readonly kafka: {
+    readonly startFrom: infer CandidateStartFrom;
+  };
+}
+  ? CandidateStartFrom extends object
+    ? {
+        readonly kafka: {
+          readonly startFrom: CandidateStartFrom &
+            RejectExtraKeys<CandidateStartFrom, ViewServerKafkaCommittedStartFrom>;
+        };
+      }
+    : unknown
+  : unknown;
+
 export type ExactRuntimeOptions<Topics extends KafkaTopicSchemaRegistry, Options> = Options &
   ValidateRuntimeOptions<Topics, Options> &
   RejectExtraKeys<Options, ValidateRuntimeOptions<Topics, Options>> &
-  RejectExtraRuntimeKafkaKeys<Options, ValidateRuntimeOptions<Topics, Options>>;
+  RejectExtraRuntimeKafkaKeys<Options, ValidateRuntimeOptions<Topics, Options>> &
+  RejectExtraRuntimeKafkaStartFromKeys<Options>;
 
 export type KafkaTopicHelper<Topics extends KafkaTopicSchemaRegistry> = <
   const Regions extends RuntimeRegions,
