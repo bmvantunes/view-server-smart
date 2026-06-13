@@ -1,3 +1,4 @@
+import { isBigDecimal, Order as orderBigDecimal } from "effect/BigDecimal";
 import { compareQueryValue, stableQueryValueString } from "./query-value";
 import { compileRawPredicate, type CompiledRawPredicate } from "./raw-predicate-compiler";
 import type { RuntimeRawQuery } from "./raw-query-decoder";
@@ -26,6 +27,11 @@ export type RawQueryPlan<Row extends RowObject, ResultRow extends RowObject> = {
   readonly compare: (left: TopicRowEntry<Row>, right: TopicRowEntry<Row>) => number;
   readonly project: (row: Row) => ResultRow;
   readonly window: RawQueryPlanWindow;
+};
+
+type RawRowOrderColumn<Row extends RowObject> = {
+  readonly compareRows: (left: Row, right: Row) => number;
+  readonly direction: "asc" | "desc";
 };
 
 const rawQueryShapeCacheKey = (query: RuntimeRawQuery): string => {
@@ -60,16 +66,104 @@ export const rawQueryPlanWindow = (
 const rawQueryPlanWindowFromQuery = (query: RuntimeRawQuery): RawQueryPlanWindow =>
   rawQueryPlanWindow(query.offset ?? 0, query.limit);
 
+const compareRowFieldValues = <Row extends RowObject>(
+  left: Row,
+  right: Row,
+  field: string,
+): number => compareQueryValue(fieldValue(left, field), fieldValue(right, field));
+
+const compareStringRowFieldValues = <Row extends RowObject>(
+  left: Row,
+  right: Row,
+  field: string,
+): number => {
+  const leftValue = fieldValue(left, field);
+  const rightValue = fieldValue(right, field);
+  if (typeof leftValue === "string" && typeof rightValue === "string") {
+    return Number(leftValue > rightValue) - Number(leftValue < rightValue);
+  }
+  return compareQueryValue(leftValue, rightValue);
+};
+
+const compareNumberRowFieldValues = <Row extends RowObject>(
+  left: Row,
+  right: Row,
+  field: string,
+): number => {
+  const leftValue = fieldValue(left, field);
+  const rightValue = fieldValue(right, field);
+  if (
+    typeof leftValue === "number" &&
+    typeof rightValue === "number" &&
+    Number.isFinite(leftValue) &&
+    Number.isFinite(rightValue)
+  ) {
+    return leftValue === rightValue ? 0 : leftValue < rightValue ? -1 : 1;
+  }
+  return compareQueryValue(leftValue, rightValue);
+};
+
+const compareBigintRowFieldValues = <Row extends RowObject>(
+  left: Row,
+  right: Row,
+  field: string,
+): number => {
+  const leftValue = fieldValue(left, field);
+  const rightValue = fieldValue(right, field);
+  if (typeof leftValue === "bigint" && typeof rightValue === "bigint") {
+    return leftValue === rightValue ? 0 : leftValue < rightValue ? -1 : 1;
+  }
+  return compareQueryValue(leftValue, rightValue);
+};
+
+const compareBigDecimalRowFieldValues = <Row extends RowObject>(
+  left: Row,
+  right: Row,
+  field: string,
+): number => {
+  const leftValue = fieldValue(left, field);
+  const rightValue = fieldValue(right, field);
+  if (isBigDecimal(leftValue) && isBigDecimal(rightValue)) {
+    return orderBigDecimal(leftValue, rightValue);
+  }
+  return compareQueryValue(leftValue, rightValue);
+};
+
+const rawRowOrderColumnComparator = <Row extends RowObject>(
+  metadata: RawQueryCompilerMetadata,
+  field: string,
+): ((left: Row, right: Row) => number) => {
+  if (metadata.stringFieldNames.has(field)) {
+    return (left, right) => compareStringRowFieldValues(left, right, field);
+  }
+  if (metadata.numberFieldNames.has(field)) {
+    return (left, right) => compareNumberRowFieldValues(left, right, field);
+  }
+  if (metadata.bigintFieldNames.has(field)) {
+    return (left, right) => compareBigintRowFieldValues(left, right, field);
+  }
+  if (metadata.bigDecimalFieldNames.has(field)) {
+    return (left, right) => compareBigDecimalRowFieldValues(left, right, field);
+  }
+  return (left, right) => compareRowFieldValues(left, right, field);
+};
+
+const compiledRawRowOrder = <Row extends RowObject>(
+  metadata: RawQueryCompilerMetadata,
+  orderBy: ReadonlyArray<TopicRawOrderByPlan>,
+): ReadonlyArray<RawRowOrderColumn<Row>> =>
+  orderBy.map((order) => ({
+    compareRows: rawRowOrderColumnComparator<Row>(metadata, order.field),
+    direction: order.direction,
+  }));
+
 const compareRows = <Row extends RowObject>(
   left: TopicRowEntry<Row>,
   right: TopicRowEntry<Row>,
-  orderBy: ReadonlyArray<TopicRawOrderByPlan>,
+  orderBy: ReadonlyArray<RawRowOrderColumn<Row>>,
 ): number => {
   for (const order of orderBy) {
-    const comparison = compareQueryValue(
-      fieldValue(left.row, order.field),
-      fieldValue(right.row, order.field),
-    );
+    const comparison = order.compareRows(left.row, right.row);
     if (comparison !== 0) {
       return order.direction === "asc" ? comparison : -comparison;
     }
@@ -98,6 +192,7 @@ export const makeRawQueryPlan = <Row extends RowObject, ResultRow extends RowObj
   query: RuntimeRawQuery,
 ): RawQueryPlan<Row, ResultRow> => {
   const orderBy = query.orderBy ?? [];
+  const rowOrderBy = compiledRawRowOrder<Row>(metadata, orderBy);
   const selectedFields = [...query.select];
   const predicate = compileRawPredicate<Row>(metadata, query.where);
   return {
@@ -106,7 +201,7 @@ export const makeRawQueryPlan = <Row extends RowObject, ResultRow extends RowObj
     predicate,
     orderBy,
     storageOrderBy: orderBy,
-    compare: (left, right) => compareRows(left, right, orderBy),
+    compare: (left, right) => compareRows(left, right, rowOrderBy),
     project: (row) => projectCompiledRow(row, selectedFields),
     window: rawQueryPlanWindowFromQuery(query),
   };
