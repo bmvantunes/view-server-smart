@@ -40,6 +40,12 @@ import { rawWindowSlotComparator } from "./topic-raw-ordered-window-index";
 
 type RowObject = object;
 
+type RawProjectionColumn = {
+  readonly column: MutableTopicColumnValues;
+  readonly field: string;
+  readonly shouldClone: boolean;
+};
+
 type AppendBatchReservation = {
   reserveFrom(startIndex: number): void;
 };
@@ -57,6 +63,10 @@ export class TopicRowStorage {
   private readonly columns = new Map<string, MutableTopicColumnValues>();
   private readonly columnWritePlan: Array<MutableTopicColumnValues> = [];
   private readonly columnWriteFields: Array<string> = [];
+  private readonly rawProjectionPlans = new WeakMap<
+    ReadonlyArray<string>,
+    ReadonlyArray<RawProjectionColumn>
+  >();
   private readonly reservableColumns: Array<MutableTopicColumnValues> = [];
   private readonly orderedSlotIndexes = new Map<string, OrderedSlotIndex>();
   private readonly scalarPredicateIndexes = createScalarPredicateIndexes();
@@ -232,14 +242,11 @@ export class TopicRowStorage {
     return scanTopicRawWindow(this.rawWindowScanState, plan);
   }
 
-  projectRawRow(slot: number, selectedFields: ReadonlyArray<string>): RowObject {
+  private projectRawRow(slot: number, selectedFields: ReadonlyArray<string>): RowObject {
     const projected: Record<string, unknown> = {};
-    for (const field of selectedFields) {
-      const column = this.columns.get(field)!;
-      projected[field] =
-        column.kind === "generic"
-          ? cloneUnknown(columnValue(column, slot))
-          : columnValue(column, slot);
+    for (const projection of this.rawProjectionPlan(selectedFields)) {
+      const value = columnValue(projection.column, slot);
+      projected[projection.field] = projection.shouldClone ? cloneUnknown(value) : value;
     }
     return projected;
   }
@@ -286,6 +293,26 @@ export class TopicRowStorage {
         fieldValue(prepared.row, this.columnWriteFields[index]!),
       );
     }
+  }
+
+  private rawProjectionPlan(
+    selectedFields: ReadonlyArray<string>,
+  ): ReadonlyArray<RawProjectionColumn> {
+    const cached = this.rawProjectionPlans.get(selectedFields);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const plan = selectedFields.map((field) => {
+      const column = this.columns.get(field)!;
+      return {
+        column,
+        field,
+        shouldClone: column.kind === "generic",
+      };
+    });
+    this.rawProjectionPlans.set(selectedFields, plan);
+    return plan;
   }
 
   private createAppendBatchReservation(
