@@ -79,6 +79,11 @@ import {
   TopicStore,
 } from "./topic-store";
 import { topicStoreRawQueryMetadata, topicStoreReadModel } from "./topic-store-state";
+import {
+  columnValueDoesNotEqual,
+  compareExactRangeColumnValue,
+  compareRangeColumnValue,
+} from "./topic-range-value";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -254,6 +259,7 @@ it("derives topic column vectors from schema metadata and preserves slot mutatio
   const Metric = Schema.Struct({
     finitePrice: Schema.Finite,
     id: Schema.String,
+    decimalPrice: Schema.BigDecimal,
     optionalPrice: Schema.optionalKey(Schema.Number),
     price: Schema.Number,
     quantity: Schema.BigInt,
@@ -294,21 +300,53 @@ it("derives topic column vectors from schema metadata and preserves slot mutatio
   status.copySlot(0, 1);
   status.pop();
 
-  expect(status.kind).toBe("generic");
+  expect(status.kind).toBe("string");
   expect(status.length).toBe(1);
-  expect(columnValue(status, 0)).toStrictEqual({ structured: true });
+  expect(columnValue(status, 0)).toBeUndefined();
+  expect(columnValue(status, -1)).toBeUndefined();
+  expect(columnValue(status, 1)).toBeUndefined();
 
   status.clear();
   expect(status.length).toBe(0);
 
   const optionalPrice = createTopicColumnValuesFromArray("optionalPrice", metadata, [1, undefined]);
   const quantity = createTopicColumnValuesFromArray("quantity", metadata, [1n, 2n]);
+  const decimalPrice = createTopicColumnValuesFromArray("decimalPrice", metadata, [
+    fromStringUnsafe("1.25"),
+    "not-a-decimal",
+  ]);
 
   expect(optionalPrice.kind).toBe("number");
-  expect(quantity.kind).toBe("generic");
+  expect(quantity.kind).toBe("bigint");
+  expect(decimalPrice.kind).toBe("bigDecimal");
   expect(columnValue(optionalPrice, 0)).toBe(1);
   expect(columnValue(optionalPrice, 1)).toBeUndefined();
   expect(columnValue(quantity, 0)).toBe(1n);
+  expect(columnValue(quantity, -1)).toBeUndefined();
+  expect(columnValue(decimalPrice, 0)).toStrictEqual(fromStringUnsafe("1.25"));
+  expect(columnValue(decimalPrice, 1)).toBeUndefined();
+});
+
+it("keeps scalar range helpers exact for numeric runtime domains", () => {
+  expect(compareExactRangeColumnValue(1, Number.NaN)).toBeUndefined();
+  expect(compareExactRangeColumnValue(2n, 2n)).toBe(0);
+  expect(compareExactRangeColumnValue(1n, 2n)).toBe(-1);
+  expect(compareExactRangeColumnValue(3n, 2n)).toBe(1);
+  expect(compareExactRangeColumnValue(fromStringUnsafe("2"), fromStringUnsafe("1"))).toBe(1);
+  expect(compareExactRangeColumnValue("2", 2)).toBeUndefined();
+
+  expect(compareRangeColumnValue(Number.POSITIVE_INFINITY, 1)).toBeUndefined();
+  expect(compareRangeColumnValue(2n, 2n)).toBe(0);
+  expect(compareRangeColumnValue(1n, 2n)).toBe(-1);
+  expect(compareRangeColumnValue(3n, 2n)).toBe(1);
+  expect(compareRangeColumnValue(fromStringUnsafe("1"), fromStringUnsafe("2"))).toBe(-1);
+  expect(compareRangeColumnValue("2", 2)).toBeUndefined();
+
+  expect(columnValueDoesNotEqual(fromStringUnsafe("1"), fromStringUnsafe("2"))).toBe(true);
+  expect(columnValueDoesNotEqual(fromStringUnsafe("1"), 1)).toBe(false);
+  expect(columnValueDoesNotEqual(1, Number.NaN)).toBe(false);
+  expect(columnValueDoesNotEqual(true, false)).toBe(true);
+  expect(columnValueDoesNotEqual("1", 1)).toBe(false);
 });
 
 const numericRowField = (row: object, field: string): number => {
@@ -8142,7 +8180,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     const priceColumn = state.columns.get("price")!;
     const statusColumn = state.columns.get("status")!;
     expect(priceColumn.kind).toBe("number");
-    expect(statusColumn.kind).toBe("generic");
+    expect(statusColumn.kind).toBe("string");
 
     const warmRangeIndex = scanTopicRawWindow(state, {
       predicate: {
@@ -8340,6 +8378,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
         ["id", rows.map((row) => row.id)],
         ["symbol", rows.map((row) => row.symbol)],
         ["quantity", rows.map((row) => row.quantity)],
+        ["price", rows.map((row) => row.price)],
       ]),
       orderedSlotIndexes: new Map(),
       rawQueryMetadata: metadata,
@@ -8348,7 +8387,9 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     };
 
     const quantityColumn = state.columns.get("quantity")!;
-    expect(quantityColumn.kind).toBe("generic");
+    const priceColumn = state.columns.get("price")!;
+    expect(quantityColumn.kind).toBe("bigint");
+    expect(priceColumn.kind).toBe("bigDecimal");
 
     const boundedReplacement = scanTopicRawWindow(state, {
       predicate: {
@@ -8383,6 +8424,65 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
     expect(exactBigIntRange.keys).toStrictEqual(["equal", "high"]);
     expect(exactBigIntRange.totalRows).toBe(2);
+
+    const exactBigDecimalRange = scanTopicRawWindow(
+      {
+        ...state,
+        columns: makeColumns(metadata, [
+          ["id", rows.map((row) => row.id)],
+          ["symbol", rows.map((row) => row.symbol)],
+          ["quantity", rows.map((row) => row.quantity)],
+          ["price", [fromStringUnsafe("5"), fromStringUnsafe("10"), fromStringUnsafe("20")]],
+        ]),
+      },
+      {
+        predicate: {
+          filters: [{ field: "price", operator: "gte", value: fromStringUnsafe("10") }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("exact BigDecimal range candidates should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      },
+    );
+
+    expect(exactBigDecimalRange.keys).toStrictEqual(["equal", "high"]);
+    expect(exactBigDecimalRange.totalRows).toBe(2);
+
+    const orderedBigDecimalRange = scanTopicRawWindow(
+      {
+        ...state,
+        columns: makeColumns(metadata, [
+          ["id", rows.map((row) => row.id)],
+          ["symbol", rows.map((row) => row.symbol)],
+          ["quantity", rows.map((row) => row.quantity)],
+          ["price", [fromStringUnsafe("20"), fromStringUnsafe("10"), fromStringUnsafe("5")]],
+        ]),
+      },
+      {
+        predicate: {
+          filters: [{ field: "price", operator: "gte", value: fromStringUnsafe("5") }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        storageOrderBy: [{ field: "price", direction: "asc" }],
+        matches: () => {
+          throw new Error("ordered exact BigDecimal range should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: 3,
+      },
+    );
+
+    expect(orderedBigDecimalRange.keys).toStrictEqual(["high", "equal", "low"]);
+    expect(orderedBigDecimalRange.totalRows).toBe(3);
 
     const nonExactBigIntRange = scanTopicRawWindow(state, {
       predicate: {
@@ -8428,6 +8528,48 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
     expect(nonExactBigIntLowerRange.keys).toStrictEqual(["high", "missing-quantity"]);
     expect(nonExactBigIntLowerRange.totalRows).toBe(2);
+
+    const GenericName = Schema.Struct({
+      id: Schema.String,
+      label: Schema.Unknown,
+    });
+    const genericMetadata = rawQueryCompilerMetadata(GenericName);
+    const genericRows = [
+      { id: "match", label: "customer-a" },
+      { id: "miss", label: "account-a" },
+    ];
+    const genericStartsWith = scanTopicRawWindow(
+      {
+        columns: makeColumns(genericMetadata, [
+          ["id", genericRows.map((row) => row.id)],
+          ["label", genericRows.map((row) => row.label)],
+        ]),
+        orderedSlotIndexes: new Map(),
+        rawQueryMetadata: genericMetadata,
+        scalarPredicateIndexes: createScalarPredicateIndexes(),
+        slots: genericRows.map((row) => ({
+          key: row.id,
+          row,
+        })),
+      },
+      {
+        predicate: {
+          filters: [{ field: "label", operator: "startsWith", value: "customer-" }],
+          callbackRequired: false,
+          callbackSkippable: true,
+        },
+        orderBy: [],
+        matches: () => {
+          throw new Error("exact generic startsWith should not call row callbacks");
+        },
+        compare: (left, right) => left.key.localeCompare(right.key),
+        offset: 0,
+        limit: undefined,
+      },
+    );
+
+    expect(genericStartsWith.keys).toStrictEqual(["match"]);
+    expect(genericStartsWith.totalRows).toBe(1);
 
     const orderedCandidate = scanTopicRawWindow(state, {
       predicate: {

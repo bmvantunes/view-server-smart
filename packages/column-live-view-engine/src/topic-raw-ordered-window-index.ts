@@ -3,6 +3,7 @@ import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
 import type { TopicRawOrderByPlan, TopicRawWindowScanPlan } from "./raw-window-scan";
 import type { TopicRowEntry } from "./row-scan";
 import { columnValue, type TopicColumnValues } from "./topic-column-vector";
+import { Order as orderBigDecimal } from "effect/BigDecimal";
 import {
   distinctOrderedEqualityValues,
   equalityValueSatisfiesRangeBounds,
@@ -169,6 +170,13 @@ const compareSlotColumnValues = (
   left: number,
   right: number,
 ): number => {
+  if (column.kind === "string") {
+    const leftValue = column.stringAt(left);
+    const rightValue = column.stringAt(right);
+    if (leftValue !== undefined && rightValue !== undefined) {
+      return Number(leftValue > rightValue) - Number(leftValue < rightValue);
+    }
+  }
   if (column.kind === "number") {
     const leftValue = column.numberAt(left);
     const rightValue = column.numberAt(right);
@@ -179,6 +187,20 @@ const compareSlotColumnValues = (
       Number.isFinite(rightValue)
     ) {
       return leftValue === rightValue ? 0 : leftValue < rightValue ? -1 : 1;
+    }
+  }
+  if (column.kind === "bigint") {
+    const leftValue = column.bigintAt(left);
+    const rightValue = column.bigintAt(right);
+    if (leftValue !== undefined && rightValue !== undefined) {
+      return leftValue === rightValue ? 0 : leftValue < rightValue ? -1 : 1;
+    }
+  }
+  if (column.kind === "bigDecimal") {
+    const leftValue = column.bigDecimalAt(left);
+    const rightValue = column.bigDecimalAt(right);
+    if (leftValue !== undefined && rightValue !== undefined) {
+      return orderBigDecimal(leftValue, rightValue);
     }
   }
   return compareQueryValue(columnValue(column, left), columnValue(column, right));

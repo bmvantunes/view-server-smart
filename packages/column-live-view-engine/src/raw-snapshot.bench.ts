@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, bench, describe } from "vitest";
 import { defineViewServerConfig } from "@view-server/config";
 import { Cause, Effect, Exit, Schema, Scope, Stream } from "effect";
+import { fromStringUnsafe } from "effect/BigDecimal";
 import {
   createColumnLiveViewEngine,
   type ColumnLiveViewEngine,
@@ -28,6 +29,8 @@ const Order = Schema.Struct({
   customerId: Schema.String,
   status: Schema.Literals(["open", "closed", "cancelled"]),
   price: Schema.Finite,
+  quantity: Schema.BigInt,
+  decimalPrice: Schema.BigDecimal,
   region: Schema.String,
   updatedAt: Schema.Number,
 });
@@ -171,6 +174,8 @@ const seedOrder = (index: number): OrderRow => ({
   customerId: `customer-${index % 100_000}`,
   status: orderStatus(index),
   price: index % 1_000_000,
+  quantity: BigInt(index % 1_000_000),
+  decimalPrice: fromStringUnsafe(String(index % 1_000_000)),
   region: region(index),
   updatedAt: index,
 });
@@ -180,6 +185,8 @@ const deltaOrder = (index: number): OrderRow => ({
   customerId: `customer-delta-${index % 100_000}`,
   status: "open",
   price: 1_000_000 + (index % 10_000),
+  quantity: BigInt(1_000_000 + (index % 10_000)),
+  decimalPrice: fromStringUnsafe(String(1_000_000 + (index % 10_000))),
   region: "emea",
   updatedAt: 1_000_000_000 + index,
 });
@@ -286,6 +293,8 @@ afterAll(async () => {
       "ordered equality filter + indexed seek",
       "ordered in filter + indexed seek",
       "range filter + top-k sort",
+      "bigint range filter + indexed seek",
+      "BigDecimal range filter + indexed seek",
       "selective range filter + fallback top-k sort",
       "compound filter + top-k sort",
       "filtered totalRows via zero-row window",
@@ -400,6 +409,40 @@ describe(`raw snapshot and delta engine benchmark: ${profile.rowCount} rows`, ()
             price: { gte: 500_000 },
           },
           orderBy: [{ field: "price", direction: "asc" }],
+          limit: 100,
+        }),
+      );
+    },
+    benchOptions,
+  );
+
+  bench(
+    "bigint range filter + indexed seek",
+    async () => {
+      await Effect.runPromise(
+        profileEngine(profile).snapshot("orders", {
+          select: ["id", "quantity", "status", "updatedAt"],
+          where: {
+            quantity: { gte: 500_000n },
+          },
+          orderBy: [{ field: "quantity", direction: "asc" }],
+          limit: 100,
+        }),
+      );
+    },
+    benchOptions,
+  );
+
+  bench(
+    "BigDecimal range filter + indexed seek",
+    async () => {
+      await Effect.runPromise(
+        profileEngine(profile).snapshot("orders", {
+          select: ["id", "decimalPrice", "status", "updatedAt"],
+          where: {
+            decimalPrice: { gte: fromStringUnsafe("500000") },
+          },
+          orderBy: [{ field: "decimalPrice", direction: "asc" }],
           limit: 100,
         }),
       );

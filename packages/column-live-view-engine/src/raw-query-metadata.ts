@@ -17,6 +17,7 @@ export type RawQueryCompilerMetadata = {
   readonly numericFieldNames: ReadonlySet<string>;
   readonly numberFieldNames: ReadonlySet<string>;
   readonly bigintFieldNames: ReadonlySet<string>;
+  readonly bigDecimalFieldNames: ReadonlySet<string>;
   readonly rangeValueKinds: ReadonlyMap<string, ReadonlySet<RangeValueKind>>;
 };
 
@@ -77,6 +78,13 @@ const isPureNumberAst = (ast: SchemaAST.AST): boolean => {
   return SchemaAST.isUnion(ast) && ast.types.length > 0 && ast.types.every(isPureNumberAst);
 };
 
+const isPureBigDecimalAst = (ast: SchemaAST.AST): boolean => {
+  if (isBigDecimalAst(ast)) {
+    return true;
+  }
+  return SchemaAST.isUnion(ast) && ast.types.length > 0 && ast.types.every(isPureBigDecimalAst);
+};
+
 const schemaFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> =>
   isSchemaWithFields(schema) ? new Set(Object.keys(schema.fields)) : new Set();
 
@@ -135,6 +143,22 @@ const schemaBigintFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<str
     if (viewServerSchemaFieldMetadata(fieldSchema).isPureBigInt) {
       fields.add(field);
     }
+  }
+  return fields;
+};
+
+const schemaBigDecimalFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+  if (!isSchemaWithFields(schema)) {
+    return new Set();
+  }
+
+  const fields = new Set<string>();
+  for (const [field, fieldSchema] of Object.entries(schema.fields)) {
+    const ast = schemaAst(fieldSchema);
+    if (ast === undefined || !isPureBigDecimalAst(ast)) {
+      continue;
+    }
+    fields.add(field);
   }
   return fields;
 };
@@ -213,5 +237,6 @@ export const rawQueryCompilerMetadata = (
   numericFieldNames: schemaNumericFieldNames(schema),
   numberFieldNames: schemaNumberFieldNames(schema),
   bigintFieldNames: schemaBigintFieldNames(schema),
+  bigDecimalFieldNames: schemaBigDecimalFieldNames(schema),
   rangeValueKinds: schemaRangeValueKinds(schema),
 });
