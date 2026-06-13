@@ -179,7 +179,7 @@ The typed function that transforms a source message, key, region, schema, and me
 _Avoid_: Serializer, mapper when it obscures the target Topic Row contract
 
 **Kafka Delivery Contract**:
-The operational guarantee for Kafka ingestion. During a live process, a message is committed only after the mapped Topic Row is published into the Runtime Core; success health is recorded after commit. Kafka startup uses an explicit `startFrom` policy: `earliest`, `latest`, or a committed consumer group with fallback; health exposes the normalized consumer group, mode, and fallback mode actually used. Across process restarts, the in-memory Runtime Core has no durable row checkpoint yet, so committed consumer-group resume is not a full rebuild strategy by itself.
+The operational guarantee for Kafka ingestion. During a live process, Kafka messages are decoded and mapped, grouped into short microbatches, published into Runtime Core with `publishMany`, and committed only after the relevant Runtime Core publish succeeds. Success health is recorded after commit. A failed publish leaves the original Kafka messages uncommitted. If a batch contains a bad later message after earlier messages were decoded, the decoded prefix is published and committed before the decode/mapping failure is surfaced. Kafka startup uses an explicit `startFrom` policy: `earliest`, `latest`, or a committed consumer group with fallback; health exposes the normalized consumer group, mode, and fallback mode actually used. Across process restarts, the in-memory Runtime Core has no durable row checkpoint yet, so committed consumer-group resume is not a full rebuild strategy by itself.
 _Avoid_: Exactly-once claim, durable recovery, database replication
 
 **Kafka Consumer Group Assumption**:
