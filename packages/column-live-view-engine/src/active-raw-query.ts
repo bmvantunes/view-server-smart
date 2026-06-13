@@ -9,7 +9,8 @@ import {
 } from "./raw-query-plan";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 import type { QueryEvaluation } from "./query-result";
-import type { TopicRawWindowScan, TopicRawWindowScanResult } from "./raw-window-scan";
+import type { TopicRawWindowScan } from "./raw-window-scan";
+import type { TopicRowEntry } from "./row-scan";
 
 type RowObject = object;
 
@@ -29,18 +30,21 @@ type RawQueryExecutionWindowSlot = {
   refs: number;
 };
 
-type ActiveQueryBaseEvaluation<Row extends RowObject> = TopicRawWindowScanResult<Row> & {
+type ActiveQueryBaseEvaluation<Row extends RowObject> = {
+  readonly keys: ReadonlyArray<string>;
   readonly retainedWindowFilled: boolean;
+  readonly totalRows: number;
   readonly version: number;
+  readonly window: ReadonlyArray<RetainedWindowEntry<Row>>;
 };
 
-type RetainedWindowEntry = {
+type RetainedWindowEntry<Row extends RowObject = RowObject> = TopicRowEntry<Row> & {
   readonly key: string;
-  readonly row: RowObject;
+  readonly row: Row;
 };
 
-type RetainedReplacementResult = {
-  readonly window: ReadonlyArray<RetainedWindowEntry>;
+type RetainedReplacementResult<Row extends RowObject> = {
+  readonly window: ReadonlyArray<RetainedWindowEntry<Row>>;
 };
 
 const retainedWindowFilled = (
@@ -73,26 +77,27 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
 ): ActiveQueryBaseEvaluation<Row> => {
   const version = store.version();
   const scanResult = store.scanRawWindow(rawQueryWindowScanPlan(compiled.plan, queryWindow));
+  const window = scanResult.window.map((entry) => ({
+    key: entry.key,
+    row: entry.row,
+  }));
   return {
     ...scanResult,
-    retainedWindowFilled: retainedWindowFilled(
-      scanResult.window,
-      scanResult.totalRows,
-      queryWindow,
-    ),
+    retainedWindowFilled: retainedWindowFilled(window, scanResult.totalRows, queryWindow),
     version,
+    window,
   };
 };
 
-const replaceRetainedMatchingEntry = (
-  windowEntries: ReadonlyArray<RetainedWindowEntry>,
+const replaceRetainedMatchingEntry = <Row extends RowObject>(
+  windowEntries: ReadonlyArray<RetainedWindowEntry<Row>>,
   key: string,
-  row: RowObject,
-  compare: (left: RetainedWindowEntry, right: RetainedWindowEntry) => number,
+  row: Row,
+  compare: (left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number,
   retainedLimit: number | undefined,
-): RetainedReplacementResult | undefined => {
+): RetainedReplacementResult<Row> | undefined => {
   let previousIndex = -1;
-  let previousEntry: RetainedWindowEntry | undefined;
+  let previousEntry: RetainedWindowEntry<Row> | undefined;
   for (const [index, entry] of windowEntries.entries()) {
     if (entry.key === key) {
       previousIndex = index;
@@ -103,7 +108,7 @@ const replaceRetainedMatchingEntry = (
   if (previousEntry === undefined) {
     return undefined;
   }
-  const nextEntry = { key, row };
+  const nextEntry: RetainedWindowEntry<Row> = { key, row };
   if (retainedLimit !== undefined && compare(nextEntry, previousEntry) > 0) {
     return undefined;
   }
@@ -131,7 +136,7 @@ const updateBaseEvaluationFromRetainedChanges = (
   let totalRows = evaluation.totalRows;
   let windowEntries = evaluation.window;
   let removedRetainedEntry = false;
-  const insertedWindowEntries = new Map<string, { readonly key: string; readonly row: object }>();
+  const insertedWindowEntries = new Map<string, RetainedWindowEntry>();
   for (const batch of batches) {
     for (const change of batch.changes) {
       const previousMatches =
@@ -173,7 +178,9 @@ const updateBaseEvaluationFromRetainedChanges = (
         if (previousMatches) {
           totalRows -= 1;
           insertedWindowEntries.delete(change.key);
-          const removedWindowEntries = windowEntries.filter((entry) => entry.key !== change.key);
+          const removedWindowEntries: ReadonlyArray<RetainedWindowEntry> = windowEntries.filter(
+            (entry) => entry.key !== change.key,
+          );
           if (removedWindowEntries.length !== windowEntries.length) {
             windowEntries = removedWindowEntries;
             removedRetainedEntry = true;
@@ -256,12 +263,13 @@ const updateBaseEvaluationFromRetainedChanges = (
 };
 
 const projectBaseEvaluation = <Row extends RowObject, ResultRow extends RowObject>(
+  store: TopicRawWindowScan<Row>,
   compiled: CompiledRawQuery<Row, ResultRow>,
   evaluation: ActiveQueryBaseEvaluation<Row>,
 ): QueryEvaluation<ResultRow> => {
   const window = evaluation.window.map((entry) => ({
     key: entry.key,
-    row: compiled.plan.project(entry.row),
+    row: projectRetainedEntry(store, compiled, entry),
   }));
 
   return {
@@ -274,6 +282,7 @@ const projectBaseEvaluation = <Row extends RowObject, ResultRow extends RowObjec
 };
 
 const projectWindowEvaluation = <Row extends RowObject, ResultRow extends RowObject>(
+  store: TopicRawWindowScan<Row>,
   compiled: CompiledRawQuery<Row, ResultRow>,
   evaluation: ActiveQueryBaseEvaluation<Row>,
 ): QueryEvaluation<ResultRow> => {
@@ -284,7 +293,7 @@ const projectWindowEvaluation = <Row extends RowObject, ResultRow extends RowObj
   const sourceWindow = evaluation.window.slice(compiled.plan.window.offset, end);
   const window = sourceWindow.map((entry) => ({
     key: entry.key,
-    row: compiled.plan.project(entry.row),
+    row: projectRetainedEntry(store, compiled, entry),
   }));
 
   return {
@@ -300,14 +309,39 @@ export const evaluateRawQuery = <Row extends RowObject, ResultRow extends RowObj
   store: TopicRawWindowScan<Row> & { readonly version: () => number },
   compiled: CompiledRawQuery<Row, ResultRow>,
 ): QueryEvaluation<ResultRow> =>
-  projectBaseEvaluation(compiled, evaluateBaseQuery(store, compiled));
+  projectBaseEvaluation(store, compiled, evaluateBaseQuery(store, compiled));
+
+function projectStoreSlot<Row extends RowObject, ResultRow extends RowObject>(
+  projectRawRow: (slot: number, selectedFields: ReadonlyArray<string>) => RowObject,
+  compiled: CompiledRawQuery<Row, ResultRow>,
+  slot: number,
+): ResultRow;
+function projectStoreSlot(
+  projectRawRow: (slot: number, selectedFields: ReadonlyArray<string>) => RowObject,
+  compiled: CompiledRawQuery<RowObject, RowObject>,
+  slot: number,
+): RowObject {
+  return projectRawRow(slot, compiled.plan.selectedFields);
+}
+
+const projectRetainedEntry = <Row extends RowObject, ResultRow extends RowObject>(
+  store: TopicRawWindowScan<Row>,
+  compiled: CompiledRawQuery<Row, ResultRow>,
+  entry: RetainedWindowEntry<Row>,
+): ResultRow => {
+  const slot = store.slotForKey?.(entry.key);
+  const projectRawRow = store.projectRawRow;
+  return slot === undefined || projectRawRow === undefined
+    ? compiled.plan.project(entry.row)
+    : projectStoreSlot(projectRawRow, compiled, slot);
+};
 
 const leaseRawQueryExecution = <ResultRow extends RowObject>(
   store: ActiveQueryStoreState,
   execution: ActiveQueryBaseExecution,
   compiled: CompiledRawQuery<object, ResultRow>,
 ): RawQueryExecution<ResultRow> => {
-  const latestEvaluation = () => projectWindowEvaluation(compiled, execution.latest());
+  const latestEvaluation = () => projectWindowEvaluation(store, compiled, execution.latest());
 
   return {
     initial: (queryId) => snapshotEvent(store, queryId, latestEvaluation()),

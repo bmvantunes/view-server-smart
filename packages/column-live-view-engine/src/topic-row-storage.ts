@@ -9,8 +9,12 @@ import type {
 import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-window-scan";
 import type { OrderedSlotIndex } from "./topic-ordered-window";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
-import { fieldValue } from "./row-values";
-import { createTopicColumnValues, type MutableTopicColumnValues } from "./topic-column-vector";
+import { cloneUnknown, fieldValue } from "./row-values";
+import {
+  columnValue,
+  createTopicColumnValues,
+  type MutableTopicColumnValues,
+} from "./topic-column-vector";
 import {
   addSlotToScalarPredicateIndexes,
   createScalarPredicateIndexes,
@@ -85,10 +89,12 @@ export class TopicRowStorage {
       activeQueries: createActiveQueryRegistry(),
       topic,
       changesSince: (version) => this.changesSince(version),
+      projectRawRow: (slot, selectedFields) => this.projectRawRow(slot, selectedFields),
       releaseChanges: () => this.releaseChanges(),
       retainChanges: () => this.retainChanges(),
       scanRows: (visitor) => this.scanRows(visitor),
       scanRawWindow: (plan) => this.scanRawWindow(plan),
+      slotForKey: (key) => this.slotForKey(key),
       version: () => this.versionValue,
     };
   }
@@ -210,6 +216,18 @@ export class TopicRowStorage {
 
   scanRawWindow(plan: TopicRawWindowScanPlan<object>): TopicRawWindowScanResult<object> {
     return scanTopicRawWindow(this.rawWindowScanState, plan);
+  }
+
+  projectRawRow(slot: number, selectedFields: ReadonlyArray<string>): RowObject {
+    const projected: Record<string, unknown> = {};
+    for (const field of selectedFields) {
+      projected[field] = cloneUnknown(columnValue(this.columns.get(field)!, slot));
+    }
+    return projected;
+  }
+
+  slotForKey(key: string): number | undefined {
+    return this.keyToSlot.get(key);
   }
 
   prepareRow = Effect.fn("ColumnLiveViewEngine.topicRowStorage.row.prepare")(function* <

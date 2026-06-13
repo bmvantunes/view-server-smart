@@ -605,6 +605,38 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
     }),
   );
 
+  it.effect("projects selected scalar fields after slot compaction", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+
+      yield* engine.publishMany("positions", [
+        position("deleted", "AAPL", 1n, "1.25", true),
+        position("kept", "MSFT", 2n, "2.50", false),
+      ]);
+      yield* engine.delete("positions", "deleted");
+
+      const snapshot = yield* engine.snapshot("positions", {
+        select: ["id", "symbol", "active", "quantity", "price"],
+        where: {
+          symbol: "MSFT",
+        },
+        orderBy: [{ field: "quantity", direction: "desc" }],
+        limit: 1,
+      });
+
+      expect(snapshot.rows).toStrictEqual([
+        {
+          active: false,
+          id: "kept",
+          price: fromStringUnsafe("2.50"),
+          quantity: 2n,
+          symbol: "MSFT",
+        },
+      ]);
+      expect(snapshot.totalRows).toBe(1);
+    }),
+  );
+
   it.effect("returns exact totalRows while windowing a sorted raw snapshot", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
