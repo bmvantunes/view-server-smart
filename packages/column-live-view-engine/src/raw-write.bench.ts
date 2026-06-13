@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, bench, describe } from "vitest";
 import { defineViewServerConfig } from "@view-server/config";
 import { Effect, Schema } from "effect";
+import { fromStringUnsafe } from "effect/BigDecimal";
 import { createColumnLiveViewEngine, type ColumnLiveViewEngine } from "./index";
 import {
   backpressureCountFromEngineHealth,
@@ -23,6 +24,8 @@ const Order = Schema.Struct({
   customerId: Schema.String,
   status: Schema.Literals(["open", "closed", "cancelled"]),
   price: Schema.Finite,
+  quantity: Schema.BigInt,
+  decimalPrice: Schema.BigDecimal,
   region: Schema.String,
   updatedAt: Schema.Number,
 });
@@ -185,6 +188,8 @@ const seedOrder = (index: number): OrderRow => ({
   customerId: `customer-${index % 100_000}`,
   status: orderStatus(index),
   price: index % 1_000_000,
+  quantity: BigInt(index % 1_000_000),
+  decimalPrice: fromStringUnsafe(String(index % 1_000_000)),
   region: region(index),
   updatedAt: index,
 });
@@ -194,6 +199,8 @@ const generatedOrder = (prefix: string, index: number, generation: number): Orde
   customerId: `customer-${index % 100_000}`,
   status: orderStatus(index + generation),
   price: (index + generation) % 1_000_000,
+  quantity: BigInt((index + generation) % 1_000_000),
+  decimalPrice: fromStringUnsafe(String((index + generation) % 1_000_000)),
   region: region(index + generation),
   updatedAt: 1_000_000_000 + generation + index,
 });
@@ -222,7 +229,15 @@ const seedEngine = Effect.fn("ColumnLiveViewEngine.bench.rawWrite.seed")(functio
 
 const warmReadPathState = Effect.fn("ColumnLiveViewEngine.bench.rawWrite.warmReadPathState")(
   function* (engine: Engine) {
-    const select = ["id", "customerId", "price", "status", "updatedAt"] as const;
+    const select = [
+      "id",
+      "customerId",
+      "price",
+      "quantity",
+      "decimalPrice",
+      "status",
+      "updatedAt",
+    ] as const;
     yield* engine.snapshot("orders", {
       select,
       where: {
@@ -244,6 +259,24 @@ const warmReadPathState = Effect.fn("ColumnLiveViewEngine.bench.rawWrite.warmRea
         status: { eq: "open" },
       },
       orderBy: [{ field: "price", direction: "asc" }],
+      limit: 50,
+    });
+    yield* engine.snapshot("orders", {
+      select,
+      where: {
+        quantity: { gte: 0n },
+        status: { eq: "open" },
+      },
+      orderBy: [{ field: "quantity", direction: "asc" }],
+      limit: 50,
+    });
+    yield* engine.snapshot("orders", {
+      select,
+      where: {
+        decimalPrice: { gte: fromStringUnsafe("0") },
+        status: { eq: "open" },
+      },
+      orderBy: [{ field: "decimalPrice", direction: "asc" }],
       limit: 50,
     });
   },
@@ -371,6 +404,8 @@ describe(`raw write engine benchmark: ${profile.rowCount} rows`, () => {
         await Effect.runPromise(
           engine.patch("orders", `order-${offset}`, {
             price: generation + offset,
+            quantity: BigInt(generation + offset),
+            decimalPrice: fromStringUnsafe(String(generation + offset)),
             updatedAt: 2_000_000_000 + generation + offset,
           }),
         );

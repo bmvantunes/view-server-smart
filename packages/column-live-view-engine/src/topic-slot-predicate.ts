@@ -9,6 +9,7 @@ import {
   isComparableRangeValue,
 } from "./topic-range-value";
 import { columnValue, type TopicColumnValues } from "./topic-column-vector";
+import { equals as bigDecimalEquals, isBigDecimal } from "effect/BigDecimal";
 
 type RowObject = object;
 
@@ -80,17 +81,49 @@ const slotFilterMatcher = (
 
   switch (filter.operator) {
     case "eq": {
+      if (column.kind === "string" && typeof filter.value === "string") {
+        return (slot) => column.stringAt(slot) === filter.value;
+      }
       if (column.kind === "number" && typeof filter.value === "number") {
         return (slot) => Object.is(column.numberAt(slot), filter.value);
+      }
+      if (column.kind === "bigint" && typeof filter.value === "bigint") {
+        return (slot) => column.bigintAt(slot) === filter.value;
+      }
+      if (column.kind === "bigDecimal" && isBigDecimal(filter.value)) {
+        const expected = filter.value;
+        return (slot) => {
+          const value = column.bigDecimalAt(slot);
+          return value !== undefined && bigDecimalEquals(value, expected);
+        };
       }
       return (slot) => valuesEqual(columnValue(column, slot), filter.value);
     }
     case "neq": {
       if (exact) {
+        if (column.kind === "string" && typeof filter.value === "string") {
+          return (slot) => {
+            const value = column.stringAt(slot);
+            return value !== undefined && value !== filter.value;
+          };
+        }
         if (column.kind === "number" && typeof filter.value === "number") {
           return (slot) => {
             const value = column.numberAt(slot);
             return value !== undefined && !Object.is(value, filter.value);
+          };
+        }
+        if (column.kind === "bigint" && typeof filter.value === "bigint") {
+          return (slot) => {
+            const value = column.bigintAt(slot);
+            return value !== undefined && value !== filter.value;
+          };
+        }
+        if (column.kind === "bigDecimal" && isBigDecimal(filter.value)) {
+          const expected = filter.value;
+          return (slot) => {
+            const value = column.bigDecimalAt(slot);
+            return value !== undefined && !bigDecimalEquals(value, expected);
           };
         }
         return (slot) => columnValueDoesNotEqual(columnValue(column, slot), filter.value);
@@ -115,6 +148,9 @@ const slotFilterMatcher = (
         return () => true;
       }
       const prefix = filter.value;
+      if (column.kind === "string") {
+        return (slot) => column.stringAt(slot)?.startsWith(prefix) === true;
+      }
       return (slot) => {
         const value = columnValue(column, slot);
         return typeof value === "string" && value.startsWith(prefix);
@@ -146,6 +182,14 @@ const rangeSlotFilterMatcher = (
   if (numberRangeMatcher !== undefined) {
     return numberRangeMatcher;
   }
+  const bigintRangeMatcher = bigintColumnRangeMatcher(column, filter, exact);
+  if (bigintRangeMatcher !== undefined) {
+    return bigintRangeMatcher;
+  }
+  const bigDecimalRangeMatcher = bigDecimalColumnRangeMatcher(column, filter, exact);
+  if (bigDecimalRangeMatcher !== undefined) {
+    return bigDecimalRangeMatcher;
+  }
 
   if (exact) {
     return (slot) => {
@@ -161,6 +205,50 @@ const rangeSlotFilterMatcher = (
     const comparison = compareRangeColumnValue(columnValue(column, slot), filter.value);
     return comparison === undefined || rangeComparisonMatches(filter.operator, comparison);
   };
+};
+
+const bigintColumnRangeMatcher = (
+  column: TopicColumnValues,
+  filter: RangePredicateFilter,
+  exact: boolean,
+): SlotFilterMatcher | undefined => {
+  if (column.kind !== "bigint" || typeof filter.value !== "bigint") {
+    return undefined;
+  }
+  const expected = filter.value;
+  return rangeColumnMatcher(
+    exact,
+    (slot) => {
+      const value = column.bigintAt(slot);
+      if (value === undefined) {
+        return undefined;
+      }
+      return value === expected ? 0 : value < expected ? -1 : 1;
+    },
+    filter.operator,
+  );
+};
+
+const bigDecimalColumnRangeMatcher = (
+  column: TopicColumnValues,
+  filter: RangePredicateFilter,
+  exact: boolean,
+): SlotFilterMatcher | undefined => {
+  if (column.kind !== "bigDecimal" || !isBigDecimal(filter.value)) {
+    return undefined;
+  }
+  const expected = filter.value;
+  return rangeColumnMatcher(
+    exact,
+    (slot) => {
+      const value = column.bigDecimalAt(slot);
+      if (value === undefined) {
+        return undefined;
+      }
+      return compareExactRangeColumnValue(value, expected);
+    },
+    filter.operator,
+  );
 };
 
 const numberColumnRangeMatcher = (
@@ -219,6 +307,21 @@ const numberColumnRangeMatcher = (
         return value === undefined || !Number.isFinite(value) || value <= expected;
       };
 };
+
+const rangeColumnMatcher = (
+  exact: boolean,
+  compareSlot: (slot: number) => number | undefined,
+  operator: TopicRawPredicateFilterPlan["operator"],
+): SlotFilterMatcher =>
+  exact
+    ? (slot) => {
+        const comparison = compareSlot(slot);
+        return comparison !== undefined && rangeComparisonMatches(operator, comparison);
+      }
+    : (slot) => {
+        const comparison = compareSlot(slot);
+        return comparison === undefined || rangeComparisonMatches(operator, comparison);
+      };
 
 const rangeComparisonMatches = (
   operator: TopicRawPredicateFilterPlan["operator"],

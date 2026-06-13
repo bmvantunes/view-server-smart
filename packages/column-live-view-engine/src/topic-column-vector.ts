@@ -1,6 +1,7 @@
 import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
+import { isBigDecimal, type BigDecimal } from "effect/BigDecimal";
 
-export type TopicColumnKind = "generic" | "number";
+export type TopicColumnKind = "generic" | "string" | "number" | "bigint" | "bigDecimal";
 
 type BaseTopicColumnValues = {
   readonly kind: TopicColumnKind;
@@ -12,12 +13,32 @@ export type GenericTopicColumnValues = BaseTopicColumnValues & {
   readonly kind: "generic";
 };
 
+export type StringTopicColumnValues = BaseTopicColumnValues & {
+  readonly kind: "string";
+  stringAt(slot: number): string | undefined;
+};
+
 export type NumberTopicColumnValues = BaseTopicColumnValues & {
   readonly kind: "number";
   numberAt(slot: number): number | undefined;
 };
 
-export type TopicColumnValues = GenericTopicColumnValues | NumberTopicColumnValues;
+export type BigIntTopicColumnValues = BaseTopicColumnValues & {
+  readonly kind: "bigint";
+  bigintAt(slot: number): bigint | undefined;
+};
+
+export type BigDecimalTopicColumnValues = BaseTopicColumnValues & {
+  readonly kind: "bigDecimal";
+  bigDecimalAt(slot: number): BigDecimal | undefined;
+};
+
+export type TopicColumnValues =
+  | GenericTopicColumnValues
+  | StringTopicColumnValues
+  | NumberTopicColumnValues
+  | BigIntTopicColumnValues
+  | BigDecimalTopicColumnValues;
 
 type MutableColumnOperations = {
   clear(): void;
@@ -27,11 +48,17 @@ type MutableColumnOperations = {
 };
 
 type MutableGenericTopicColumnValues = GenericTopicColumnValues & MutableColumnOperations;
+type MutableStringTopicColumnValues = StringTopicColumnValues & MutableColumnOperations;
 type MutableNumberTopicColumnValues = NumberTopicColumnValues & MutableColumnOperations;
+type MutableBigIntTopicColumnValues = BigIntTopicColumnValues & MutableColumnOperations;
+type MutableBigDecimalTopicColumnValues = BigDecimalTopicColumnValues & MutableColumnOperations;
 
 export type MutableTopicColumnValues =
   | MutableGenericTopicColumnValues
-  | MutableNumberTopicColumnValues;
+  | MutableStringTopicColumnValues
+  | MutableNumberTopicColumnValues
+  | MutableBigIntTopicColumnValues
+  | MutableBigDecimalTopicColumnValues;
 
 class GenericTopicColumn implements MutableGenericTopicColumnValues {
   readonly kind = "generic";
@@ -47,6 +74,42 @@ class GenericTopicColumn implements MutableGenericTopicColumnValues {
 
   set(slot: number, value: unknown): void {
     this.values[slot] = value;
+  }
+
+  copySlot(targetSlot: number, sourceSlot: number): void {
+    this.values[targetSlot] = this.values[sourceSlot];
+  }
+
+  pop(): void {
+    this.values.pop();
+  }
+
+  clear(): void {
+    this.values.length = 0;
+  }
+}
+
+class StringTopicColumn implements MutableStringTopicColumnValues {
+  readonly kind = "string";
+  private readonly values: Array<string | undefined> = [];
+
+  get length(): number {
+    return this.values.length;
+  }
+
+  get(slot: number): unknown {
+    return this.stringAt(slot);
+  }
+
+  stringAt(slot: number): string | undefined {
+    if (slot < 0 || slot >= this.values.length) {
+      return undefined;
+    }
+    return this.values[slot];
+  }
+
+  set(slot: number, value: unknown): void {
+    this.values[slot] = typeof value === "string" ? value : undefined;
   }
 
   copySlot(targetSlot: number, sourceSlot: number): void {
@@ -138,14 +201,95 @@ class NumberTopicColumn implements MutableNumberTopicColumnValues {
   }
 }
 
+class BigIntTopicColumn implements MutableBigIntTopicColumnValues {
+  readonly kind = "bigint";
+  private readonly values: Array<bigint | undefined> = [];
+
+  get length(): number {
+    return this.values.length;
+  }
+
+  get(slot: number): unknown {
+    return this.bigintAt(slot);
+  }
+
+  bigintAt(slot: number): bigint | undefined {
+    if (slot < 0 || slot >= this.values.length) {
+      return undefined;
+    }
+    return this.values[slot];
+  }
+
+  set(slot: number, value: unknown): void {
+    this.values[slot] = typeof value === "bigint" ? value : undefined;
+  }
+
+  copySlot(targetSlot: number, sourceSlot: number): void {
+    this.values[targetSlot] = this.values[sourceSlot];
+  }
+
+  pop(): void {
+    this.values.pop();
+  }
+
+  clear(): void {
+    this.values.length = 0;
+  }
+}
+
+class BigDecimalTopicColumn implements MutableBigDecimalTopicColumnValues {
+  readonly kind = "bigDecimal";
+  private readonly values: Array<BigDecimal | undefined> = [];
+
+  get length(): number {
+    return this.values.length;
+  }
+
+  get(slot: number): unknown {
+    return this.bigDecimalAt(slot);
+  }
+
+  bigDecimalAt(slot: number): BigDecimal | undefined {
+    if (slot < 0 || slot >= this.values.length) {
+      return undefined;
+    }
+    return this.values[slot];
+  }
+
+  set(slot: number, value: unknown): void {
+    this.values[slot] = isBigDecimal(value) ? value : undefined;
+  }
+
+  copySlot(targetSlot: number, sourceSlot: number): void {
+    this.values[targetSlot] = this.values[sourceSlot];
+  }
+
+  pop(): void {
+    this.values.pop();
+  }
+
+  clear(): void {
+    this.values.length = 0;
+  }
+}
+
 export const columnValue = (column: TopicColumnValues, slot: number): unknown => column.get(slot);
 
 export const createTopicColumnValues = (
   field: string,
   metadata: RawQueryCompilerMetadata,
 ): MutableTopicColumnValues => {
+  if (metadata.stringFieldNames.has(field)) {
+    return new StringTopicColumn();
+  }
   if (metadata.numberFieldNames.has(field)) {
     return new NumberTopicColumn();
+  }
+  if (metadata.bigintFieldNames.has(field)) {
+    return new BigIntTopicColumn();
+  }
+  if (metadata.bigDecimalFieldNames.has(field)) {
+    return new BigDecimalTopicColumn();
   }
   return new GenericTopicColumn();
 };

@@ -8,83 +8,101 @@
       "benchmarks": [
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.594791999999984,
-          "meanMs": 0.32870019999999156,
-          "minMs": 0.246249999999975,
+          "maxMs": 0.3961669999999913,
+          "meanMs": 0.23964999999999465,
+          "minMs": 0.17925000000002456,
           "name": "equality filter + top-k sort",
-          "p99Ms": 0.594791999999984,
+          "p99Ms": 0.3961669999999913,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.5255410000000325,
-          "meanMs": 0.21049960000000284,
-          "minMs": 0.12020899999998846,
+          "maxMs": 0.517832999999996,
+          "meanMs": 0.2173749999999927,
+          "minMs": 0.13262500000001864,
           "name": "selective equality filter + fallback top-k sort",
-          "p99Ms": 0.5255410000000325,
+          "p99Ms": 0.517832999999996,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.4064159999999788,
-          "meanMs": 0.1456547142857078,
-          "minMs": 0.07591600000000653,
+          "maxMs": 0.3973750000000109,
+          "meanMs": 0.13284900000001443,
+          "minMs": 0.0742089999999962,
           "name": "ordered equality filter + indexed seek",
-          "p99Ms": 0.4064159999999788,
-          "sampleCount": 7
+          "p99Ms": 0.3973750000000109,
+          "sampleCount": 8
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.23466600000000426,
-          "meanMs": 0.10982490000000097,
-          "minMs": 0.08383300000002691,
+          "maxMs": 0.20979099999999562,
+          "meanMs": 0.10799999999998704,
+          "minMs": 0.08283299999999372,
           "name": "ordered in filter + indexed seek",
-          "p99Ms": 0.23466600000000426,
+          "p99Ms": 0.20979099999999562,
           "sampleCount": 10
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.17204199999997627,
-          "meanMs": 0.07868899999999712,
-          "minMs": 0.06391600000000608,
+          "maxMs": 0.17441700000000537,
+          "meanMs": 0.08000653846153664,
+          "minMs": 0.0631249999999568,
           "name": "range filter + top-k sort",
-          "p99Ms": 0.17204199999997627,
+          "p99Ms": 0.17441700000000537,
           "sampleCount": 13
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.336749999999995,
-          "meanMs": 0.21922500000000583,
-          "minMs": 0.1634999999999991,
-          "name": "selective range filter + fallback top-k sort",
-          "p99Ms": 0.336749999999995,
-          "sampleCount": 5
+          "maxMs": 0.28204099999999244,
+          "meanMs": 0.09100754545455526,
+          "minMs": 0.06304199999999582,
+          "name": "bigint range filter + indexed seek",
+          "p99Ms": 0.28204099999999244,
+          "sampleCount": 11
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.5289999999999964,
-          "meanMs": 0.17702083333333007,
-          "minMs": 0.0963329999999587,
-          "name": "compound filter + top-k sort",
-          "p99Ms": 0.5289999999999964,
+          "maxMs": 0.45208399999995663,
+          "meanMs": 0.12596375000000393,
+          "minMs": 0.06779199999999719,
+          "name": "BigDecimal range filter + indexed seek",
+          "p99Ms": 0.45208399999995663,
+          "sampleCount": 8
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.3045829999999796,
+          "meanMs": 0.18424983333332534,
+          "minMs": 0.12341599999996333,
+          "name": "selective range filter + fallback top-k sort",
+          "p99Ms": 0.3045829999999796,
           "sampleCount": 6
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.2498329999999669,
-          "meanMs": 0.10858319999999252,
-          "minMs": 0.07641700000004903,
-          "name": "filtered totalRows via zero-row window",
-          "p99Ms": 0.2498329999999669,
-          "sampleCount": 10
+          "maxMs": 0.5092920000000163,
+          "meanMs": 0.14614899999999612,
+          "minMs": 0.0687499999999659,
+          "name": "compound filter + top-k sort",
+          "p99Ms": 0.5092920000000163,
+          "sampleCount": 7
         },
         {
           "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
-          "maxMs": 0.9350000000000023,
-          "meanMs": 0.372849999999994,
-          "minMs": 0.21245799999996962,
+          "maxMs": 0.13562500000000455,
+          "meanMs": 0.06378118749999473,
+          "minMs": 0.05608300000000099,
+          "name": "filtered totalRows via zero-row window",
+          "p99Ms": 0.13562500000000455,
+          "sampleCount": 16
+        },
+        {
+          "groupName": "src/raw-snapshot.bench.ts > raw snapshot and delta engine benchmark: 1000 rows",
+          "maxMs": 0.8114579999999592,
+          "meanMs": 0.33984139999998886,
+          "minMs": 0.20037500000000819,
           "name": "live subscription delta after publish",
-          "p99Ms": 0.9350000000000023,
+          "p99Ms": 0.8114579999999592,
           "sampleCount": 5
         }
       ],
@@ -94,6 +112,8 @@
         "ordered equality filter + indexed seek",
         "ordered in filter + indexed seek",
         "range filter + top-k sort",
+        "bigint range filter + indexed seek",
+        "BigDecimal range filter + indexed seek",
         "selective range filter + fallback top-k sort",
         "compound filter + top-k sort",
         "filtered totalRows via zero-row window",
@@ -103,7 +123,7 @@
       "benchmarkScope": "engine-raw-snapshot",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 44204032,
+      "memoryRssTotalDeltaBytes": 43253760,
       "minimumSampleCount": 5,
       "mutationCount": 1005,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-snapshot-1000rows.json",
@@ -120,74 +140,74 @@
       "benchmarks": [
         {
           "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.07050000000000978,
-          "meanMs": 0.06419275000000013,
-          "minMs": 0.05979199999998741,
+          "maxMs": 0.07533300000000054,
+          "meanMs": 0.06436706250000235,
+          "minMs": 0.059332999999980984,
           "name": "full scan callback baseline: selective customer + fallback sort",
-          "p99Ms": 0.07050000000000978,
+          "p99Ms": 0.07533300000000054,
           "sampleCount": 16
         },
         {
           "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.04833399999998278,
-          "meanMs": 0.0298346176470562,
-          "minMs": 0.023792000000014468,
+          "maxMs": 0.03608300000001918,
+          "meanMs": 0.028394638888886763,
+          "minMs": 0.024042000000008557,
           "name": "exact scalar candidate: selective customer + fallback sort",
-          "p99Ms": 0.04833399999998278,
-          "sampleCount": 34
-        },
-        {
-          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.04733299999998053,
-          "meanMs": 0.027065432432432257,
-          "minMs": 0.02337500000004411,
-          "name": "exact scalar candidate: selective customer without callback",
-          "p99Ms": 0.04733299999998053,
-          "sampleCount": 37
-        },
-        {
-          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.14304200000003675,
-          "meanMs": 0.03646728571428274,
-          "minMs": 0.027124999999955435,
-          "name": "exact multi-key in candidate: three customers + fallback sort",
-          "p99Ms": 0.14304200000003675,
-          "sampleCount": 28
-        },
-        {
-          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.12287499999996498,
-          "meanMs": 0.10367500000000404,
-          "minMs": 0.08683300000001282,
-          "name": "exact range candidate: upper price tail + fallback sort",
-          "p99Ms": 0.12287499999996498,
-          "sampleCount": 10
-        },
-        {
-          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.10687500000000227,
-          "meanMs": 0.07612499999999857,
-          "minMs": 0.07154199999996536,
-          "name": "full scan callback baseline: upper price tail + fallback sort",
-          "p99Ms": 0.10687500000000227,
-          "sampleCount": 14
-        },
-        {
-          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.03637500000002092,
-          "meanMs": 0.028087972222220654,
-          "minMs": 0.02287499999999909,
-          "name": "ordered equality seek: customer storage order",
-          "p99Ms": 0.03637500000002092,
+          "p99Ms": 0.03608300000001918,
           "sampleCount": 36
         },
         {
           "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
-          "maxMs": 0.4047080000000278,
-          "meanMs": 0.3810663999999974,
-          "minMs": 0.3269999999999982,
+          "maxMs": 0.04095799999998917,
+          "meanMs": 0.02675768421052507,
+          "minMs": 0.02312499999999318,
+          "name": "exact scalar candidate: selective customer without callback",
+          "p99Ms": 0.04095799999998917,
+          "sampleCount": 38
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.04179199999998673,
+          "meanMs": 0.029707147058824247,
+          "minMs": 0.026041999999989685,
+          "name": "exact multi-key in candidate: three customers + fallback sort",
+          "p99Ms": 0.04179199999998673,
+          "sampleCount": 34
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.1251670000000047,
+          "meanMs": 0.10037920000000326,
+          "minMs": 0.0887079999999969,
+          "name": "exact range candidate: upper price tail + fallback sort",
+          "p99Ms": 0.1251670000000047,
+          "sampleCount": 10
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.08012500000000955,
+          "meanMs": 0.07447328571428662,
+          "minMs": 0.07237500000002228,
+          "name": "full scan callback baseline: upper price tail + fallback sort",
+          "p99Ms": 0.08012500000000955,
+          "sampleCount": 14
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.036167000000006055,
+          "meanMs": 0.028041777777777572,
+          "minMs": 0.022458999999997786,
+          "name": "ordered equality seek: customer storage order",
+          "p99Ms": 0.036167000000006055,
+          "sampleCount": 36
+        },
+        {
+          "groupName": "src/raw-predicate-index.bench.ts > raw predicate candidate index benchmark: 1000 rows",
+          "maxMs": 0.3994160000000022,
+          "meanMs": 0.37909139999999864,
+          "minMs": 0.35166699999999196,
           "name": "failed broad scalar candidate build + full scan",
-          "p99Ms": 0.4047080000000278,
+          "p99Ms": 0.3994160000000022,
           "sampleCount": 5
         }
       ],
@@ -205,7 +225,7 @@
       "benchmarkScope": "engine-raw-predicate-index",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 12288000,
+      "memoryRssTotalDeltaBytes": 14696448,
       "minimumSampleCount": 5,
       "mutationCount": 0,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-predicate-index-1000rows.json",
@@ -222,47 +242,47 @@
       "benchmarks": [
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 0.23362500000001774,
-          "meanMs": 0.11421288888889573,
+          "maxMs": 0.23304200000001174,
+          "meanMs": 0.11289822222221978,
           "minMs": 0.08887500000003001,
           "name": "publish append single row",
-          "p99Ms": 0.23362500000001774,
+          "p99Ms": 0.23304200000001174,
           "sampleCount": 9
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 2.963292000000024,
-          "meanMs": 2.2987750000000005,
-          "minMs": 1.9388329999999883,
+          "maxMs": 2.7803749999999923,
+          "meanMs": 2.1845749999999837,
+          "minMs": 1.8826669999999694,
           "name": "publishMany append batch",
-          "p99Ms": 2.963292000000024,
+          "p99Ms": 2.7803749999999923,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 2.5721249999999714,
-          "meanMs": 2.1267251999999757,
-          "minMs": 1.8765839999999798,
+          "maxMs": 2.2151660000000106,
+          "meanMs": 1.9996329999999944,
+          "minMs": 1.919290999999987,
           "name": "publishMany replace existing batch",
-          "p99Ms": 2.5721249999999714,
+          "p99Ms": 2.2151660000000106,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 6.601916999999958,
-          "meanMs": 6.289891599999987,
-          "minMs": 6.047124999999994,
+          "maxMs": 6.389667000000031,
+          "meanMs": 6.169766600000014,
+          "minMs": 5.87741699999998,
           "name": "patch existing rows one by one",
-          "p99Ms": 6.601916999999958,
+          "p99Ms": 6.389667000000031,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 5.819749999999999,
-          "meanMs": 5.177542000000005,
-          "minMs": 4.4014589999999885,
+          "maxMs": 5.6590419999999995,
+          "meanMs": 5.069625400000007,
+          "minMs": 4.507292000000007,
           "name": "append then delete batch",
-          "p99Ms": 5.819749999999999,
+          "p99Ms": 5.6590419999999995,
           "sampleCount": 5
         }
       ],
@@ -277,7 +297,7 @@
       "benchmarkScope": "engine-raw-write",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 51855360,
+      "memoryRssTotalDeltaBytes": 55001088,
       "minimumSampleCount": 5,
       "mutationCount": 3509,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-write-base-1000rows.json",
@@ -294,47 +314,47 @@
       "benchmarks": [
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 0.37237500000003365,
-          "meanMs": 0.1547438571428675,
-          "minMs": 0.10616599999997334,
+          "maxMs": 0.27495800000002646,
+          "meanMs": 0.13654675000000793,
+          "minMs": 0.1004169999999931,
           "name": "publish append single row",
-          "p99Ms": 0.37237500000003365,
-          "sampleCount": 7
+          "p99Ms": 0.27495800000002646,
+          "sampleCount": 8
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 3.042958999999996,
-          "meanMs": 2.55077500000001,
-          "minMs": 2.130958000000021,
+          "maxMs": 2.891125000000045,
+          "meanMs": 2.306141400000024,
+          "minMs": 2.007333000000017,
           "name": "publishMany append batch",
-          "p99Ms": 3.042958999999996,
+          "p99Ms": 2.891125000000045,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 2.7171659999999633,
-          "meanMs": 2.34985019999998,
-          "minMs": 2.079666999999972,
+          "maxMs": 2.311333999999988,
+          "meanMs": 2.09000860000001,
+          "minMs": 1.9910409999999956,
           "name": "publishMany replace existing batch",
-          "p99Ms": 2.7171659999999633,
+          "p99Ms": 2.311333999999988,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 6.918417000000034,
-          "meanMs": 6.208325400000012,
-          "minMs": 5.886209000000008,
+          "maxMs": 6.842707999999959,
+          "meanMs": 6.3811000000000035,
+          "minMs": 5.85733300000004,
           "name": "patch existing rows one by one",
-          "p99Ms": 6.918417000000034,
+          "p99Ms": 6.842707999999959,
           "sampleCount": 5
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 6.287124999999946,
-          "meanMs": 5.306233399999985,
-          "minMs": 4.556375000000003,
+          "maxMs": 5.625124999999969,
+          "meanMs": 5.164241400000003,
+          "minMs": 4.705874999999992,
           "name": "append then delete batch",
-          "p99Ms": 6.287124999999946,
+          "p99Ms": 5.625124999999969,
           "sampleCount": 5
         }
       ],
@@ -349,9 +369,9 @@
       "benchmarkScope": "engine-raw-write",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 52297728,
+      "memoryRssTotalDeltaBytes": 57065472,
       "minimumSampleCount": 5,
-      "mutationCount": 3507,
+      "mutationCount": 3508,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-write-indexed-1000rows.json",
       "queuedEventCount": 0,
       "rowCount": 1000,
@@ -366,11 +386,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 1000 rows, 5 subscribers, same-window",
-          "maxMs": 2.1127500000000055,
-          "meanMs": 0.937758400000007,
-          "minMs": 0.5816669999999817,
+          "maxMs": 2.080291000000045,
+          "meanMs": 0.9105414000000224,
+          "minMs": 0.5465829999999983,
           "name": "same-window subscribers publish + delta fanout",
-          "p99Ms": 2.1127500000000055,
+          "p99Ms": 2.080291000000045,
           "sampleCount": 5
         }
       ],
@@ -379,7 +399,7 @@
       "benchmarkScope": "engine-raw-live-fanout",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 38567936,
+      "memoryRssTotalDeltaBytes": 38993920,
       "minimumSampleCount": 5,
       "mutationCount": 1005,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-same-window-1000rows-5subs.json",
@@ -396,11 +416,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 1000 rows, 5 subscribers, ten-window",
-          "maxMs": 2.9193750000000023,
-          "meanMs": 1.1286001999999826,
-          "minMs": 0.5892499999999927,
+          "maxMs": 2.0637080000000196,
+          "meanMs": 0.9142913999999905,
+          "minMs": 0.5452909999999633,
           "name": "ten-window subscribers publish + delta fanout",
-          "p99Ms": 2.9193750000000023,
+          "p99Ms": 2.0637080000000196,
           "sampleCount": 5
         }
       ],
@@ -409,7 +429,7 @@
       "benchmarkScope": "engine-raw-live-fanout",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 41336832,
+      "memoryRssTotalDeltaBytes": 40452096,
       "minimumSampleCount": 5,
       "mutationCount": 1005,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-ten-window-1000rows-5subs.json",
@@ -426,56 +446,56 @@
       "benchmarks": [
         {
           "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
-          "maxMs": 3.477458000000013,
-          "meanMs": 2.7440833999999996,
-          "minMs": 2.2406670000000304,
+          "maxMs": 2.9722909999999843,
+          "meanMs": 2.535474799999986,
+          "minMs": 2.1734579999999823,
           "name": "status grouped count/sum/min/max/avg",
-          "p99Ms": 3.477458000000013,
+          "p99Ms": 2.9722909999999843,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
-          "maxMs": 1.8972500000000423,
-          "meanMs": 1.6737166000000117,
-          "minMs": 1.5255839999999807,
+          "maxMs": 1.7837499999999977,
+          "meanMs": 1.57025000000001,
+          "minMs": 1.488125000000025,
           "name": "region+status grouped count/sum/min/max/avg",
-          "p99Ms": 1.8972500000000423,
+          "p99Ms": 1.7837499999999977,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
-          "maxMs": 1.5722499999999968,
-          "meanMs": 1.4244750000000068,
-          "minMs": 1.3417080000000396,
+          "maxMs": 1.5,
+          "meanMs": 1.387008400000002,
+          "minMs": 1.3017080000000192,
           "name": "high-cardinality desk grouped aggregates",
-          "p99Ms": 1.5722499999999968,
+          "p99Ms": 1.5,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
-          "maxMs": 0.5887910000000147,
-          "meanMs": 0.4930832000000123,
-          "minMs": 0.4295420000000263,
+          "maxMs": 0.47662500000001273,
+          "meanMs": 0.4410665999999878,
+          "minMs": 0.425707999999986,
           "name": "high-cardinality desk group count via zero-row window",
-          "p99Ms": 0.5887910000000147,
+          "p99Ms": 0.47662500000001273,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
-          "maxMs": 0.9018330000000105,
-          "meanMs": 0.7832247999999936,
-          "minMs": 0.7224579999999605,
+          "maxMs": 0.8487499999999955,
+          "meanMs": 0.7719665999999961,
+          "minMs": 0.7222909999999843,
           "name": "filtered status grouped aggregates",
-          "p99Ms": 0.9018330000000105,
+          "p99Ms": 0.8487499999999955,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-aggregate.bench.ts > grouped aggregate engine benchmark: 1000 rows",
-          "maxMs": 0.7932500000000005,
-          "meanMs": 0.3135997999999859,
-          "minMs": 0.18058300000001282,
+          "maxMs": 0.7304159999999911,
+          "meanMs": 0.29850820000001477,
+          "minMs": 0.17995799999999917,
           "name": "live grouped aggregate delta after publish",
-          "p99Ms": 0.7932500000000005,
+          "p99Ms": 0.7304159999999911,
           "sampleCount": 5
         }
       ],
@@ -491,7 +511,7 @@
       "benchmarkScope": "engine-grouped-aggregate",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 55590912,
+      "memoryRssTotalDeltaBytes": 58802176,
       "minimumSampleCount": 5,
       "mutationCount": 1005,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-aggregate-1000rows.json",
@@ -508,47 +528,47 @@
       "benchmarks": [
         {
           "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
-          "maxMs": 1.0474590000000035,
-          "meanMs": 0.4957916000000068,
-          "minMs": 0.3089580000000183,
+          "maxMs": 1.0173340000000053,
+          "meanMs": 0.4884583999999904,
+          "minMs": 0.3124159999999847,
           "name": "grouped publishMany append batch",
-          "p99Ms": 1.0474590000000035,
+          "p99Ms": 1.0173340000000053,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
-          "maxMs": 0.5251250000000027,
-          "meanMs": 0.36029140000000554,
-          "minMs": 0.2536660000000097,
+          "maxMs": 0.5509999999999877,
+          "meanMs": 0.3535663999999997,
+          "minMs": 0.24425000000002228,
           "name": "grouped publishMany replace extrema batch",
-          "p99Ms": 0.5251250000000027,
+          "p99Ms": 0.5509999999999877,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
-          "maxMs": 0.4262499999999818,
-          "meanMs": 0.27774180000000115,
-          "minMs": 0.21141700000003993,
+          "maxMs": 0.39733300000000327,
+          "meanMs": 0.25227479999999786,
+          "minMs": 0.18720799999999826,
           "name": "grouped patch aggregate values",
-          "p99Ms": 0.4262499999999818,
+          "p99Ms": 0.39733300000000327,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
-          "maxMs": 0.5941670000000272,
-          "meanMs": 0.31622520000000803,
-          "minMs": 0.20775000000003274,
+          "maxMs": 0.336749999999995,
+          "meanMs": 0.25430840000001353,
+          "minMs": 0.22570799999999736,
           "name": "grouped patch group moves",
-          "p99Ms": 0.5941670000000272,
+          "p99Ms": 0.336749999999995,
           "sampleCount": 5
         },
         {
           "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
-          "maxMs": 0.35049999999995407,
-          "meanMs": 0.21179159999999228,
-          "minMs": 0.16137499999996407,
+          "maxMs": 0.3057499999999891,
+          "meanMs": 0.2039916000000062,
+          "minMs": 0.1656669999999849,
           "name": "grouped delete existing rows",
-          "p99Ms": 0.35049999999995407,
+          "p99Ms": 0.3057499999999891,
           "sampleCount": 5
         }
       ],
@@ -583,7 +603,7 @@
         "writeBatchSize": 1
       },
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 48021504,
+      "memoryRssTotalDeltaBytes": 47841280,
       "minimumSampleCount": 5,
       "mutationCount": 1025,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-1000rows-1mutations.json",
@@ -600,11 +620,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: noop, 101 rows",
-          "maxMs": 1.57570800000002,
-          "meanMs": 0.8139250000000061,
-          "minMs": 0.5220840000000067,
+          "maxMs": 1.3674159999999915,
+          "meanMs": 0.7291498000000047,
+          "minMs": 0.5129999999999768,
           "name": "retained nonmatching update delete no-op",
-          "p99Ms": 1.57570800000002,
+          "p99Ms": 1.3674159999999915,
           "sampleCount": 5
         }
       ],
@@ -613,7 +633,7 @@
       "benchmarkScope": "engine-raw-active-retained-delta",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 10878976,
+      "memoryRssTotalDeltaBytes": 10321920,
       "minimumSampleCount": 5,
       "mutationCount": 116,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-noop-101rows.json",
@@ -630,11 +650,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: match-update, 101 rows",
-          "maxMs": 0.9725830000000428,
-          "meanMs": 0.4375330000000076,
-          "minMs": 0.27924999999999045,
+          "maxMs": 1.006750000000011,
+          "meanMs": 0.4442500000000109,
+          "minMs": 0.2863750000000209,
           "name": "retained match-to-match update delta",
-          "p99Ms": 0.9725830000000428,
+          "p99Ms": 1.006750000000011,
           "sampleCount": 5
         }
       ],
@@ -643,7 +663,7 @@
       "benchmarkScope": "engine-raw-active-retained-delta",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 6766592,
+      "memoryRssTotalDeltaBytes": 5816320,
       "minimumSampleCount": 5,
       "mutationCount": 106,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-match-update-101rows.json",
@@ -660,11 +680,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: predicate-enter, 101 rows",
-          "maxMs": 1.327292,
-          "meanMs": 0.7725334000000089,
-          "minMs": 0.5069159999999897,
+          "maxMs": 1.2977920000000154,
+          "meanMs": 0.6371833999999922,
+          "minMs": 0.42183299999999235,
           "name": "retained predicate-enter update delta",
-          "p99Ms": 1.327292,
+          "p99Ms": 1.2977920000000154,
           "sampleCount": 5
         }
       ],
@@ -673,7 +693,7 @@
       "benchmarkScope": "engine-raw-active-retained-delta",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 7766016,
+      "memoryRssTotalDeltaBytes": 9928704,
       "minimumSampleCount": 5,
       "mutationCount": 111,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-predicate-enter-101rows.json",
@@ -690,11 +710,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: visible-delete, 101 rows",
-          "maxMs": 0.7548340000000167,
-          "meanMs": 0.45481680000000324,
-          "minMs": 0.23095899999998437,
+          "maxMs": 0.7300000000000182,
+          "meanMs": 0.35604160000002594,
+          "minMs": 0.2190830000000119,
           "name": "retained visible delete refill/fallback sequence",
-          "p99Ms": 0.7548340000000167,
+          "p99Ms": 0.7300000000000182,
           "sampleCount": 5
         }
       ],
@@ -703,7 +723,7 @@
       "benchmarkScope": "engine-raw-active-retained-delta",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 5226496,
+      "memoryRssTotalDeltaBytes": 4866048,
       "minimumSampleCount": 5,
       "mutationCount": 106,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-visible-delete-101rows.json",
@@ -720,11 +740,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: exhausted-lookahead, 101 rows",
-          "maxMs": 1.057875000000024,
-          "meanMs": 0.577491600000019,
-          "minMs": 0.42079200000000583,
+          "maxMs": 1.0537500000000364,
+          "meanMs": 0.5825916000000007,
+          "minMs": 0.4372500000000059,
           "name": "retained visible delete pair lookahead plus fallback",
-          "p99Ms": 1.057875000000024,
+          "p99Ms": 1.0537500000000364,
           "sampleCount": 5
         }
       ],
@@ -733,7 +753,7 @@
       "benchmarkScope": "engine-raw-active-retained-delta",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 9060352,
+      "memoryRssTotalDeltaBytes": 8028160,
       "minimumSampleCount": 5,
       "mutationCount": 111,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-exhausted-lookahead-101rows.json",
@@ -750,11 +770,11 @@
       "benchmarks": [
         {
           "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: count-only, 101 rows",
-          "maxMs": 0.609457999999961,
-          "meanMs": 0.2820663999999965,
-          "minMs": 0.18891600000000608,
+          "maxMs": 0.5631250000000136,
+          "meanMs": 0.26405839999999897,
+          "minMs": 0.176667000000009,
           "name": "count-only retained insert delta",
-          "p99Ms": 0.609457999999961,
+          "p99Ms": 0.5631250000000136,
           "sampleCount": 5
         }
       ],
@@ -763,7 +783,7 @@
       "benchmarkScope": "engine-raw-active-retained-delta",
       "cleanupLeakCount": 0,
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 4980736,
+      "memoryRssTotalDeltaBytes": 6225920,
       "minimumSampleCount": 5,
       "mutationCount": 106,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-count-only-101rows.json",
@@ -780,11 +800,11 @@
       "benchmarks": [
         {
           "groupName": "src/in-memory-live-query.bench.tsx > React in-memory useLiveQuery browser benchmark: 20 rows",
-          "maxMs": 2,
-          "meanMs": 0.7600000143051148,
+          "maxMs": 1.8000000715255737,
+          "meanMs": 0.7400000095367432,
           "minMs": 0.3999999761581421,
           "name": "publish matching row -> rendered top row",
-          "p99Ms": 2,
+          "p99Ms": 1.8000000715255737,
           "sampleCount": 5
         }
       ],
