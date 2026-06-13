@@ -5802,6 +5802,37 @@ describe("ColumnLiveViewEngine subscriptions", () => {
     }),
   );
 
+  it.effect(
+    "delivers engine closed status when the subscription queue already contains a snapshot",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* createColumnLiveViewEngine({
+          topics: viewServer.topics,
+          subscriptionQueueCapacity: 1,
+        });
+        yield* engine.publish("orders", order("a", "open", 10, 1));
+        const subscription = yield* engine.subscribe("orders", { select: ["id"] });
+
+        yield* engine.close();
+
+        const events = yield* collectEvents(subscription);
+        expect(events).toStrictEqual([
+          {
+            type: "status",
+            topic: "orders",
+            queryId: "query-0",
+            status: "closed",
+            code: "SubscriptionClosed",
+            message: "Subscription closed because the engine closed.",
+          },
+        ]);
+        const health = yield* engine.health();
+        expect(health.topics["orders"].activeSubscriptions).toBe(0);
+        expect(health.topics["orders"].activeViews).toBe(0);
+        expect(health.activeSubscriptions).toBe(0);
+      }),
+  );
+
   it.effect("does not register subscriptions after a concurrent engine close", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
@@ -10357,6 +10388,37 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(health.activeSubscriptions).toBe(0);
       expect(health.topics["orders"].activeViews).toBe(0);
     }),
+  );
+
+  it.effect(
+    "delivers reset closed status when the subscription queue already contains a snapshot",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* createColumnLiveViewEngine({
+          topics: viewServer.topics,
+          subscriptionQueueCapacity: 1,
+        });
+        yield* engine.publish("orders", order("1", "open", 10, 1));
+        const subscription = yield* engine.subscribe("orders", { select: ["id"] });
+
+        yield* engine.reset();
+
+        const events = yield* collectEvents(subscription);
+        expect(events).toStrictEqual([
+          {
+            type: "status",
+            topic: "orders",
+            queryId: "query-0",
+            status: "closed",
+            code: "SubscriptionClosed",
+            message: "Subscription closed because the engine reset.",
+          },
+        ]);
+        const health = yield* engine.health();
+        expect(health.version).toBe(0);
+        expect(health.activeSubscriptions).toBe(0);
+        expect(health.topics["orders"].activeViews).toBe(0);
+      }),
   );
 
   it.effect("rejects reset after the engine is closed", () =>

@@ -42,6 +42,23 @@ const backpressureStatusEvent = (
   message: "Subscription closed because its event queue exceeded capacity.",
 });
 
+const clearBufferedEvents = Effect.fn("ColumnLiveViewEngine.liveSubscription.clearBufferedEvents")(
+  function* <ResultRow extends RowObject>(
+    queue: Queue.Queue<LiveSubscriptionEvent<ResultRow>, Cause.Done>,
+  ) {
+    yield* Queue.clear(queue);
+  },
+);
+
+const offerTerminalStatusEvent = Effect.fn(
+  "ColumnLiveViewEngine.liveSubscription.offerTerminalStatus",
+)(function* <ResultRow extends RowObject>(
+  queue: Queue.Queue<LiveSubscriptionEvent<ResultRow>, Cause.Done>,
+  event: StatusEvent,
+) {
+  yield* Queue.offer(queue, event).pipe(Effect.asVoid);
+});
+
 const closeForBackpressure = Effect.fn(
   "ColumnLiveViewEngine.liveSubscription.closeForBackpressure",
 )(function* <ResultRow extends RowObject>(
@@ -53,8 +70,8 @@ const closeForBackpressure = Effect.fn(
   yield* Effect.uninterruptible(
     Effect.gen(function* () {
       yield* closeBackpressuredTopicStoreSubscription(store, subscriber, release);
-      yield* Queue.takeAll(queue).pipe(Effect.ignore);
-      yield* Queue.offer(queue, backpressureStatusEvent(store, subscriber)).pipe(Effect.ignore);
+      yield* clearBufferedEvents(queue);
+      yield* offerTerminalStatusEvent(queue, backpressureStatusEvent(store, subscriber));
       yield* Queue.end(queue);
     }),
   );
@@ -95,12 +112,9 @@ export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscrip
       closeWithStatus: (event) =>
         Effect.gen(function* () {
           subscriber.closed = true;
-          let drained = yield* Queue.poll(queue);
-          while (Option.isSome(drained)) {
-            drained = yield* Queue.poll(queue);
-          }
+          yield* clearBufferedEvents(queue);
           yield* releaseExecution;
-          yield* Queue.offer(queue, event).pipe(Effect.ignore);
+          yield* offerTerminalStatusEvent(queue, event);
           yield* Queue.end(queue);
         }),
       maxQueueDepth: 0,
