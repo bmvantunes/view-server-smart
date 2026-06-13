@@ -35,6 +35,11 @@ export type CompiledGroupedOrderBy = {
   readonly rowValue: (entry: StoredRowOf<RowObject>) => unknown;
 };
 
+type CompiledGroupedKeyField<Row extends RowObject> = {
+  readonly field: string;
+  readonly value: (row: Row) => unknown;
+};
+
 export type GroupedQueryPlan<Row extends RowObject> = {
   readonly query: GroupedQueryPlanInput;
   readonly cacheKey: string;
@@ -63,9 +68,23 @@ const groupedQueryPlanCacheKey = (query: GroupedQueryPlanInput): string =>
   ]);
 
 const groupedQueryPlanGroupKey = <Row extends RowObject>(
-  groupBy: ReadonlyArray<string>,
+  keyFields: ReadonlyArray<CompiledGroupedKeyField<Row>>,
   row: Row,
-): string => stableQueryValueString(groupBy.map((field) => [field, fieldValue(row, field)]));
+): string => {
+  const values: Array<readonly [string, unknown]> = [];
+  for (const keyField of keyFields) {
+    values.push([keyField.field, keyField.value(row)]);
+  }
+  return stableQueryValueString(values);
+};
+
+const compileGroupedKeyFields = <Row extends RowObject>(
+  groupBy: ReadonlyArray<string>,
+): ReadonlyArray<CompiledGroupedKeyField<Row>> =>
+  groupBy.map((field) => ({
+    field,
+    value: (row) => fieldValue(row, field),
+  }));
 
 const compileGroupedAggregates = (
   aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
@@ -106,6 +125,7 @@ export const makeGroupedQueryPlan = <Row extends RowObject>(
   query: GroupedQueryPlanInput,
 ): GroupedQueryPlan<Row> => {
   const groupBy = [...query.groupBy];
+  const keyFields = compileGroupedKeyFields<Row>(groupBy);
   const orderBy = query.orderBy === undefined ? [] : [...query.orderBy];
   return {
     query,
@@ -118,6 +138,6 @@ export const makeGroupedQueryPlan = <Row extends RowObject>(
     offset: query.offset ?? 0,
     limit: query.limit,
     zeroLimit: query.limit === 0,
-    groupKey: (row) => groupedQueryPlanGroupKey(groupBy, row),
+    groupKey: (row) => groupedQueryPlanGroupKey(keyFields, row),
   };
 };
