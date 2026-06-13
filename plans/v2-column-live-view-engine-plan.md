@@ -1112,14 +1112,19 @@ The runtime is in-memory first, but production needs an explicit recovery story.
 Initial policy:
 
 - Kafka is the source of truth.
-- Current implementation status: the runtime exposes a configured Kafka consumer group, consumes committed offsets with an earliest fallback for a new group, and commits only after successful publish; success health records the committed offset after commit.
+- Current implementation status: the runtime exposes a configured Kafka consumer group and an explicit Kafka `startFrom` policy. The default preserves the current live-process behavior: consume committed offsets for the configured group with an earliest fallback for a new group. Runtime config can also request `startFrom: "earliest"`, `startFrom: "latest"`, or a committed consumer group with `earliest`, `latest`, or `fail` fallback. The runtime commits only after successful publish; success health records the committed offset after commit.
 - Current restart contract: because Runtime Core rows are in memory and no durable WAL/checkpoint exists yet, committed consumer-group resume can skip rows that were committed before process death. It is a live-process ingestion mode, not a lossless full rebuild strategy.
 - Until WAL/checkpoints exist, production deployments that need rebuild-after-restart semantics must replay Kafka from an authoritative position, such as earliest offsets for the Source Topics or a dedicated rebuild group.
-- Future startup policy: runtime rebuilds in-memory state by consuming configured topics from a configured start position.
-- The future production start policy should be explicit, not magic:
+- Production startup policy is explicit, not magic:
 
 ```ts
-startFrom: "earliest" | "latest" | { committedConsumerGroup: string };
+startFrom:
+  | "earliest"
+  | "latest"
+  | {
+      committedConsumerGroup: string;
+      fallback?: "earliest" | "latest" | "fail";
+    };
 ```
 
 - If `startFrom: "latest"`, health should clearly show topics are not backfilled.

@@ -12,7 +12,10 @@ import {
 } from "./internal";
 import { makeViewServerRuntime, runViewServerRuntime } from "./index";
 import { ViewServerKafkaIngressError } from "./kafka-ingress";
-import type { ResolvedViewServerKafkaRuntimeOptions } from "./runtime-options";
+import {
+  resolveViewServerRuntimeOptions,
+  type ResolvedViewServerKafkaRuntimeOptions,
+} from "./runtime-options";
 import { makeViewServerRuntimeTransportHealth } from "./transport-health";
 
 const Order = Schema.Struct({
@@ -380,8 +383,10 @@ describe("@view-server/runtime", () => {
       });
 
       expect({
+        consume: kafkaOptions?.consume,
         consumerGroupId: kafkaOptions?.consumerGroupId,
         regions: kafkaOptions?.regions,
+        startFrom: kafkaOptions?.startFrom,
         topics: Object.fromEntries(
           Object.entries(kafkaOptions?.topics ?? {}).map(([sourceTopic, topic]) => [
             sourceTopic,
@@ -392,8 +397,16 @@ describe("@view-server/runtime", () => {
           ]),
         ),
       }).toStrictEqual({
+        consume: {
+          consumerGroupId: "view-server-test-runtime",
+          fallbackMode: "earliest",
+          mode: "committed",
+        },
         consumerGroupId: "view-server-test-runtime",
         regions: nullRecord([["local", "localhost:9092"]]),
+        startFrom: {
+          committedConsumerGroup: "view-server-test-runtime",
+        },
         topics: {
           "orders-source": {
             regions: ["local"],
@@ -403,6 +416,93 @@ describe("@view-server/runtime", () => {
       });
 
       yield* runtime.close;
+    }),
+  );
+
+  it.effect("resolves explicit Kafka start policies", () =>
+    Effect.gen(function* () {
+      const regions = {
+        local: "localhost:9092",
+      };
+      const localKafkaTopic = viewServer.kafkaTopic<typeof regions>();
+      const topics = {
+        "orders-source": localKafkaTopic({
+          regions: ["local"],
+          value: kafka.json(Order),
+          key: kafka.stringKey(),
+          viewServerTopic: "orders",
+          mapping: ({ key, value }) => ({
+            id: key,
+            price: value.price,
+          }),
+        }),
+      };
+
+      const earliest = yield* resolveViewServerRuntimeOptions({
+        kafka: {
+          consumerGroupId: "view-server-earliest",
+          regions,
+          startFrom: "earliest",
+          topics,
+        },
+      });
+      const latest = yield* resolveViewServerRuntimeOptions({
+        kafka: {
+          consumerGroupId: "view-server-latest",
+          regions,
+          startFrom: "latest",
+          topics,
+        },
+      });
+      const committed = yield* resolveViewServerRuntimeOptions({
+        kafka: {
+          consumerGroupId: "view-server-default",
+          regions,
+          startFrom: {
+            committedConsumerGroup: "view-server-existing-group",
+            fallback: "fail",
+          },
+          topics,
+        },
+      });
+      const committedWithDefaultFallback = yield* resolveViewServerRuntimeOptions({
+        kafka: {
+          consumerGroupId: "view-server-default-fallback",
+          regions,
+          startFrom: {
+            committedConsumerGroup: "view-server-existing-default-fallback-group",
+          },
+          topics,
+        },
+      });
+
+      expect({
+        committed: committed.kafkaOptions?.consume,
+        committedWithDefaultFallback: committedWithDefaultFallback.kafkaOptions?.consume,
+        earliest: earliest.kafkaOptions?.consume,
+        latest: latest.kafkaOptions?.consume,
+      }).toStrictEqual({
+        committed: {
+          consumerGroupId: "view-server-existing-group",
+          fallbackMode: "fail",
+          mode: "committed",
+        },
+        committedWithDefaultFallback: {
+          consumerGroupId: "view-server-existing-default-fallback-group",
+          fallbackMode: "earliest",
+          mode: "committed",
+        },
+        earliest: {
+          consumerGroupId: "view-server-earliest",
+          fallbackMode: "earliest",
+          mode: "earliest",
+        },
+        latest: {
+          consumerGroupId: "view-server-latest",
+          fallbackMode: "latest",
+          mode: "latest",
+        },
+      });
     }),
   );
 

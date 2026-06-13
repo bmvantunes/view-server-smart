@@ -77,6 +77,23 @@ export type KafkaTopicHealth = {
   readonly regions: Record<string, KafkaTopicRegionHealth>;
 };
 
+export type KafkaStartFromHealth =
+  | {
+      readonly consumerGroupId: string;
+      readonly mode: "earliest";
+      readonly fallbackMode: "earliest";
+    }
+  | {
+      readonly consumerGroupId: string;
+      readonly mode: "latest";
+      readonly fallbackMode: "latest";
+    }
+  | {
+      readonly consumerGroupId: string;
+      readonly mode: "committed";
+      readonly fallbackMode: "earliest" | "latest" | "fail";
+    };
+
 export type TransportHealth = {
   readonly activeClients: number;
   readonly activeStreams: number;
@@ -101,6 +118,7 @@ export type ViewServerHealth<Topics extends object = Record<string, object>> = {
     };
   };
   readonly kafka?: {
+    readonly startFrom: KafkaStartFromHealth;
     readonly regions: Record<string, KafkaRegionHealth>;
     readonly topics: Record<string, KafkaTopicHealth>;
   };

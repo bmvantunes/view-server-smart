@@ -688,6 +688,11 @@ describe("remote ViewServer client", () => {
       expect(server.healthRequests()).toBe(1);
       const refreshedHealth = health(0, 0);
       const ignoredKafka = {
+        startFrom: {
+          consumerGroupId: "view-server-test",
+          fallbackMode: "earliest",
+          mode: "committed",
+        },
         regions: {
           usa: {
             status: "connected",

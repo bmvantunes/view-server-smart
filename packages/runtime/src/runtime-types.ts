@@ -6,6 +6,7 @@ import type {
   RowSchema,
   TopicDefinitions,
   ViewServerHealth,
+  ViewServerKafkaStartFrom,
   ViewServerRuntimeClient,
   ViewServerRuntimeError,
 } from "@view-server/config";
@@ -27,6 +28,7 @@ export type ViewServerKafkaRuntimeOptions<
   Regions extends RuntimeRegions = RuntimeRegions,
 > = {
   readonly consumerGroupId: string;
+  readonly startFrom?: ViewServerKafkaStartFrom;
   readonly regions: Regions;
   readonly topics: Record<string, KafkaRuntimeTopicDefinition<Topics, Regions>>;
 };
@@ -83,13 +85,29 @@ type RuntimeKafkaRegionConstraint<
     }
   : unknown;
 
+type RuntimeKafkaStartFromExactKeysConstraint<Options> = Options extends {
+  readonly kafka: {
+    readonly startFrom: infer CandidateStartFrom;
+  };
+}
+  ? CandidateStartFrom extends object
+    ? {
+        readonly kafka: {
+          readonly startFrom: CandidateStartFrom &
+            RejectExtraKeys<CandidateStartFrom, Extract<ViewServerKafkaStartFrom, object>>;
+        };
+      }
+    : unknown
+  : unknown;
+
 export type ViewServerRuntimeOptionsInput<
   Topics extends ViewServerRuntimeTopicDefinitions,
   Options extends ViewServerRuntimeOptions<Topics> = ViewServerRuntimeOptions<Topics>,
 > = Options &
   RejectExtraKeys<Options, ViewServerRuntimeOptions<Topics>> &
   RuntimeKafkaExactKeysConstraint<Options> &
-  RuntimeKafkaRegionConstraint<Topics, Options>;
+  RuntimeKafkaRegionConstraint<Topics, Options> &
+  RuntimeKafkaStartFromExactKeysConstraint<Options>;
 
 export type ViewServerRuntime<Topics extends ViewServerRuntimeTopicDefinitions> = {
   readonly url: string;

@@ -153,6 +153,117 @@ describe("runtime type contracts", () => {
       kafka: {
         consumerGroupId: "view-server-type-test",
         regions: usaKafkaRegions,
+        startFrom: "latest",
+        topics: {
+          orders: usaKafkaTopic({
+            regions: ["usa"],
+            value: kafka.json(Order),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              price: value.price,
+            }),
+          }),
+        },
+      },
+    });
+    const runtimeWithCommittedKafkaStart = makeViewServerRuntime(viewServer, {
+      kafka: {
+        consumerGroupId: "view-server-type-test",
+        regions: usaKafkaRegions,
+        startFrom: {
+          committedConsumerGroup: "view-server-existing-group",
+          fallback: "fail",
+        },
+        topics: {
+          orders: usaKafkaTopic({
+            regions: ["usa"],
+            value: kafka.json(Order),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              price: value.price,
+            }),
+          }),
+        },
+      },
+    });
+    const invalidKafkaStartFrom = makeViewServerRuntime(viewServer, {
+      kafka: {
+        consumerGroupId: "view-server-type-test",
+        regions: usaKafkaRegions,
+        // @ts-expect-error runtime Kafka startFrom only accepts earliest, latest, or committed group config.
+        startFrom: "middle",
+        topics: {
+          orders: usaKafkaTopic({
+            regions: ["usa"],
+            value: kafka.json(Order),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              price: value.price,
+            }),
+          }),
+        },
+      },
+    });
+    const invalidCommittedKafkaStartFallback = makeViewServerRuntime(viewServer, {
+      kafka: {
+        consumerGroupId: "view-server-type-test",
+        regions: usaKafkaRegions,
+        startFrom: {
+          committedConsumerGroup: "view-server-existing-group",
+          // @ts-expect-error committed Kafka start fallback must be earliest, latest, or fail.
+          fallback: "middle",
+        },
+        topics: {
+          orders: usaKafkaTopic({
+            regions: ["usa"],
+            value: kafka.json(Order),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              price: value.price,
+            }),
+          }),
+        },
+      },
+    });
+    const invalidCommittedKafkaStartMissingGroup = makeViewServerRuntime(viewServer, {
+      kafka: {
+        consumerGroupId: "view-server-type-test",
+        regions: usaKafkaRegions,
+        // @ts-expect-error committed Kafka start config requires committedConsumerGroup.
+        startFrom: {
+          fallback: "earliest",
+        },
+        topics: {
+          orders: usaKafkaTopic({
+            regions: ["usa"],
+            value: kafka.json(Order),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              price: value.price,
+            }),
+          }),
+        },
+      },
+    });
+    const invalidCommittedKafkaStartKey = makeViewServerRuntime(viewServer, {
+      kafka: {
+        consumerGroupId: "view-server-type-test",
+        regions: usaKafkaRegions,
+        startFrom: {
+          committedConsumerGroup: "view-server-existing-group",
+          // @ts-expect-error committed Kafka start config rejects unknown keys.
+          committedConsumerGroupId: "view-server-typo",
+        },
         topics: {
           orders: usaKafkaTopic({
             regions: ["usa"],
@@ -230,6 +341,13 @@ describe("runtime type contracts", () => {
     expectTypeOf<Effect.Success<typeof runtimeWithKafka>>().toMatchTypeOf<
       ViewServerRuntime<typeof viewServer.topics>
     >();
+    expectTypeOf<Effect.Success<typeof runtimeWithCommittedKafkaStart>>().toMatchTypeOf<
+      ViewServerRuntime<typeof viewServer.topics>
+    >();
+    expectTypeOf(invalidKafkaStartFrom).not.toBeAny();
+    expectTypeOf(invalidCommittedKafkaStartFallback).not.toBeAny();
+    expectTypeOf(invalidCommittedKafkaStartMissingGroup).not.toBeAny();
+    expectTypeOf(invalidCommittedKafkaStartKey).not.toBeAny();
     expectTypeOf(invalidKafkaOptionKey).not.toBeAny();
     expectTypeOf(invalidMissingKafkaConsumerGroup).not.toBeAny();
     expectTypeOf(invalidKafkaRegionRuntime).not.toBeAny();

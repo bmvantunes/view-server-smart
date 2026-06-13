@@ -55,6 +55,7 @@ export type {
 export type {
   KafkaRegionHealth,
   KafkaRegionStatus,
+  KafkaStartFromHealth,
   KafkaTopicHealth,
   KafkaTopicRegionHealth,
   KafkaTopicStatus,
@@ -135,6 +136,8 @@ export type {
   RuntimeRegions,
   RuntimeValue,
   ValidateRuntimeOptions,
+  ViewServerKafkaCommittedStartFrom,
+  ViewServerKafkaStartFrom,
 } from "./kafka-contract";
 
 type ViewServerConfigTopicShape = Record<

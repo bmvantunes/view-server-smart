@@ -347,13 +347,13 @@ const makeKafkaConsumer = Effect.fn("ViewServerRuntime.kafka.consumer.make")(fun
   region: string,
   brokers: string,
   topics: ReadonlyArray<string>,
-  consumerGroupId: string,
+  consume: ResolvedViewServerKafkaRuntimeOptions<ViewServerRuntimeTopicDefinitions>["consume"],
 ) {
   const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
     autocreateTopics: false,
     bootstrapBrokers: [...bootstrapBrokers(brokers)],
     clientId: `view-server-${region}`,
-    groupId: consumerGroupId,
+    groupId: consume.consumerGroupId,
     retries: true,
   });
   const stream = yield* closeKafkaConsumerOnStartFailure(
@@ -362,8 +362,8 @@ const makeKafkaConsumer = Effect.fn("ViewServerRuntime.kafka.consumer.make")(fun
       try: () =>
         consumer.consume({
           autocommit: false,
-          fallbackMode: "earliest",
-          mode: "committed",
+          fallbackMode: consume.fallbackMode,
+          mode: consume.mode,
           topics: [...topics],
         }),
       catch: mapKafkaConsumerStartError(region),
@@ -767,12 +767,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
   topics: ReadonlyArray<string>,
   scope: Scope.Scope,
 ) {
-  const { consumer, stream } = yield* makeKafkaConsumer(
-    region,
-    brokers,
-    topics,
-    options.consumerGroupId,
-  );
+  const { consumer, stream } = yield* makeKafkaConsumer(region, brokers, topics, options.consume);
   let healthListeners: KafkaConsumerHealthListenerRegistration | null = null;
   const resources: StartedKafkaConsumerResources = {
     consumer,

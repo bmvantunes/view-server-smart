@@ -10,7 +10,7 @@ import {
 import { makeViewServerRuntimeCore } from "@view-server/runtime-core";
 import { Buffer } from "node:buffer";
 import { Cause, Deferred, Effect, Exit, Fiber, Logger, References, Schema, Scope } from "effect";
-import { makeViewServerKafkaHealthLedger } from "./kafka-health";
+import { makeViewServerKafkaHealthLedger as makeViewServerKafkaHealthLedgerBase } from "./kafka-health";
 import type { ViewServerKafkaHealthLedger } from "./kafka-health";
 import {
   assignedPartitionsForSourceTopic,
@@ -50,6 +50,7 @@ import type {
   ViewServerKafkaIngressError,
 } from "./kafka-ingress";
 import type { ResolvedViewServerKafkaRuntimeOptions } from "./runtime-options";
+import type { ViewServerRuntimeTopicDefinitions } from "./runtime-types";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -113,8 +114,22 @@ const forgedMappingTagCodecError: {
   message: "forged mapping tag",
 };
 
+const committedKafkaStart = (
+  consumerGroupId: string,
+): Pick<ResolvedViewServerKafkaRuntimeOptions<Topics>, "consume" | "startFrom"> => ({
+  consume: {
+    consumerGroupId,
+    fallbackMode: "earliest",
+    mode: "committed",
+  },
+  startFrom: {
+    committedConsumerGroup: consumerGroupId,
+  },
+});
+
 const kafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
   consumerGroupId: "view-server-test",
+  ...committedKafkaStart("view-server-test"),
   regions,
   topics: {
     [ordersSourceTopic]: localKafkaTopic({
@@ -130,6 +145,21 @@ const kafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
     }),
   },
 };
+
+type KafkaHealthLedgerInput<LedgerTopics extends ViewServerRuntimeTopicDefinitions> = Parameters<
+  typeof makeViewServerKafkaHealthLedgerBase<LedgerTopics>
+>[0];
+
+const makeViewServerKafkaHealthLedger = <
+  const LedgerTopics extends ViewServerRuntimeTopicDefinitions,
+>(
+  input: Omit<KafkaHealthLedgerInput<LedgerTopics>, "startFrom"> &
+    Partial<Pick<KafkaHealthLedgerInput<LedgerTopics>, "startFrom">>,
+): ViewServerKafkaHealthLedger<LedgerTopics> =>
+  makeViewServerKafkaHealthLedgerBase<LedgerTopics>({
+    startFrom: kafkaOptions.consume,
+    ...input,
+  });
 
 const nullRecord = <Value>(entries: Record<string, Value>): Record<string, Value> => {
   const record: Record<string, Value> = Object.create(null);
@@ -993,6 +1023,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       }).toStrictEqual({
         status: "degraded",
         kafka: {
+          startFrom: kafkaOptions.consume,
           regions: nullRecord({
             local: {
               status: "disconnected",
@@ -1048,6 +1079,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         3_000,
       );
       expect(splitRegionHealth.kafka).toStrictEqual({
+        startFrom: kafkaOptions.consume,
         regions: nullRecord({
           cold: {
             status: "starting",
@@ -1536,6 +1568,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         ready: {
           status: "ready",
           kafka: {
+            startFrom: kafkaOptions.consume,
             regions: nullRecord({
               local: {
                 status: "connected",
@@ -1574,6 +1607,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         starting: {
           status: "starting",
           kafka: {
+            startFrom: kafkaOptions.consume,
             regions: nullRecord({
               cold: {
                 status: "starting",
@@ -2049,6 +2083,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       }).toStrictEqual({
         status: "degraded",
         kafka: {
+          startFrom: kafkaOptions.consume,
           regions: nullRecord({
             local: {
               status: "disconnected",
@@ -2302,12 +2337,14 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
       const emptyKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
         consumerGroupId: "view-server-empty-test",
+        ...committedKafkaStart("view-server-empty-test"),
         regions: {
           cold: "localhost:9093",
         },
         topics: {},
       };
       const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: emptyKafkaOptions.consume,
         regions: emptyKafkaOptions.regions,
         topics: {},
       });
@@ -2324,6 +2361,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
 
       expect(health.status).toBe("ready");
       expect(health.kafka).toStrictEqual({
+        startFrom: emptyKafkaOptions.consume,
         regions: nullRecord({}),
         topics: nullRecord({}),
       });
@@ -2400,6 +2438,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         true,
       );
       expect(health.kafka).toStrictEqual({
+        startFrom: kafkaOptions.consume,
         regions: expectedRegions,
         topics: expectedTopics,
       });
@@ -2496,6 +2535,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
       const invalidKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
         consumerGroupId: "view-server-invalid-broker-test",
+        ...committedKafkaStart("view-server-invalid-broker-test"),
         regions: {
           local: "",
         },
@@ -2514,6 +2554,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         },
       };
       const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: invalidKafkaOptions.consume,
         regions: invalidKafkaOptions.regions,
         topics: {
           [ordersSourceTopic]: {
@@ -2692,17 +2733,9 @@ describe("@view-server/runtime Kafka ingress internals", () => {
   it.effect("records mapping failures separately from decode failures", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
-      const ledger = makeViewServerKafkaHealthLedger<Topics>({
-        regions: kafkaOptions.regions,
-        topics: {
-          [ordersSourceTopic]: {
-            regions: ["local"],
-            viewServerTopic: "orders",
-          },
-        },
-      });
       const throwingKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
         consumerGroupId: "view-server-mapping-failure-test",
+        ...committedKafkaStart("view-server-mapping-failure-test"),
         regions,
         topics: {
           [ordersSourceTopic]: localKafkaTopic({
@@ -2716,6 +2749,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           }),
         },
       };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: throwingKafkaOptions.consume,
+        regions: throwingKafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
       let healthRefreshRequestCount = 0;
@@ -2793,17 +2836,9 @@ describe("@view-server/runtime Kafka ingress internals", () => {
   it.effect("records untagged codec failures as decode failures", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
-      const ledger = makeViewServerKafkaHealthLedger<Topics>({
-        regions: kafkaOptions.regions,
-        topics: {
-          [ordersSourceTopic]: {
-            regions: ["local"],
-            viewServerTopic: "orders",
-          },
-        },
-      });
       const untaggedDecodeKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
         consumerGroupId: "view-server-untagged-decode-failure-test",
+        ...committedKafkaStart("view-server-untagged-decode-failure-test"),
         regions,
         topics: {
           [ordersSourceTopic]: localKafkaTopic({
@@ -2822,6 +2857,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           }),
         },
       };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: untaggedDecodeKafkaOptions.consume,
+        regions: untaggedDecodeKafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
 
@@ -2883,17 +2928,9 @@ describe("@view-server/runtime Kafka ingress internals", () => {
   it.effect("does not classify custom codec errors as mapping failures by public tag alone", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
-      const ledger = makeViewServerKafkaHealthLedger<Topics>({
-        regions: kafkaOptions.regions,
-        topics: {
-          [ordersSourceTopic]: {
-            regions: ["local"],
-            viewServerTopic: "orders",
-          },
-        },
-      });
       const forgedMappingTagKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
         consumerGroupId: "view-server-forged-mapping-tag-test",
+        ...committedKafkaStart("view-server-forged-mapping-tag-test"),
         regions,
         topics: {
           [ordersSourceTopic]: localKafkaTopic({
@@ -2912,6 +2949,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           }),
         },
       };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: forgedMappingTagKafkaOptions.consume,
+        regions: forgedMappingTagKafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
 
@@ -2979,17 +3026,9 @@ describe("@view-server/runtime Kafka ingress internals", () => {
   it.effect("records primitive codec failures as decode failures", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
-      const ledger = makeViewServerKafkaHealthLedger<Topics>({
-        regions: kafkaOptions.regions,
-        topics: {
-          [ordersSourceTopic]: {
-            regions: ["local"],
-            viewServerTopic: "orders",
-          },
-        },
-      });
       const primitiveDecodeKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
         consumerGroupId: "view-server-primitive-decode-failure-test",
+        ...committedKafkaStart("view-server-primitive-decode-failure-test"),
         regions,
         topics: {
           [ordersSourceTopic]: localKafkaTopic({
@@ -3008,6 +3047,16 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           }),
         },
       };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: primitiveDecodeKafkaOptions.consume,
+        regions: primitiveDecodeKafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
 
