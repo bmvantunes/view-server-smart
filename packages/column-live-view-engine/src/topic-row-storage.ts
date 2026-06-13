@@ -11,6 +11,7 @@ import type {
   TopicRawWindowScanPlan,
   TopicRawWindowScanResult,
 } from "./raw-window-scan";
+import type { TopicRawPredicatePlan } from "./raw-predicate-plan";
 import type { OrderedSlotIndex, RawStorageOrderColumn } from "./topic-ordered-window";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
 import { cloneUnknown, fieldValue } from "./row-values";
@@ -40,6 +41,7 @@ import {
   scanTopicRawWindow,
   type TopicRawWindowScanState,
 } from "./topic-raw-window-scanner";
+import type { SlotFilterMatcher } from "./topic-slot-predicate";
 import {
   compareSlotsByStorageOrder,
   compiledRawStorageOrder,
@@ -78,6 +80,10 @@ export class TopicRowStorage {
     ReadonlyArray<TopicRawOrderByPlan>,
     ReadonlyArray<RawStorageOrderColumn>
   >();
+  private readonly rawPredicateSlotMatchers = new WeakMap<
+    TopicRawPredicatePlan,
+    SlotFilterMatcher
+  >();
   private readonly reservableColumns: Array<MutableTopicColumnValues> = [];
   private readonly orderedSlotIndexes = new Map<string, OrderedSlotIndex>();
   private readonly scalarPredicateIndexes = createScalarPredicateIndexes();
@@ -97,6 +103,7 @@ export class TopicRowStorage {
     this.rawWindowScanState = {
       columns: this.columns,
       orderedSlotIndexes: this.orderedSlotIndexes,
+      rawPredicateSlotMatchers: this.rawPredicateSlotMatchers,
       rawQueryMetadata: this.rawQueryMetadata,
       scalarPredicateIndexes: this.scalarPredicateIndexes,
       slots: this.slots,

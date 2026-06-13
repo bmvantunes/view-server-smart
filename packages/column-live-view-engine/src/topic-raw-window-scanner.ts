@@ -1,4 +1,5 @@
 import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
+import type { TopicRawPredicatePlan } from "./raw-predicate-plan";
 import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-window-scan";
 import type { TopicRowEntry } from "./row-scan";
 import type { TopicColumnValues } from "./topic-column-vector";
@@ -19,7 +20,7 @@ import {
   type OrderedRawWindow,
   type OrderedSlotIndex,
 } from "./topic-ordered-window";
-import { rawPredicateSlotMatcher } from "./topic-slot-predicate";
+import { rawPredicateSlotFilterMatcher, type SlotFilterMatcher } from "./topic-slot-predicate";
 
 type RowObject = object;
 
@@ -27,6 +28,7 @@ export type TopicRawWindowScanState = {
   readonly columns: ReadonlyMap<string, TopicColumnValues>;
   readonly orderedSlotIndexes: Map<string, OrderedSlotIndex>;
   readonly rawQueryMetadata: RawQueryCompilerMetadata;
+  readonly rawPredicateSlotMatchers?: WeakMap<TopicRawPredicatePlan, SlotFilterMatcher>;
   readonly scalarPredicateIndexes: PredicateCandidateSlotIndexState["scalarPredicateIndexes"];
   readonly slots: ReadonlyArray<TopicRowEntry<object>>;
 };
@@ -410,11 +412,21 @@ const rawPredicateMatchesSlot = (
   state: TopicRawWindowScanState,
   plan: TopicRawWindowScanPlan<object>,
 ): ((slot: number) => boolean) => {
-  const matcher = rawPredicateSlotMatcher(plan, state.columns);
-  if (matcher.kind === "slot") {
-    return matcher.matchesSlot;
+  if (plan.predicate.callbackSkippable !== true) {
+    const matchesFilters = rawPredicateSlotFilterMatcher(
+      plan.predicate.filters,
+      state.columns,
+      false,
+    );
+    return (slot) => matchesFilters(slot) && plan.matches(state.slots[slot]!.row);
   }
-  return (slot) => matcher.matchesEntry(slot, state.slots[slot]!);
+
+  let matchesSlot = state.rawPredicateSlotMatchers?.get(plan.predicate);
+  if (matchesSlot === undefined) {
+    matchesSlot = rawPredicateSlotFilterMatcher(plan.predicate.filters, state.columns, true);
+    state.rawPredicateSlotMatchers?.set(plan.predicate, matchesSlot);
+  }
+  return matchesSlot;
 };
 
 const rawWindowScanResult = (

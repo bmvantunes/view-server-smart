@@ -1,6 +1,4 @@
 import type { TopicRawPredicateFilterPlan } from "./raw-predicate-plan";
-import type { TopicRawWindowScanPlan } from "./raw-window-scan";
-import type { TopicRowEntry } from "./row-scan";
 import { valuesEqual } from "./row-values";
 import {
   columnValueDoesNotEqual,
@@ -15,49 +13,25 @@ import {
 } from "./topic-column-vector";
 import { equals as bigDecimalEquals, isBigDecimal } from "effect/BigDecimal";
 
-type RowObject = object;
-
-type SlotFilterMatcher = (slot: number) => boolean;
+export type SlotFilterMatcher = (slot: number) => boolean;
 type RangePredicateFilter = TopicRawPredicateFilterPlan & {
   readonly operator: "gt" | "gte" | "lt" | "lte";
   readonly value: unknown;
 };
 
-export type RawPredicateSlotMatcher<Row extends RowObject> =
-  | {
-      readonly kind: "slot";
-      readonly matchesSlot: (slot: number) => boolean;
-    }
-  | {
-      readonly kind: "entry";
-      readonly matchesEntry: (slot: number, entry: TopicRowEntry<Row>) => boolean;
-    };
-
-export const rawPredicateSlotMatcher = <Row extends RowObject>(
-  plan: TopicRawWindowScanPlan<Row>,
+export const rawPredicateSlotFilterMatcher = (
+  filters: ReadonlyArray<TopicRawPredicateFilterPlan>,
   columns: ReadonlyMap<string, TopicColumnValues>,
-): RawPredicateSlotMatcher<Row> => {
-  const exact = plan.predicate.callbackSkippable === true;
-  const filterMatchers = slotFilterMatchers(plan.predicate.filters, columns, exact);
-  const matchesFilters = (slot: number): boolean => {
+  exact: boolean,
+): SlotFilterMatcher => {
+  const filterMatchers = slotFilterMatchers(filters, columns, exact);
+  return (slot) => {
     for (const matcher of filterMatchers) {
       if (!matcher(slot)) {
         return false;
       }
     }
     return true;
-  };
-
-  if (exact) {
-    return {
-      kind: "slot",
-      matchesSlot: matchesFilters,
-    };
-  }
-
-  return {
-    kind: "entry",
-    matchesEntry: (slot, entry) => matchesFilters(slot) && plan.matches(entry.row),
   };
 };
 
