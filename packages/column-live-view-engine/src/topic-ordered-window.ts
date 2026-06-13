@@ -10,7 +10,7 @@ import { columnValue, type TopicColumnValues } from "./topic-column-vector";
 import { Order as orderBigDecimal, isBigDecimal } from "effect/BigDecimal";
 
 export type RawStorageOrderColumn = {
-  readonly column: TopicColumnValues;
+  readonly compareSlots: (left: number, right: number) => number;
   readonly direction: "asc" | "desc";
 };
 
