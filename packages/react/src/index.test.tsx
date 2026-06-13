@@ -88,6 +88,8 @@ const healthTopicRow = (
   activeFallbackGroupedViews: 0,
   activeIncrementalGroupedViews: 0,
   activeViews: 0,
+  groupedFullEvaluationCount: 0,
+  groupedPatchedEvaluationCount: 0,
   activeSubscriptions: 0,
   queuedEvents: 0,
   maxQueueDepth: 0,

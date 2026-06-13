@@ -22,6 +22,8 @@ export type TopicStoreHealthView = {
   readonly activeFallbackGroupedViews: number;
   readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
+  readonly groupedFullEvaluationCount: number;
+  readonly groupedPatchedEvaluationCount: number;
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
   readonly maxQueueDepth: number;
@@ -64,6 +66,8 @@ export const collectTopicStoreHealthView = Effect.fn(
     activeFallbackGroupedViews: state.activeQueries.activeFallbackGroupedViews,
     activeIncrementalGroupedViews: state.activeQueries.activeIncrementalGroupedViews,
     activeViews: state.activeQueries.activeViews,
+    groupedFullEvaluationCount: state.activeQueries.groupedFullEvaluationCount,
+    groupedPatchedEvaluationCount: state.activeQueries.groupedPatchedEvaluationCount,
     activeSubscriptions,
     queuedEvents,
     maxQueueDepth: totals.maxQueueDepth,

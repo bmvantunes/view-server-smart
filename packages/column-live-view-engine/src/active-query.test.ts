@@ -194,11 +194,18 @@ describe("column-live-view-engine active query execution", () => {
         version,
       });
 
+      const emptyDiagnostics = () => ({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 0,
+      });
+
       yield* acquireMaterializedQueryExecution(readModel, "grouped", () => ({
+        diagnostics: emptyDiagnostics,
         incremental: false,
         latest: () => emptyEvaluation(readModel.version()),
       }));
       yield* acquireMaterializedQueryExecution(isolatedReadModel, "grouped", () => ({
+        diagnostics: emptyDiagnostics,
         incremental: false,
         latest: () => emptyEvaluation(isolatedReadModel.version()),
       }));

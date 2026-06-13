@@ -34,6 +34,8 @@ const topicHealthFromRow = (
   activeFallbackGroupedViews: row.activeFallbackGroupedViews,
   activeIncrementalGroupedViews: row.activeIncrementalGroupedViews,
   activeViews: row.activeViews,
+  groupedFullEvaluationCount: row.groupedFullEvaluationCount,
+  groupedPatchedEvaluationCount: row.groupedPatchedEvaluationCount,
   activeSubscriptions: row.activeSubscriptions,
   queuedEvents: row.queuedEvents,
   maxQueueDepth: row.maxQueueDepth,

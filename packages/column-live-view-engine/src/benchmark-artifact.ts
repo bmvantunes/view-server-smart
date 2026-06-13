@@ -41,6 +41,8 @@ export type BenchmarkTopicHealth = {
   readonly activeFallbackGroupedViews?: number;
   readonly activeIncrementalGroupedViews?: number;
   readonly activeViews: number;
+  readonly groupedFullEvaluationCount?: number;
+  readonly groupedPatchedEvaluationCount?: number;
 };
 
 export type BenchmarkGroupedWriteAdmission = {
@@ -52,6 +54,10 @@ export type BenchmarkGroupedWriteAdmission = {
   readonly activeViewsBeforeCleanup: number;
   readonly configuredMode: "fallback" | "incremental";
   readonly expectedAdmission: "fallback" | "incremental";
+  readonly groupedFullEvaluationCountAfterSetup?: number;
+  readonly groupedFullEvaluationCountBeforeCleanup?: number;
+  readonly groupedPatchedEvaluationCountAfterSetup?: number;
+  readonly groupedPatchedEvaluationCountBeforeCleanup?: number;
   readonly incrementalAdmissionLimits: {
     readonly maxGroups: number;
     readonly maxMembers: number;
@@ -240,10 +246,16 @@ const isBenchmarkTopicHealth = (value: unknown): value is BenchmarkTopicHealth =
     "activeFallbackGroupedViews" in value ? value.activeFallbackGroupedViews : undefined;
   const activeIncrementalGroupedViews =
     "activeIncrementalGroupedViews" in value ? value.activeIncrementalGroupedViews : undefined;
+  const groupedFullEvaluationCount =
+    "groupedFullEvaluationCount" in value ? value.groupedFullEvaluationCount : undefined;
+  const groupedPatchedEvaluationCount =
+    "groupedPatchedEvaluationCount" in value ? value.groupedPatchedEvaluationCount : undefined;
   return (
     isFiniteNumber(value.activeViews) &&
     isOptionalFiniteNumber(activeFallbackGroupedViews) &&
-    isOptionalFiniteNumber(activeIncrementalGroupedViews)
+    isOptionalFiniteNumber(activeIncrementalGroupedViews) &&
+    isOptionalFiniteNumber(groupedFullEvaluationCount) &&
+    isOptionalFiniteNumber(groupedPatchedEvaluationCount)
   );
 };
 
@@ -282,6 +294,32 @@ export const activeIncrementalGroupedViewCountFromEngineHealth = (
     activeViewCount += topic.activeIncrementalGroupedViews ?? 0;
   }
   return activeViewCount;
+};
+
+export const groupedFullEvaluationCountFromEngineHealth = (
+  health: BenchmarkEngineHealth,
+): number => {
+  if (health.topics === undefined) {
+    return 0;
+  }
+  let groupedFullEvaluationCount = 0;
+  for (const topic of Object.values(health.topics)) {
+    groupedFullEvaluationCount += topic.groupedFullEvaluationCount ?? 0;
+  }
+  return groupedFullEvaluationCount;
+};
+
+export const groupedPatchedEvaluationCountFromEngineHealth = (
+  health: BenchmarkEngineHealth,
+): number => {
+  if (health.topics === undefined) {
+    return 0;
+  }
+  let groupedPatchedEvaluationCount = 0;
+  for (const topic of Object.values(health.topics)) {
+    groupedPatchedEvaluationCount += topic.groupedPatchedEvaluationCount ?? 0;
+  }
+  return groupedPatchedEvaluationCount;
 };
 
 export const writeBenchmarkArtifact = (input: BenchmarkArtifactInput): void => {

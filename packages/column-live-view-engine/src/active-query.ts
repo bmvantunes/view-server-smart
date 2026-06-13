@@ -65,6 +65,8 @@ export type ActiveQueryExecutionCounts = {
   readonly activeFallbackGroupedViews: number;
   readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
+  readonly groupedFullEvaluationCount: number;
+  readonly groupedPatchedEvaluationCount: number;
 };
 
 export const createActiveQueryRegistry = (): ActiveQueryRegistry => ({
@@ -103,6 +105,8 @@ export const activeStoreQueryExecutionCounts = Effect.fn(
       activeFallbackGroupedViews: materializedCounts.activeFallback,
       activeIncrementalGroupedViews: materializedCounts.activeIncremental,
       activeViews: rawCount + materializedCounts.activeTotal,
+      groupedFullEvaluationCount: materializedCounts.groupedFullEvaluationCount,
+      groupedPatchedEvaluationCount: materializedCounts.groupedPatchedEvaluationCount,
     } satisfies ActiveQueryExecutionCounts;
   }),
 );

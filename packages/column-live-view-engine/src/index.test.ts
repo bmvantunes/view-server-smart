@@ -3007,6 +3007,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(1);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 0,
+      });
       expect(scanCount).toBe(1);
 
       rows.delete("1-extra");
@@ -3020,6 +3024,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(1);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 1,
+      });
       expect(scanCount).toBe(1);
 
       const inserted = order("3", "closed", 30, 3, "emea");
@@ -3034,6 +3042,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(2);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 2,
+      });
       expect(scanCount).toBe(1);
 
       rows.delete("3");
@@ -3047,6 +3059,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(1);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 3,
+      });
       expect(scanCount).toBe(1);
 
       rows.set("3", inserted);
@@ -3076,6 +3092,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(1);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 4,
+      });
       expect(scanCount).toBe(1);
 
       version = 5;
@@ -3088,6 +3108,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
 
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(2);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 5,
+      });
       expect(scanCount).toBe(1);
 
       const repeatedGroupChanges = Array.from({ length: 4_097 }, (_value, index) => {
@@ -3113,6 +3137,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(2);
       expect(execution.incremental).toBe(true);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 6,
+      });
       expect(scanCount).toBe(1);
 
       const overflowChanges = Array.from({ length: 8_193 }, (_value, index) => {
@@ -3135,6 +3163,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       expect(execution.latest().rows).toStrictEqual([]);
       expect(execution.latest().totalRows).toBe(8_195);
       expect(execution.incremental).toBe(false);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 1,
+        patchedEvaluationCount: 6,
+      });
       expect(scanCount).toBe(2);
     }),
   );
@@ -3560,6 +3592,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       const execution = makeIncrementalGroupedQueryExecution(store, compiled, () => {});
 
       expect(execution.latest().rows).toStrictEqual([{ status: "open", rowCount: 1n }]);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 0,
+      });
       rows.set("2", order("2", "closed", 20, 2));
       version = 1;
 
@@ -3567,6 +3603,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         { status: "closed", rowCount: 1n },
         { status: "open", rowCount: 1n },
       ]);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 1,
+        patchedEvaluationCount: 0,
+      });
       expect(scanCount).toBe(2);
     }),
   );
@@ -3596,6 +3636,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
       );
       const execution = makeIncrementalGroupedQueryExecution(store, compiled, () => {});
       expect(execution.latest().rows).toStrictEqual([{ status: "open", rowCount: 1n }]);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 0,
+        patchedEvaluationCount: 0,
+      });
 
       for (let index = 0; index < 65_537; index += 1) {
         const row = order(`wide-${index}`, "closed", index, index);
@@ -3607,6 +3651,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         { status: "closed", rowCount: 65_537n },
         { status: "open", rowCount: 1n },
       ]);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 1,
+        patchedEvaluationCount: 0,
+      });
       rows.set("cancelled", order("cancelled", "cancelled", 1, 65_538));
       version = 2;
       expect(execution.latest().rows).toStrictEqual([
@@ -3614,6 +3662,10 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
         { status: "closed", rowCount: 65_537n },
         { status: "open", rowCount: 1n },
       ]);
+      expect(execution.diagnostics()).toStrictEqual({
+        fullEvaluationCount: 2,
+        patchedEvaluationCount: 0,
+      });
     }),
   );
 
@@ -10189,6 +10241,10 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       const makeExecution = () => {
         const evaluation = evaluate();
         return {
+          diagnostics: () => ({
+            fullEvaluationCount: 0,
+            patchedEvaluationCount: 0,
+          }),
           incremental: false,
           latest: () => evaluation,
         };
@@ -11611,6 +11667,8 @@ describe("ColumnLiveViewEngine validation and health", () => {
       const demoted = yield* engine.health();
       expect(demoted.topics["orders"].activeFallbackGroupedViews).toBe(1);
       expect(demoted.topics["orders"].activeIncrementalGroupedViews).toBe(0);
+      expect(demoted.topics["orders"].groupedFullEvaluationCount).toBe(1);
+      expect(demoted.topics["orders"].groupedPatchedEvaluationCount).toBe(0);
 
       yield* subscription.close();
     }),
@@ -11675,6 +11733,8 @@ describe("ColumnLiveViewEngine validation and health", () => {
         const demoted = yield* engine.health();
         expect(demoted.topics["orders"].activeFallbackGroupedViews).toBe(1);
         expect(demoted.topics["orders"].activeIncrementalGroupedViews).toBe(0);
+        expect(demoted.topics["orders"].groupedFullEvaluationCount).toBe(1);
+        expect(demoted.topics["orders"].groupedPatchedEvaluationCount).toBe(0);
 
         yield* subscription.close();
       }),

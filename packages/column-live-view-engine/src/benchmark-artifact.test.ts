@@ -9,6 +9,8 @@ import {
   benchmarkSummaryPath,
   cleanupLeakCountFromEngineHealth,
   failOnBenchmarkCleanupLeaks,
+  groupedFullEvaluationCountFromEngineHealth,
+  groupedPatchedEvaluationCountFromEngineHealth,
   isBenchmarkEngineHealth,
   memoryDelta,
   memorySnapshot,
@@ -71,6 +73,8 @@ describe("benchmark artifact helpers", () => {
           activeFallbackGroupedViews: 0,
           activeIncrementalGroupedViews: 0,
           activeViews: 7,
+          groupedFullEvaluationCount: 0,
+          groupedPatchedEvaluationCount: 0,
         },
       },
     };
@@ -81,6 +85,34 @@ describe("benchmark artifact helpers", () => {
     expect(activeViewCountFromEngineHealth(health)).toBe(7);
     expect(activeFallbackGroupedViewCountFromEngineHealth(health)).toBe(0);
     expect(activeIncrementalGroupedViewCountFromEngineHealth(health)).toBe(0);
+    expect(groupedFullEvaluationCountFromEngineHealth(health)).toBe(0);
+    expect(groupedPatchedEvaluationCountFromEngineHealth(health)).toBe(0);
+
+    const healthWithGroupedDiagnostics = {
+      activeSubscriptions: 0,
+      backpressureEvents: 0,
+      maxQueueDepth: 0,
+      queuedEvents: 0,
+      topics: {
+        orders: {
+          activeFallbackGroupedViews: 0,
+          activeIncrementalGroupedViews: 1,
+          activeViews: 1,
+          groupedFullEvaluationCount: 2,
+          groupedPatchedEvaluationCount: 3,
+        },
+        trades: {
+          activeFallbackGroupedViews: 1,
+          activeIncrementalGroupedViews: 0,
+          activeViews: 1,
+          groupedFullEvaluationCount: 5,
+          groupedPatchedEvaluationCount: 7,
+        },
+      },
+    };
+    expect(isBenchmarkEngineHealth(healthWithGroupedDiagnostics)).toBe(true);
+    expect(groupedFullEvaluationCountFromEngineHealth(healthWithGroupedDiagnostics)).toBe(7);
+    expect(groupedPatchedEvaluationCountFromEngineHealth(healthWithGroupedDiagnostics)).toBe(10);
 
     const minimalTopicHealth = {
       activeSubscriptions: 0,
@@ -96,6 +128,8 @@ describe("benchmark artifact helpers", () => {
     expect(isBenchmarkEngineHealth(minimalTopicHealth)).toBe(true);
     expect(activeFallbackGroupedViewCountFromEngineHealth(minimalTopicHealth)).toBe(0);
     expect(activeIncrementalGroupedViewCountFromEngineHealth(minimalTopicHealth)).toBe(0);
+    expect(groupedFullEvaluationCountFromEngineHealth(minimalTopicHealth)).toBe(0);
+    expect(groupedPatchedEvaluationCountFromEngineHealth(minimalTopicHealth)).toBe(0);
 
     const healthWithoutTopics = {
       activeSubscriptions: 2,
@@ -107,6 +141,8 @@ describe("benchmark artifact helpers", () => {
     expect(activeViewCountFromEngineHealth(healthWithoutTopics)).toBe(0);
     expect(activeFallbackGroupedViewCountFromEngineHealth(healthWithoutTopics)).toBe(0);
     expect(activeIncrementalGroupedViewCountFromEngineHealth(healthWithoutTopics)).toBe(0);
+    expect(groupedFullEvaluationCountFromEngineHealth(healthWithoutTopics)).toBe(0);
+    expect(groupedPatchedEvaluationCountFromEngineHealth(healthWithoutTopics)).toBe(0);
     expect(
       isBenchmarkEngineHealth({
         activeSubscriptions: 2,
@@ -187,6 +223,8 @@ describe("benchmark artifact helpers", () => {
             activeFallbackGroupedViews: "0",
             activeIncrementalGroupedViews: 0,
             activeViews: 7,
+            groupedFullEvaluationCount: 0,
+            groupedPatchedEvaluationCount: 0,
           },
         },
       }),
@@ -202,6 +240,8 @@ describe("benchmark artifact helpers", () => {
             activeFallbackGroupedViews: 0,
             activeIncrementalGroupedViews: Number.NaN,
             activeViews: 7,
+            groupedFullEvaluationCount: 0,
+            groupedPatchedEvaluationCount: 0,
           },
         },
       }),
@@ -265,6 +305,10 @@ describe("benchmark artifact helpers", () => {
         activeViewsBeforeCleanup: 2,
         configuredMode: "incremental",
         expectedAdmission: "incremental",
+        groupedFullEvaluationCountAfterSetup: 0,
+        groupedFullEvaluationCountBeforeCleanup: 2,
+        groupedPatchedEvaluationCountAfterSetup: 0,
+        groupedPatchedEvaluationCountBeforeCleanup: 3,
         incrementalAdmissionLimits: {
           maxGroups: 10,
           maxMembers: 20,
@@ -316,6 +360,10 @@ describe("benchmark artifact helpers", () => {
             activeViewsBeforeCleanup: 2,
             configuredMode: "incremental",
             expectedAdmission: "incremental",
+            groupedFullEvaluationCountAfterSetup: 0,
+            groupedFullEvaluationCountBeforeCleanup: 2,
+            groupedPatchedEvaluationCountAfterSetup: 0,
+            groupedPatchedEvaluationCountBeforeCleanup: 3,
             incrementalAdmissionLimits: {
               maxGroups: 10,
               maxMembers: 20,

@@ -701,6 +701,10 @@
         "activeViewsBeforeCleanup": 2,
         "configuredMode": "incremental",
         "expectedAdmission": "incremental",
+        "groupedFullEvaluationCountAfterSetup": 0,
+        "groupedFullEvaluationCountBeforeCleanup": 40,
+        "groupedPatchedEvaluationCountAfterSetup": 0,
+        "groupedPatchedEvaluationCountBeforeCleanup": 10,
         "incrementalAdmissionLimits": {
           "maxGroups": 8192,
           "maxMembers": 65536,

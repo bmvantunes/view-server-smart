@@ -3,15 +3,18 @@ import type { SnapshotEvent, DeltaEvent } from "@view-server/config";
 import type { ActiveQueryStoreState, LiveQueryExecution } from "./active-query";
 import { deltaEvent, deltaOperations, snapshotEvent } from "./query-result";
 import type { QueryEvaluation } from "./query-result";
+import type { GroupedIncrementalExecutionDiagnosticCounts } from "./grouped-incremental-execution";
 
 type RowObject = object;
 
 type ActiveMaterializedQueryExecution = {
+  readonly diagnostics: () => GroupedIncrementalExecutionDiagnosticCounts;
   readonly incremental: boolean;
   readonly latest: () => QueryEvaluation<object>;
 };
 
 export type MaterializedQueryExecution<ResultRow extends RowObject> = {
+  readonly diagnostics: () => GroupedIncrementalExecutionDiagnosticCounts;
   readonly incremental: boolean;
   readonly latest: () => QueryEvaluation<ResultRow>;
 };
@@ -26,6 +29,8 @@ export type MaterializedQueryExecutionModeCounts = {
   readonly activeFallback: number;
   readonly activeIncremental: number;
   readonly activeTotal: number;
+  readonly groupedFullEvaluationCount: number;
+  readonly groupedPatchedEvaluationCount: number;
 };
 
 const getActiveMaterializedQueryMap = (
@@ -147,6 +152,8 @@ export const activeMaterializedQueryExecutionModeCounts = Effect.fn(
   Effect.sync(() => {
     let activeFallback = 0;
     let activeIncremental = 0;
+    let groupedFullEvaluationCount = 0;
+    let groupedPatchedEvaluationCount = 0;
 
     for (const entry of getActiveMaterializedQueryMap(store).values()) {
       if (entry.execution.incremental) {
@@ -154,12 +161,17 @@ export const activeMaterializedQueryExecutionModeCounts = Effect.fn(
       } else {
         activeFallback += 1;
       }
+      const diagnostics = entry.execution.diagnostics();
+      groupedFullEvaluationCount += diagnostics.fullEvaluationCount;
+      groupedPatchedEvaluationCount += diagnostics.patchedEvaluationCount;
     }
 
     return {
       activeFallback,
       activeIncremental,
       activeTotal: activeFallback + activeIncremental,
+      groupedFullEvaluationCount,
+      groupedPatchedEvaluationCount,
     } satisfies MaterializedQueryExecutionModeCounts;
   }),
 );
