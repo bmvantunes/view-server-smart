@@ -2089,6 +2089,126 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect(
+    "preserves commit failure health when Kafka stream finalization marks the region down",
+    () =>
+      Effect.gen(function* () {
+        const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+          },
+        });
+        yield* ledger.regionConnected("local", 1_000);
+        yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+
+        const commitFailedMessage = kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "order-stream-commit-failed",
+          value: JSON.stringify({
+            customerId: "customer-stream-commit-failed",
+            price: 70,
+          }),
+          offset: 7n,
+          commitFailure: new Error("commit failed"),
+        });
+        const expectedMessageBytes =
+          (commitFailedMessage.key?.byteLength ?? 0) + (commitFailedMessage.value?.byteLength ?? 0);
+        const error = yield* Effect.flip(
+          runKafkaMessageStream(
+            viewServer,
+            runtimeCore.client,
+            runtimeCore.requestHealthRefresh,
+            kafkaOptions,
+            ledger,
+            "local",
+            (async function* () {
+              yield commitFailedMessage;
+            })(),
+          ),
+        );
+        const snapshot = yield* runtimeCore.client.snapshot("orders", {
+          select: ["id", "customerId", "price"],
+          orderBy: [{ field: "id", direction: "asc" }],
+          limit: 10,
+        });
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+        expect({
+          error: {
+            causeMessage: messageFromUnknown(error.cause),
+            message: error.message,
+            region: error.region,
+            sourceTopic: error.sourceTopic,
+          },
+          health: {
+            status: health.status,
+            region: health.kafka?.regions["local"],
+            topic: health.kafka?.topics[ordersSourceTopic],
+          },
+          snapshot,
+        }).toStrictEqual({
+          error: {
+            causeMessage: "commit failed",
+            message: `Failed to commit Kafka message for source topic ${ordersSourceTopic}`,
+            region: "local",
+            sourceTopic: ordersSourceTopic,
+          },
+          health: {
+            status: "degraded",
+            region: {
+              status: "disconnected",
+              brokers: regions.local,
+              lastConnectedAt: 1_000,
+              lastError: `Failed to commit Kafka message for source topic ${ordersSourceTopic}`,
+            },
+            topic: {
+              status: "degraded",
+              sourceTopic: ordersSourceTopic,
+              viewServerTopic: "orders",
+              regions: nullRecord({
+                local: {
+                  connected: false,
+                  assignedPartitions: 1,
+                  messagesPerSecond: 1,
+                  bytesPerSecond: expectedMessageBytes,
+                  decodedMessagesPerSecond: 0,
+                  decodeFailuresPerSecond: 0,
+                  mappingFailuresPerSecond: 0,
+                  processingFailuresPerSecond: 1,
+                  lastMessageAt: 0,
+                  lastCommitAt: null,
+                  consumerLagMessages: null,
+                  lagSampledAt: null,
+                  committedOffset: null,
+                  lastError: `Failed to commit Kafka message for source topic ${ordersSourceTopic}: commit failed`,
+                },
+              }),
+            },
+          },
+          snapshot: {
+            status: "ready",
+            statusCode: "Ready",
+            rows: [
+              {
+                id: "order-stream-commit-failed",
+                customerId: "customer-stream-commit-failed",
+                price: 70,
+              },
+            ],
+            totalRows: 1,
+            version: 1,
+          },
+        });
+
+        yield* runtimeCore.close;
+      }),
+  );
+
   it.effect("fails Kafka streams before later records can skip failed offsets", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -3028,24 +3148,31 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
 
-      const exit = yield* Effect.exit(
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+      const commitFailedMessage = kafkaMessage({
+        topic: ordersSourceTopic,
+        key: "order-commit-failed",
+        value: JSON.stringify({
+          customerId: "customer-commit-failed",
+          price: 50,
+        }),
+        offset: 5n,
+        commitFailure: new Error("commit failed"),
+      });
+      const expectedMessageBytes =
+        (commitFailedMessage.key?.byteLength ?? 0) + (commitFailedMessage.value?.byteLength ?? 0);
+      const error = yield* Effect.flip(
         processKafkaMessage(
           viewServer,
           runtimeCore.client,
-          runtimeCore.requestHealthRefresh,
+          requestHealthRefresh,
           kafkaOptions,
           ledger,
           "local",
-          kafkaMessage({
-            topic: ordersSourceTopic,
-            key: "order-commit-failed",
-            value: JSON.stringify({
-              customerId: "customer-commit-failed",
-              price: 50,
-            }),
-            offset: 5n,
-            commitFailure: new Error("commit failed"),
-          }),
+          commitFailedMessage,
         ),
       );
       const snapshot = yield* runtimeCore.client.snapshot("orders", {
@@ -3053,14 +3180,26 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         orderBy: [{ field: "id", direction: "asc" }],
         limit: 10,
       });
-      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 1_000);
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
       expect({
-        commitFailed: Exit.isFailure(exit),
+        error: {
+          causeMessage: messageFromUnknown(error.cause),
+          message: error.message,
+          region: error.region,
+          sourceTopic: error.sourceTopic,
+        },
+        healthRefreshRequestCount,
         snapshot,
         kafkaTopic: health.kafka?.topics[ordersSourceTopic],
       }).toStrictEqual({
-        commitFailed: true,
+        error: {
+          causeMessage: "commit failed",
+          message: `Failed to commit Kafka message for source topic ${ordersSourceTopic}`,
+          region: "local",
+          sourceTopic: ordersSourceTopic,
+        },
+        healthRefreshRequestCount: 1,
         snapshot: {
           status: "ready",
           statusCode: "Ready",
@@ -3075,25 +3214,25 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           version: 1,
         },
         kafkaTopic: {
-          status: "ready",
+          status: "degraded",
           sourceTopic: ordersSourceTopic,
           viewServerTopic: "orders",
           regions: nullRecord({
             local: {
               connected: true,
               assignedPartitions: 1,
-              messagesPerSecond: 0,
-              bytesPerSecond: 0,
+              messagesPerSecond: 1,
+              bytesPerSecond: expectedMessageBytes,
               decodedMessagesPerSecond: 0,
               decodeFailuresPerSecond: 0,
               mappingFailuresPerSecond: 0,
-              processingFailuresPerSecond: 0,
-              lastMessageAt: null,
+              processingFailuresPerSecond: 1,
+              lastMessageAt: 0,
               lastCommitAt: null,
               consumerLagMessages: null,
               lagSampledAt: null,
               committedOffset: null,
-              lastError: null,
+              lastError: `Failed to commit Kafka message for source topic ${ordersSourceTopic}: commit failed`,
             },
           }),
         },
