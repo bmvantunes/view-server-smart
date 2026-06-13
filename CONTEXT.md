@@ -64,14 +64,18 @@ _Avoid_: WebSocket connection, React hook
 
 **Column Live View Engine**:
 The authoritative in-memory engine that owns topics, validates rows, evaluates queries, creates snapshots, computes deltas, tracks subscriptions, and reports engine health.
-_Avoid_: chDB replacement, database adapter, query helper
+_Avoid_: Database adapter, query helper, transport runtime
 
-**Columnar Topic Store**:
-The per-topic storage and mutation unit behind a View Server Topic; it is expected to become column-oriented as performance work deepens.
+**Topic Store Module**:
+The per-topic storage and mutation Module behind a View Server Topic. Today its Implementation is row-oriented with private indexes and query helpers; callers must treat it as the storage Seam, not as a public row bag.
 _Avoid_: Map wrapper, row array, topic state bag
 
+**Columnar Topic Store**:
+The planned high-performance Implementation behind the Topic Store Module seam, where configured Topic Row fields can be stored and scanned as column-oriented vectors.
+_Avoid_: Current storage when discussing today's Implementation, public column API
+
 **Topic Column Vector**:
-The schema-derived per-field storage inside a Columnar Topic Store. A Topic Column Vector may use a specialized representation such as a numeric typed array or a generic object array, but callers interact through the Columnar Topic Store.
+The planned schema-derived per-field storage inside a Columnar Topic Store. A Topic Column Vector may use a specialized representation such as a numeric typed array or a generic object array, but callers interact through the Topic Store Module.
 _Avoid_: Public column API, typed-array contract
 
 **Active Query**:
@@ -195,12 +199,14 @@ _Avoid_: Browser write, send, emit
 - A **Raw Query** returns selected Topic Row fields.
 - A **Grouped Query** returns group fields plus aggregate aliases.
 - A **Subscription** belongs to one **Live Query** and emits one **Snapshot** followed by zero or more **Deltas** and **Status Events**.
-- A **Column Live View Engine** owns one **Columnar Topic Store** per **View Server Topic**.
-- A **Columnar Topic Store** owns one **Topic Column Vector** per configured Topic Row field.
+- A **Column Live View Engine** owns one **Topic Store Module** per **View Server Topic**.
+- The current **Topic Store Module** Implementation is row-oriented and owns its private indexes, mutation ordering, row storage, query helpers, and health.
+- A future **Columnar Topic Store** Implementation may sit behind the **Topic Store Module** Seam.
+- A **Columnar Topic Store** would own one **Topic Column Vector** per configured Topic Row field.
 - A **Runtime Core** owns one **Column Live View Engine** instance and exposes both a **Runtime Client** and a **Live Client**.
-- A **Raw Query Plan** is compiled once from a **Raw Query** before the **Columnar Topic Store** scans rows.
+- A **Raw Query Plan** is compiled once from a **Raw Query** before the **Topic Store Module** scans rows.
 - A **Raw Predicate Plan** is part of a **Raw Query Plan** and lets storage narrow scans without replacing the correctness callback unless it is proven exact.
-- A **Columnar Topic Store** may maintain **Raw Ordered Window Indexes** to accelerate bounded **Raw Query** windows.
+- A **Topic Store Module** may maintain **Raw Ordered Window Indexes** to accelerate bounded **Raw Query** windows.
 - A **Grouped Query Plan** is compiled once from a **Grouped Query** before grouped full-scan or incremental execution.
 - An **Active Query** may serve many equivalent **Subscriptions**.
 - A **Live Client** can subscribe to **Live Queries** but cannot publish mutations.

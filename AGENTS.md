@@ -122,7 +122,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 
 - Keep Modules deep. If deleting a module makes complexity disappear, it is probably pass-through and should not exist.
 - Use real Seams only where there are multiple Implementations or a clear near-term Adapter boundary.
-- Production engine modules must not import `topicStoreReadModel` or `topicStoreRawQueryMetadata`. Route read-model/query behavior through TopicStore helper operations so Columnar Topic Store internals stay local to the TopicStore Module.
+- Production engine modules must not import `topicStoreReadModel` or `topicStoreRawQueryMetadata`. Route read-model/query behavior through Topic Store helper operations so current row-oriented storage internals and future Columnar Topic Store internals stay local to the Topic Store Module.
 - Keep package direction clean:
   - config/contracts: public types and pure contracts.
   - column live view engine: query compilation, store, snapshots, deltas, subscriptions, engine health.
