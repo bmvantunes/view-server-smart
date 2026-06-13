@@ -1,12 +1,7 @@
-import {
-  aggregateStateCompareValue,
-  finalizeGroup,
-  type GroupState,
-} from "./grouped-aggregate-state";
-import type { GroupedQueryPlan, RuntimeGroupedOrderBy } from "./grouped-query-plan";
+import { finalizeGroup, type GroupState } from "./grouped-aggregate-state";
+import type { CompiledGroupedOrderBy, GroupedQueryPlan } from "./grouped-query-plan";
 import { compareQueryValue } from "./raw-query-compiler";
 import type { QueryEvaluation, StoredRowOf } from "./query-result";
-import { fieldValue } from "./row-values";
 
 type RowObject = object;
 
@@ -21,11 +16,10 @@ const emptyBoundedGroupOrderValues: Array<unknown> = [];
 const compareGroupedRows = (
   left: StoredRowOf<RowObject>,
   right: StoredRowOf<RowObject>,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): number => {
   for (const order of orderBy) {
-    const field = "field" in order ? order.field : order.aggregate;
-    const comparison = compareQueryValue(fieldValue(left.row, field), fieldValue(right.row, field));
+    const comparison = compareQueryValue(order.rowValue(left), order.rowValue(right));
     if (comparison !== 0) {
       return order.direction === "asc" ? comparison : -comparison;
     }
@@ -49,22 +43,18 @@ const groupedWindowEnd = <Row extends RowObject>(
 const writeGroupOrderValues = (
   target: Array<unknown>,
   group: GroupState,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): Array<unknown> => {
   target.length = 0;
   for (const order of orderBy) {
-    target.push(
-      "field" in order
-        ? fieldValue(group.row, order.field)
-        : aggregateStateCompareValue(group.aggregates[order.aggregate]!),
-    );
+    target.push(order.groupValue(group));
   }
   return target;
 };
 
 const newBoundedGroupEntry = (
   group: GroupState,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): BoundedGroupEntry => {
   if (orderBy.length === 0) {
     return {
@@ -81,7 +71,7 @@ const newBoundedGroupEntry = (
 const compareBoundedGroupEntries = (
   left: BoundedGroupEntry,
   right: BoundedGroupEntry,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): number => {
   for (let index = 0; index < orderBy.length; index += 1) {
     const order = orderBy[index]!;
@@ -97,7 +87,7 @@ const compareGroupToBoundedGroupEntry = (
   group: GroupState,
   orderValues: ReadonlyArray<unknown>,
   right: BoundedGroupEntry,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): number => {
   for (let index = 0; index < orderBy.length; index += 1) {
     const order = orderBy[index]!;
@@ -112,7 +102,7 @@ const compareGroupToBoundedGroupEntry = (
 const boundedGroupEntryIsWorse = (
   left: BoundedGroupEntry,
   right: BoundedGroupEntry,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): boolean => compareBoundedGroupEntries(left, right, orderBy) > 0;
 
 const swapBoundedGroupEntries = (
@@ -128,7 +118,7 @@ const swapBoundedGroupEntries = (
 const siftWorstBoundedGroupEntryUp = (
   groups: Array<BoundedGroupEntry>,
   index: number,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): void => {
   let current = index;
   while (current > 0) {
@@ -144,7 +134,7 @@ const siftWorstBoundedGroupEntryUp = (
 const siftWorstBoundedGroupEntryDown = (
   groups: Array<BoundedGroupEntry>,
   index: number,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
 ): void => {
   let current = index;
   while (true) {
@@ -171,7 +161,7 @@ const siftWorstBoundedGroupEntryDown = (
 const retainBoundedGroup = (
   groups: Array<BoundedGroupEntry>,
   group: GroupState,
-  orderBy: ReadonlyArray<RuntimeGroupedOrderBy>,
+  orderBy: ReadonlyArray<CompiledGroupedOrderBy>,
   windowEnd: number,
   scratchOrderValues: Array<unknown>,
 ): Array<unknown> => {
@@ -204,7 +194,7 @@ const boundedGroupedEvaluationFromGroups = <Row extends RowObject>(
   version: number,
   windowEnd: number,
 ): QueryEvaluation<RowObject> => {
-  const orderBy = plan.orderBy;
+  const orderBy = plan.compiledOrderBy;
   const retainedGroups: Array<BoundedGroupEntry> = [];
   let scratchOrderValues: Array<unknown> = [];
   let totalRows = 0;
@@ -259,7 +249,9 @@ export const groupedEvaluationFromEntries = <Row extends RowObject>(
   plan: GroupedQueryPlan<Row>,
   version: number,
 ): QueryEvaluation<RowObject> => {
-  const ordered = entries.toSorted((left, right) => compareGroupedRows(left, right, plan.orderBy));
+  const ordered = entries.toSorted((left, right) =>
+    compareGroupedRows(left, right, plan.compiledOrderBy),
+  );
   const offset = plan.offset;
   const window = ordered.slice(offset, plan.limit === undefined ? undefined : offset + plan.limit);
   return {
