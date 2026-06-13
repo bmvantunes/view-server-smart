@@ -22,7 +22,7 @@ import {
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
 } from "./index";
-import { ColumnarTopicStore } from "./columnar-topic-store";
+import { TopicRowStorage } from "./topic-row-storage";
 import {
   acquireMaterializedQueryExecution,
   acquireRawQueryExecution,
@@ -6206,7 +6206,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
   it.effect("clears retained row-change journals on active execution clear and overflow", () =>
     Effect.gen(function* () {
-      const storage = new ColumnarTopicStore("orders", Order, "id");
+      const storage = new TopicRowStorage("orders", Order, "id");
       const compiled = yield* prepareGroupedQuery<object, object>(
         "orders",
         rawQueryCompilerMetadata(Order),
@@ -6278,7 +6278,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       storage.advanceVersion();
       expect(storage.readModel.changesSince(afterClearVersion)).toBeUndefined();
 
-      const fallbackStorage = new ColumnarTopicStore("orders", Order, "id");
+      const fallbackStorage = new TopicRowStorage("orders", Order, "id");
       fallbackStorage.setPreparedMany(
         Array.from({ length: 65_537 }, (_value, index) => ({
           key: `fallback-${index}`,
@@ -6296,7 +6296,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
 
   it.effect("releases retained row-change journals after grouped fallback demotion", () =>
     Effect.gen(function* () {
-      const storage = new ColumnarTopicStore("orders", Order, "id");
+      const storage = new TopicRowStorage("orders", Order, "id");
       const compiled = yield* prepareGroupedQuery<object, object>(
         "orders",
         rawQueryCompilerMetadata(Order),

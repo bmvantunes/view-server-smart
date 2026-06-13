@@ -12,13 +12,18 @@ The main internal abstraction is:
 ColumnLiveViewEngine;
 ```
 
-The core per-topic store is:
+The core per-topic seam is the Topic Store Module:
 
 ```ts
-ColumnarTopicStore;
+TopicStore;
 ```
 
-One View Server topic is one logical table. The same authoritative in-memory columnar store serves:
+The current implementation behind that seam is `TopicRowStorage`: a row-oriented authoritative store
+with private column vectors and query indexes where they are already useful. A future
+`ColumnarTopicStore` implementation may replace that storage behind the same `TopicStore` seam when
+benchmarks prove the write/read tradeoff is better.
+
+One View Server topic is one logical table. The same authoritative in-memory Topic Store serves:
 
 - initial snapshots
 - live deltas
@@ -237,7 +242,7 @@ The hook must be fully type-safe from `defineViewServerConfig` without requiring
 - The real provider supplies that client through the WebSocket/Effect RPC transport adapter.
 - Both providers must exercise the same runtime core, query compiler, store, snapshot/delta, health, and lifecycle implementation. Only transport/ingress adapters differ.
 
-No mock query engine should exist. Browser tests should exercise the same query compiler, columnar store, snapshot logic, delta logic, and grouped accumulator as production.
+No mock query engine should exist. Browser tests should exercise the same query compiler, TopicStore, TopicRowStorage, snapshot logic, delta logic, and grouped accumulator as production.
 
 Because there is no external snapshot backend, browser-mode Vitest can run full View Server behavior in memory. Each in-memory provider instance owns fresh state by default.
 
@@ -753,7 +758,9 @@ Initial modules:
 
 ```txt
 ColumnLiveViewEngine
-  ColumnarTopicStore
+  TopicStore
+    TopicRowStorage
+    future ColumnarTopicStore implementation
   QueryCompiler
   RawSnapshotExecutor
   CountExecutor
@@ -762,7 +769,7 @@ ColumnLiveViewEngine
   ChangeStream
 ```
 
-`ColumnarTopicStore` should be schema-driven:
+The future `ColumnarTopicStore` implementation should be schema-driven:
 
 - numbers: `Float64Array`, `Int32Array`, or narrower typed arrays where safe
 - booleans: `Uint8Array`
@@ -1005,7 +1012,7 @@ Takeaway:
 
 - TypeScript typed arrays are credible for raw live views.
 - Rust/native is probably useful later for count/group/projection-heavy workloads.
-- The live engine should start with our own authoritative columnar store, not Mongo/Perspective/Polars as the primary runtime engine.
+- The live engine should start with our own authoritative TopicStore and TopicRowStorage implementation, not Mongo/Perspective/Polars as the primary runtime engine.
 
 ## Acceptance Criteria For The First Production Slice
 
@@ -1045,7 +1052,7 @@ apps/examples
 Responsibilities:
 
 - `packages/config`: `defineViewServerConfig`, query DSL types, schema/topic typing, shared public types.
-- `packages/column-live-view-engine`: in-memory columnar store, snapshot, subscribe, deltas, grouped aggregates, health core.
+- `packages/column-live-view-engine`: in-memory TopicStore/TopicRowStorage, snapshot, subscribe, deltas, grouped aggregates, health core.
 - `packages/runtime-core`: shared engine-backed runtime Module; owns the `ColumnLiveViewEngine`, runtime client, live client, pushed health streams, and lifecycle.
 - `packages/client`: transport-neutral live client contracts, query state, and remote client entrypoints.
 - `packages/protocol`: Effect RPC WebSocket wire schema and encode/decode boundary.

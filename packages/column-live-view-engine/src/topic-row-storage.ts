@@ -32,7 +32,7 @@ import {
 
 type RowObject = object;
 
-export class ColumnarTopicStore {
+export class TopicRowStorage {
   readonly rawQueryMetadata: RawQueryCompilerMetadata;
   readonly readModel: ActiveQueryStoreState;
 
@@ -198,29 +198,24 @@ export class ColumnarTopicStore {
     return scanTopicRawWindow(this.rawWindowScanState, plan);
   }
 
-  prepareRow = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.row.prepare")(function* <
+  prepareRow = Effect.fn("ColumnLiveViewEngine.topicRowStorage.row.prepare")(function* <
     Error,
     Row extends RowObject,
-  >(this: ColumnarTopicStore, row: Row, invalidRow: InvalidRowErrorFactory<Error>) {
+  >(this: TopicRowStorage, row: Row, invalidRow: InvalidRowErrorFactory<Error>) {
     return yield* prepareTopicRow(this.rowPreparation, row, invalidRow);
   });
 
-  prepareRows = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.rows.prepare")(function* <
+  prepareRows = Effect.fn("ColumnLiveViewEngine.topicRowStorage.rows.prepare")(function* <
     Error,
     Row extends RowObject,
-  >(this: ColumnarTopicStore, rows: ReadonlyArray<Row>, invalidRow: InvalidRowErrorFactory<Error>) {
+  >(this: TopicRowStorage, rows: ReadonlyArray<Row>, invalidRow: InvalidRowErrorFactory<Error>) {
     return yield* Effect.forEach(rows, (row) => this.prepareRow(row, invalidRow));
   });
 
-  preparePatch = Effect.fn("ColumnLiveViewEngine.columnarTopicStore.patch.prepare")(function* <
+  preparePatch = Effect.fn("ColumnLiveViewEngine.topicRowStorage.patch.prepare")(function* <
     Patch extends Partial<RowObject>,
     Error,
-  >(
-    this: ColumnarTopicStore,
-    key: string,
-    patch: Patch,
-    invalidRow: InvalidRowErrorFactory<Error>,
-  ) {
+  >(this: TopicRowStorage, key: string, patch: Patch, invalidRow: InvalidRowErrorFactory<Error>) {
     return yield* prepareTopicPatch(
       this.rowPreparation,
       key,

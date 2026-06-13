@@ -1,5 +1,5 @@
 import { Clock, Effect, Semaphore } from "effect";
-import type { ColumnarTopicStore } from "./columnar-topic-store";
+import type { TopicRowStorage } from "./topic-row-storage";
 import type { InvalidRowErrorFactory, PreparedTopicRow } from "./topic-row-preparation";
 import type { createTopicHealthLedger } from "./topic-health-ledger";
 import type { LiveTopicSubscriber } from "./topic-subscriber";
@@ -8,7 +8,7 @@ import { topicStoreState, type TopicStore } from "./topic-store-state";
 type RowObject = object;
 
 export type TopicStoreMutationState = {
-  readonly storage: ColumnarTopicStore;
+  readonly storage: TopicRowStorage;
   readonly subscribers: Set<LiveTopicSubscriber>;
   readonly mutationSemaphore: Semaphore.Semaphore;
   readonly notificationSemaphore: Semaphore.Semaphore;

@@ -5,7 +5,7 @@ import {
   type ActiveQueryExecutionCounts,
   type ActiveQueryStoreState,
 } from "./active-query";
-import { ColumnarTopicStore } from "./columnar-topic-store";
+import { TopicRowStorage } from "./topic-row-storage";
 import { createTopicHealthLedger } from "./topic-health-ledger";
 import type { TopicStoreMutationState } from "./topic-store-mutation";
 import type { RawQueryCompilerMetadata } from "./raw-query-compiler";
@@ -37,7 +37,7 @@ export class TopicStore {
     keyField: string,
     onCommit: () => void,
   ) {
-    const storage = new ColumnarTopicStore(topic, schema, keyField);
+    const storage = new TopicRowStorage(topic, schema, keyField);
     const subscribers = new Set<LiveTopicSubscriber>();
     const state: TopicStoreState = {
       storage,
