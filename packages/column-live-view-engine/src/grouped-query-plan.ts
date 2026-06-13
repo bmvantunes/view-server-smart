@@ -1,5 +1,6 @@
 import {
   aggregateStateCompareValue,
+  type GroupedAggregatePlan,
   type GroupState,
   type RuntimeGroupedAggregate,
 } from "./grouped-aggregate-state";
@@ -39,6 +40,7 @@ export type GroupedQueryPlan<Row extends RowObject> = {
   readonly cacheKey: string;
   readonly groupBy: ReadonlyArray<string>;
   readonly aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>;
+  readonly aggregatePlans: ReadonlyArray<GroupedAggregatePlan>;
   readonly orderBy: ReadonlyArray<RuntimeGroupedOrderBy>;
   readonly compiledOrderBy: ReadonlyArray<CompiledGroupedOrderBy>;
   readonly offset: number;
@@ -64,6 +66,14 @@ const groupedQueryPlanGroupKey = <Row extends RowObject>(
   groupBy: ReadonlyArray<string>,
   row: Row,
 ): string => stableQueryValueString(groupBy.map((field) => [field, fieldValue(row, field)]));
+
+const compileGroupedAggregates = (
+  aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
+): ReadonlyArray<GroupedAggregatePlan> =>
+  Object.entries(aggregates).map(([alias, aggregate]) => ({
+    alias,
+    aggregate,
+  }));
 
 const groupedFieldOrderColumn = (
   field: string,
@@ -102,6 +112,7 @@ export const makeGroupedQueryPlan = <Row extends RowObject>(
     cacheKey: groupedQueryPlanCacheKey(query),
     groupBy,
     aggregates: query.aggregates,
+    aggregatePlans: compileGroupedAggregates(query.aggregates),
     orderBy,
     compiledOrderBy: compileGroupedOrderBy(orderBy),
     offset: query.offset ?? 0,

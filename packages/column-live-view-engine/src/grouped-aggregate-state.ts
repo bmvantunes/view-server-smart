@@ -27,6 +27,11 @@ export type RuntimeGroupedAggregate =
       readonly resultKind: "bigint" | "bigDecimal";
     };
 
+export type GroupedAggregatePlan = {
+  readonly alias: string;
+  readonly aggregate: RuntimeGroupedAggregate;
+};
+
 type CountAggregateState = {
   readonly aggFunc: "count";
   count: bigint;
@@ -386,7 +391,7 @@ export const aggregateStateCompareValue = (state: AggregateState): unknown => {
 export const newGroupState = (
   key: string,
   groupBy: ReadonlyArray<string>,
-  aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
+  aggregates: ReadonlyArray<GroupedAggregatePlan>,
   row: RowObject,
 ): GroupState => {
   const resultRow: Record<string, unknown> = {};
@@ -394,7 +399,7 @@ export const newGroupState = (
     resultRow[field] = cloneUnknown(fieldValue(row, field));
   }
   const aggregateStates: Record<string, AggregateState> = {};
-  for (const [alias, aggregate] of Object.entries(aggregates)) {
+  for (const { alias, aggregate } of aggregates) {
     aggregateStates[alias] = emptyAggregateState(aggregate);
   }
   return {
@@ -407,7 +412,7 @@ export const newGroupState = (
 export const newIncrementalGroupState = (
   key: string,
   groupBy: ReadonlyArray<string>,
-  aggregates: Readonly<Record<string, RuntimeGroupedAggregate>>,
+  aggregates: ReadonlyArray<GroupedAggregatePlan>,
   row: RowObject,
 ): MaterializedIncrementalGroupState => {
   const resultRow: Record<string, unknown> = {};
@@ -415,7 +420,7 @@ export const newIncrementalGroupState = (
     resultRow[field] = cloneUnknown(fieldValue(row, field));
   }
   const aggregateStates: Record<string, ReversibleAggregateState> = {};
-  for (const [alias, aggregate] of Object.entries(aggregates)) {
+  for (const { alias, aggregate } of aggregates) {
     aggregateStates[alias] = emptyReversibleAggregateState(aggregate);
   }
   return {

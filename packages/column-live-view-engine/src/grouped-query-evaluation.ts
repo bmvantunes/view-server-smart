@@ -45,10 +45,10 @@ export const evaluateGroupedRows = <Row extends RowObject>(
     const key = plan.groupKey(row);
     let group = groups.get(key);
     if (group === undefined) {
-      group = newGroupState(key, plan.groupBy, plan.aggregates, row);
+      group = newGroupState(key, plan.groupBy, plan.aggregatePlans, row);
       groups.set(key, group);
     }
-    for (const [alias, aggregate] of Object.entries(plan.aggregates)) {
+    for (const { alias, aggregate } of plan.aggregatePlans) {
       updateAggregateState(group.aggregates[alias]!, aggregate, row);
     }
   });
