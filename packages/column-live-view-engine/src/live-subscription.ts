@@ -77,6 +77,35 @@ const closeForBackpressure = Effect.fn(
   );
 });
 
+const notifyLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscription.notify")(function* <
+  ResultRow extends RowObject,
+>(
+  queryId: string,
+  store: TopicStore,
+  subscriber: LiveTopicSubscriber,
+  queue: Queue.Queue<LiveSubscriptionEvent<ResultRow>, Cause.Done>,
+  execution: LiveQueryExecution<ResultRow>,
+  cursor: ReturnType<LiveQueryExecution<ResultRow>["createCursor"]>,
+  releaseExecution: Effect.Effect<void>,
+) {
+  yield* Effect.annotateCurrentSpan({
+    queryId,
+    topic: store.topic,
+  });
+  const nextEvent = yield* execution.next(queryId, cursor);
+  if (Option.isNone(nextEvent)) {
+    return;
+  }
+  const offered = yield* Queue.offer(queue, nextEvent.value);
+  if (!offered) {
+    yield* closeForBackpressure(store, subscriber, queue, releaseExecution);
+    return;
+  }
+
+  const queueDepth = yield* Queue.size(queue);
+  yield* trackTopicStoreSubscriptionQueueDepth(store, subscriber, queueDepth);
+});
+
 export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscription.make")(
   function* <ResultRow extends RowObject>(options: MakeLiveSubscriptionOptions<ResultRow>) {
     const { execution, permit, queryId, queueCapacity } = options;
@@ -93,20 +122,15 @@ export const makeLiveSubscription = Effect.fn("ColumnLiveViewEngine.liveSubscrip
       topic: store.topic,
       queryId,
       notify: () =>
-        Effect.gen(function* () {
-          const nextEvent = yield* execution.next(queryId, cursor);
-          if (Option.isNone(nextEvent)) {
-            return;
-          }
-          const offered = yield* Queue.offer(queue, nextEvent.value);
-          if (!offered) {
-            yield* closeForBackpressure(store, subscriber, queue, releaseExecution);
-            return;
-          }
-
-          const queueDepth = yield* Queue.size(queue);
-          yield* trackTopicStoreSubscriptionQueueDepth(store, subscriber, queueDepth);
-        }),
+        notifyLiveSubscription(
+          queryId,
+          store,
+          subscriber,
+          queue,
+          execution,
+          cursor,
+          releaseExecution,
+        ),
       queuedEvents: Queue.size(queue),
       end: Queue.end(queue),
       closeWithStatus: (event) =>
