@@ -3,8 +3,8 @@ import { viewServerSchemaFieldMetadata } from "@view-server/config";
 import { Effect, Schema } from "effect";
 import * as BigDecimal from "effect/BigDecimal";
 import {
-  decodeJsonFieldValue,
-  encodeJsonFieldValue,
+  decodeContextualJsonFieldValue,
+  encodeContextualJsonFieldValue,
   type JsonFieldSchema,
 } from "./protocol-json-field-codec";
 import type { ViewServerWireAggregate } from "./protocol-query-schema";
@@ -74,9 +74,11 @@ const decodeAggregateEnvelope = Effect.fn("ViewServerProtocol.row.aggregate.enve
 const encodeAggregateJsonFieldValue = Effect.fn(
   "ViewServerProtocol.row.aggregate.jsonField.encode",
 )(function* (topic: string, field: string, schema: JsonFieldSchema, value: unknown) {
-  return yield* encodeJsonFieldValue(schema, value, {
-    invalid: (message) => invalidRow(topic, `Invalid field ${field}: ${message}`),
-    notJsonSafe: (message) => invalidRow(topic, `Field ${field} is not JSON-safe: ${message}`),
+  return yield* encodeContextualJsonFieldValue(schema, value, {
+    invalid: (message) => invalidRow(topic, message),
+    invalidMessage: (message) => `Invalid field ${field}: ${message}`,
+    notJsonSafe: (message) => invalidRow(topic, message),
+    notJsonSafeMessage: (message) => `Field ${field} is not JSON-safe: ${message}`,
   });
 });
 
@@ -139,8 +141,9 @@ const decodeJsonAggregateValue = Effect.fn("ViewServerProtocol.row.aggregate.jso
         invalidRow(topic, `Aggregate ${field} must be a JSON aggregate envelope.`),
       );
     }
-    return yield* decodeJsonFieldValue(schema, envelope.value, {
-      invalid: (message) => invalidRow(topic, `Invalid field ${field}: ${message}`),
+    return yield* decodeContextualJsonFieldValue(schema, envelope.value, {
+      invalid: (message) => invalidRow(topic, message),
+      invalidMessage: (message) => `Invalid field ${field}: ${message}`,
     });
   },
 );
