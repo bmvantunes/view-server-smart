@@ -1,0 +1,311 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "grouped-order-neutral",
+  "tasks": [
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 100000 rows",
+          "maxMs": 0.9559999999999036,
+          "meanMs": 0.49513933333332716,
+          "minMs": 0.24870900000018992,
+          "name": "grouped publishMany append batch",
+          "p99Ms": 0.9559999999999036,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 100000 rows",
+          "maxMs": 0.6888330000001588,
+          "meanMs": 0.4134580000000672,
+          "minMs": 0.26104099999997743,
+          "name": "grouped publishMany replace extrema batch",
+          "p99Ms": 0.6888330000001588,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 100000 rows",
+          "maxMs": 0.3610830000000078,
+          "meanMs": 0.24602766666665352,
+          "minMs": 0.17650000000003274,
+          "name": "grouped patch aggregate values",
+          "p99Ms": 0.3610830000000078,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 100000 rows",
+          "maxMs": 0.3374579999999696,
+          "meanMs": 0.25445833333325635,
+          "minMs": 0.17574999999987995,
+          "name": "grouped patch group moves",
+          "p99Ms": 0.3374579999999696,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 100000 rows",
+          "maxMs": 0.30204200000002857,
+          "meanMs": 0.24722266666670598,
+          "minMs": 0.14916700000003402,
+          "name": "grouped delete existing rows",
+          "p99Ms": 0.30204200000002857,
+          "sampleCount": 3
+        }
+      ],
+      "benchmarkCases": [
+        "grouped publishMany append batch",
+        "grouped publishMany replace extrema batch",
+        "grouped patch aggregate values",
+        "grouped patch group moves",
+        "grouped delete existing rows"
+      ],
+      "benchmarkName": "grouped write engine benchmark",
+      "benchmarkScope": "engine-grouped-write",
+      "cleanupLeakCount": 0,
+      "groupedWriteAdmission": {
+        "activeFallbackGroupedViewsAfterSetup": 0,
+        "activeFallbackGroupedViewsBeforeCleanup": 0,
+        "activeIncrementalGroupedViewsAfterSetup": 1,
+        "activeIncrementalGroupedViewsBeforeCleanup": 1,
+        "activeViewsAfterSetup": 1,
+        "activeViewsBeforeCleanup": 1,
+        "configuredMode": "incremental",
+        "expectedAdmission": "incremental",
+        "groupedFullEvaluationCountAfterSetup": 0,
+        "groupedFullEvaluationCountBeforeCleanup": 9,
+        "groupedPatchedEvaluationCountAfterSetup": 0,
+        "groupedPatchedEvaluationCountBeforeCleanup": 6,
+        "incrementalAdmissionLimits": {
+          "maxGroups": 8192,
+          "maxMembers": 65536,
+          "maxMembersPerGroup": 4096,
+          "maxRetainedValueEntries": 65536
+        },
+        "priceThreshold": 94000,
+        "readerProfile": "order-neutral",
+        "seedMutationCount": 100000,
+        "timedMutationCount": 15,
+        "writeBatchSize": 1
+      },
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 109428736,
+      "minimumSampleCount": 3,
+      "mutationCount": 100015,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-order-neutral-100000rows-1mutations.json",
+      "queuedEventCount": 0,
+      "rowCount": 100000,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-order-neutral-100000rows-1mutations.summary.json",
+      "taskLabel": "grouped write incremental order-neutral 100000 rows 1 mutations",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000000 rows",
+          "maxMs": 0.8881670000009763,
+          "meanMs": 0.5539860000001985,
+          "minMs": 0.27829100000053586,
+          "name": "grouped publishMany append batch",
+          "p99Ms": 0.8881670000009763,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000000 rows",
+          "maxMs": 0.7651249999998981,
+          "meanMs": 0.4704863333330043,
+          "minMs": 0.29204199999912817,
+          "name": "grouped publishMany replace extrema batch",
+          "p99Ms": 0.7651249999998981,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000000 rows",
+          "maxMs": 0.41045800000028976,
+          "meanMs": 0.3174443333336967,
+          "minMs": 0.16187499999978172,
+          "name": "grouped patch aggregate values",
+          "p99Ms": 0.41045800000028976,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000000 rows",
+          "maxMs": 0.389166999999361,
+          "meanMs": 0.29638866666634084,
+          "minMs": 0.18816599999991013,
+          "name": "grouped patch group moves",
+          "p99Ms": 0.389166999999361,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000000 rows",
+          "maxMs": 0.258083999999144,
+          "meanMs": 0.19237533333337828,
+          "minMs": 0.11887500000011642,
+          "name": "grouped delete existing rows",
+          "p99Ms": 0.258083999999144,
+          "sampleCount": 3
+        }
+      ],
+      "benchmarkCases": [
+        "grouped publishMany append batch",
+        "grouped publishMany replace extrema batch",
+        "grouped patch aggregate values",
+        "grouped patch group moves",
+        "grouped delete existing rows"
+      ],
+      "benchmarkName": "grouped write engine benchmark",
+      "benchmarkScope": "engine-grouped-write",
+      "cleanupLeakCount": 0,
+      "groupedWriteAdmission": {
+        "activeFallbackGroupedViewsAfterSetup": 0,
+        "activeFallbackGroupedViewsBeforeCleanup": 0,
+        "activeIncrementalGroupedViewsAfterSetup": 1,
+        "activeIncrementalGroupedViewsBeforeCleanup": 1,
+        "activeViewsAfterSetup": 1,
+        "activeViewsBeforeCleanup": 1,
+        "configuredMode": "incremental",
+        "expectedAdmission": "incremental",
+        "groupedFullEvaluationCountAfterSetup": 0,
+        "groupedFullEvaluationCountBeforeCleanup": 9,
+        "groupedPatchedEvaluationCountAfterSetup": 0,
+        "groupedPatchedEvaluationCountBeforeCleanup": 6,
+        "incrementalAdmissionLimits": {
+          "maxGroups": 8192,
+          "maxMembers": 65536,
+          "maxMembersPerGroup": 4096,
+          "maxRetainedValueEntries": 65536
+        },
+        "priceThreshold": 994000,
+        "readerProfile": "order-neutral",
+        "seedMutationCount": 1000000,
+        "timedMutationCount": 15,
+        "writeBatchSize": 1
+      },
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 576503808,
+      "minimumSampleCount": 3,
+      "mutationCount": 1000015,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-order-neutral-1000000rows-1mutations.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000000,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-order-neutral-1000000rows-1mutations.summary.json",
+      "taskLabel": "grouped write incremental order-neutral 1000000 rows 1 mutations",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 5000000 rows",
+          "maxMs": 1.1085829999938142,
+          "meanMs": 0.5638193333288655,
+          "minMs": 0.28087499999674037,
+          "name": "grouped publishMany append batch",
+          "p99Ms": 1.1085829999938142,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 5000000 rows",
+          "maxMs": 0.47162500000558794,
+          "meanMs": 0.36313900000338134,
+          "minMs": 0.21954200000618584,
+          "name": "grouped publishMany replace extrema batch",
+          "p99Ms": 0.47162500000558794,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 5000000 rows",
+          "maxMs": 0.44470799999544397,
+          "meanMs": 0.270041666663019,
+          "minMs": 0.17799999999988358,
+          "name": "grouped patch aggregate values",
+          "p99Ms": 0.44470799999544397,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 5000000 rows",
+          "maxMs": 0.3635409999988042,
+          "meanMs": 0.26026366666095174,
+          "minMs": 0.1829159999906551,
+          "name": "grouped patch group moves",
+          "p99Ms": 0.3635409999988042,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 5000000 rows",
+          "maxMs": 0.33279200000106357,
+          "meanMs": 0.19070866666637207,
+          "minMs": 0.11941700000897981,
+          "name": "grouped delete existing rows",
+          "p99Ms": 0.33279200000106357,
+          "sampleCount": 3
+        }
+      ],
+      "benchmarkCases": [
+        "grouped publishMany append batch",
+        "grouped publishMany replace extrema batch",
+        "grouped patch aggregate values",
+        "grouped patch group moves",
+        "grouped delete existing rows"
+      ],
+      "benchmarkName": "grouped write engine benchmark",
+      "benchmarkScope": "engine-grouped-write",
+      "cleanupLeakCount": 0,
+      "groupedWriteAdmission": {
+        "activeFallbackGroupedViewsAfterSetup": 0,
+        "activeFallbackGroupedViewsBeforeCleanup": 0,
+        "activeIncrementalGroupedViewsAfterSetup": 1,
+        "activeIncrementalGroupedViewsBeforeCleanup": 1,
+        "activeViewsAfterSetup": 1,
+        "activeViewsBeforeCleanup": 1,
+        "configuredMode": "incremental",
+        "expectedAdmission": "incremental",
+        "groupedFullEvaluationCountAfterSetup": 0,
+        "groupedFullEvaluationCountBeforeCleanup": 9,
+        "groupedPatchedEvaluationCountAfterSetup": 0,
+        "groupedPatchedEvaluationCountBeforeCleanup": 6,
+        "incrementalAdmissionLimits": {
+          "maxGroups": 8192,
+          "maxMembers": 65536,
+          "maxMembersPerGroup": 4096,
+          "maxRetainedValueEntries": 65536
+        },
+        "priceThreshold": 998800,
+        "readerProfile": "order-neutral",
+        "seedMutationCount": 5000000,
+        "timedMutationCount": 15,
+        "writeBatchSize": 1
+      },
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 2682535936,
+      "minimumSampleCount": 3,
+      "mutationCount": 5000015,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-order-neutral-5000000rows-1mutations.json",
+      "queuedEventCount": 0,
+      "rowCount": 5000000,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-order-neutral-5000000rows-1mutations.summary.json",
+      "taskLabel": "grouped write incremental order-neutral 5000000 rows 1 mutations",
+      "topics": ["orders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 0.5,
+      "maxRatio": 6
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 1,
+      "maxRatio": 6
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    }
+  }
+}

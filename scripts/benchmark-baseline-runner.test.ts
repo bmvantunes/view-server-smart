@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readBenchmarkBaseline, writeBenchmarkBaseline } from "./benchmark-baseline.mjs";
@@ -178,6 +178,26 @@ describe("benchmark baseline runner", () => {
       nonJsonSummary: ".artifacts/result.summary.json",
       summary: ".artifacts/result.summary.json",
       unknownSignalExitCode: 1,
+    });
+  });
+
+  it("keeps targeted grouped baseline scripts in compare mode by default", () => {
+    const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+
+    expect({
+      groupedAdmission: scripts["bench:baseline:grouped-admission"],
+      groupedAdmissionUpdate: scripts["bench:baseline:grouped-admission:update"],
+      groupedOrderNeutral: scripts["bench:baseline:grouped-order-neutral"],
+      groupedOrderNeutralUpdate: scripts["bench:baseline:grouped-order-neutral:update"],
+      release: scripts["bench:baseline:release"],
+    }).toStrictEqual({
+      groupedAdmission: "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission",
+      groupedAdmissionUpdate:
+        "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission --update-baseline",
+      groupedOrderNeutral: "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral",
+      groupedOrderNeutralUpdate:
+        "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral --update-baseline",
+      release: "node scripts/run-benchmark-baseline.mjs --profile=release --no-compare",
     });
   });
 

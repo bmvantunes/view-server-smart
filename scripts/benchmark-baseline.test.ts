@@ -3,9 +3,12 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  benchmarkThresholdsForProfile,
   buildBenchmarkBaseline,
   comparableBenchmarksFromVitestOutput,
   compareBenchmarkBaseline,
+  defaultBenchmarkThresholds,
+  groupedOrderNeutralBenchmarkThresholds,
   readBenchmarkBaseline,
   readBenchmarkObservation,
   validateBenchmarkBaseline,
@@ -136,6 +139,21 @@ describe("benchmark baseline comparison", () => {
         sampleCount: 7,
       },
     ]);
+  });
+
+  it("uses profile-specific baseline thresholds", () => {
+    expect({
+      groupedOrderNeutral: benchmarkThresholdsForProfile("grouped-order-neutral"),
+      smoke: benchmarkThresholdsForProfile("smoke"),
+      smokeBaseline: buildBenchmarkBaseline("smoke", [observation]).thresholds,
+      orderNeutralBaseline: buildBenchmarkBaseline("grouped-order-neutral", [observation])
+        .thresholds,
+    }).toStrictEqual({
+      groupedOrderNeutral: groupedOrderNeutralBenchmarkThresholds,
+      smoke: defaultBenchmarkThresholds,
+      smokeBaseline: defaultBenchmarkThresholds,
+      orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
+    });
   });
 
   it("reads benchmark observations from summary and Vitest artifacts", () => {
@@ -363,6 +381,42 @@ describe("benchmark baseline comparison", () => {
     expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
       ok: true,
       regressions: [],
+    });
+  });
+
+  it("rejects large relative latency regressions for grouped order-neutral baselines", () => {
+    const subMillisecondObservation = {
+      ...observation,
+      benchmarks: [
+        {
+          ...observation.benchmarks[0],
+          meanMs: 0.2,
+          p99Ms: 0.3,
+        },
+      ],
+    };
+    const baseline = buildBenchmarkBaseline("grouped-order-neutral", [
+      subMillisecondObservation,
+    ]);
+    const actual = buildBenchmarkBaseline("grouped-order-neutral", [
+      {
+        ...subMillisecondObservation,
+        benchmarks: [
+          {
+            ...subMillisecondObservation.benchmarks[0],
+            meanMs: 1.3,
+            p99Ms: 2,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a / src/example.bench.ts > example benchmark group / case a: mean regressed from 0.200ms to 1.300ms; allowed <= 1.200ms.",
+        "task a / src/example.bench.ts > example benchmark group / case a: p99 regressed from 0.300ms to 2.000ms; allowed <= 1.800ms.",
+      ],
     });
   });
 
@@ -716,7 +770,7 @@ describe("benchmark baseline comparison", () => {
     };
 
     expect(() => validateBenchmarkBaseline(baseline)).toThrow(
-      "Benchmark artifact field baseline.thresholds must match code-owned default thresholds.",
+      "Benchmark artifact field baseline.thresholds must match code-owned profile thresholds.",
     );
   });
 

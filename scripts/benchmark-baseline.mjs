@@ -16,6 +16,23 @@ export const defaultBenchmarkThresholds = {
   },
 };
 
+export const groupedOrderNeutralBenchmarkThresholds = {
+  latencyMean: {
+    maxAbsoluteDeltaMs: 0.5,
+    maxRatio: 6,
+  },
+  latencyP99: {
+    maxAbsoluteDeltaMs: 1,
+    maxRatio: 6,
+  },
+  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+};
+
+export const benchmarkThresholdsForProfile = (profile) =>
+  profile === "grouped-order-neutral"
+    ? groupedOrderNeutralBenchmarkThresholds
+    : defaultBenchmarkThresholds;
+
 const readJsonFile = (path) => JSON.parse(readFileSync(path, "utf8"));
 
 const writeJsonFile = (path, value) => {
@@ -228,7 +245,7 @@ export const buildBenchmarkBaseline = (profile, observations) => ({
   artifactKind: "view-server-benchmark-baseline",
   profile,
   tasks: observations,
-  thresholds: defaultBenchmarkThresholds,
+  thresholds: benchmarkThresholdsForProfile(profile),
 });
 
 const writableBenchmarkBaseline = (path, baseline) => {
@@ -256,7 +273,7 @@ const nonEmptyArrayValue = (value, path) => {
   return array;
 };
 
-const thresholdsValue = (value, path) => {
+const thresholdsValue = (value, path, expectedThresholds) => {
   const thresholds = objectValue(value, path);
   const validatedThresholds = {
     latencyMean: {
@@ -285,8 +302,8 @@ const thresholdsValue = (value, path) => {
       ),
     },
   };
-  if (JSON.stringify(validatedThresholds) !== JSON.stringify(defaultBenchmarkThresholds)) {
-    throw new Error(`Benchmark artifact field ${path} must match code-owned default thresholds.`);
+  if (JSON.stringify(validatedThresholds) !== JSON.stringify(expectedThresholds)) {
+    throw new Error(`Benchmark artifact field ${path} must match code-owned profile thresholds.`);
   }
   return validatedThresholds;
 };
@@ -346,17 +363,22 @@ const validateTask = (task, path) => {
   };
 };
 
-export const validateBenchmarkBaseline = (baseline, path = "baseline") => ({
-  artifactKind: baselineArtifactKind(
-    objectValue(baseline, path).artifactKind,
-    `${path}.artifactKind`,
-  ),
-  profile: stringValue(baseline.profile, `${path}.profile`),
-  tasks: nonEmptyArrayValue(baseline.tasks, `${path}.tasks`).map((task, index) =>
-    validateTask(task, `${path}.tasks[${index}]`),
-  ),
-  thresholds: thresholdsValue(baseline.thresholds, `${path}.thresholds`),
-});
+export const validateBenchmarkBaseline = (baseline, path = "baseline") => {
+  const baselineObject = objectValue(baseline, path);
+  const profile = stringValue(baselineObject.profile, `${path}.profile`);
+  return {
+    artifactKind: baselineArtifactKind(baselineObject.artifactKind, `${path}.artifactKind`),
+    profile,
+    tasks: nonEmptyArrayValue(baselineObject.tasks, `${path}.tasks`).map((task, index) =>
+      validateTask(task, `${path}.tasks[${index}]`),
+    ),
+    thresholds: thresholdsValue(
+      baselineObject.thresholds,
+      `${path}.thresholds`,
+      benchmarkThresholdsForProfile(profile),
+    ),
+  };
+};
 
 const mapByUniqueKey = (values, key, path, label) => {
   const entries = [];
@@ -440,7 +462,7 @@ const compareRss = (regressions, taskLabel, threshold, baseline, actual) => {
 export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
   const validatedBaseline = validateBenchmarkBaseline(baseline, "baseline");
   const validatedActual = validateBenchmarkBaseline(actualBaseline, "actual");
-  const thresholds = defaultBenchmarkThresholds;
+  const thresholds = validatedBaseline.thresholds;
   const baselineTasks = taskByLabel(validatedBaseline.tasks, "baseline.tasks");
   const actualTasks = taskByLabel(validatedActual.tasks, "actual.tasks");
   const regressions = [];

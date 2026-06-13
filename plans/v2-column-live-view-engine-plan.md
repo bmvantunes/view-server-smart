@@ -1288,6 +1288,8 @@ Preferred serial benchmark runner:
 ```bash
 pnpm run bench:baseline:smoke
 pnpm run bench:baseline
+pnpm run bench:baseline:grouped-admission
+pnpm run bench:baseline:grouped-order-neutral
 pnpm run bench:baseline:release
 ```
 
@@ -1303,12 +1305,13 @@ accepted.
 `bench:baseline:release` is the release-quality serial profile and runs the documented row
 counts/browser profiles in separate processes. It intentionally executes one benchmark process at a
 time so GC, RSS, browser state, and artifact files are not polluted by competing benchmark suites.
-The release and grouped-admission profiles currently run without comparison by default; use their
-`:update` scripts when committing dedicated release baseline manifests.
+The grouped-admission and grouped-order-neutral profiles are committed comparison profiles. Release
+remains report-only/no-compare by default because it is heavy; use
+`bench:baseline:release:update` only when accepting a release baseline manifest.
 
 The serial runner is `scripts/run-benchmark-baseline.mjs`. It supports
-`VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|release|grouped-admission` or
-`--profile=smoke|release|grouped-admission`; an explicit
+`VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|release|grouped-admission|grouped-order-neutral` or
+`--profile=smoke|release|grouped-admission|grouped-order-neutral`; an explicit
 `--profile` argument wins over the environment variable, so the root package scripts always run the
 profile they name. Use the environment variable only when invoking the Node script directly. The
 runner scrubs benchmark-specific environment variables before each child process so stale local
@@ -1614,7 +1617,10 @@ for the same row count and write batch. The summary sidecar includes `groupedWri
 `preCleanupHealth`, so every run records whether grouped subscriptions were admitted as incremental
 views or demoted to fallback before cleanup. `groupedWriteAdmission` also records grouped full
 evaluation and patched-evaluation counters after setup and before cleanup, so order-neutral patch
-regressions are visible in baseline comparisons.
+regressions are visible in baseline comparisons. The default command compares fresh artifacts against
+`benchmarks/baselines/grouped-admission.json`; use
+`pnpm run bench:baseline:grouped-admission:update` only when accepting a new grouped-admission
+baseline.
 
 Order-neutral grouped evaluation patching uses a dedicated serial baseline profile:
 
@@ -1626,7 +1632,10 @@ That profile sets `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE=order-n
 same 100k, 1M, and 5M grouped write row counts as the release grouped-write profile. It keeps only
 the field-ordered grouped subscription open, so `grouped patch aggregate values` isolates the
 order-neutral evaluation patch path instead of mixing it with an aggregate-ordered subscriber that
-must rebuild the grouped window.
+must rebuild the grouped window. The default command compares fresh artifacts against
+`benchmarks/baselines/grouped-order-neutral.json`; use
+`pnpm run bench:baseline:grouped-order-neutral:update` only when accepting a new order-neutral
+baseline.
 
 Grouped write benchmark cases:
 
