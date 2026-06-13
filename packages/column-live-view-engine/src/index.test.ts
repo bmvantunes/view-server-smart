@@ -52,6 +52,7 @@ import {
   valuesEqual,
 } from "./row-values";
 import type { TopicRowChangeBatch } from "./row-scan";
+import type { TopicRawOrderByPlan } from "./raw-window-scan";
 import { scanTopicRawWindow } from "./topic-raw-window-scanner";
 import {
   addSlotToScalarPredicateIndexes,
@@ -86,6 +87,7 @@ import {
   compareRangeColumnValue,
 } from "./topic-range-value";
 import { orderedSlotBoundIndex } from "./topic-ordered-window";
+import { rawWindowOrderedSlotIndex } from "./topic-raw-ordered-window-index";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -6638,6 +6640,74 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       });
       expect(invalidStorageOrderColumnLimited.keys).toStrictEqual(["3"]);
       expect(invalidStorageOrderColumnLimited.totalRows).toBe(2);
+
+      expect(
+        readModel.compareRawSlots?.({
+          predicate: {
+            filters: [],
+            callbackRequired: false,
+          },
+          orderBy: [],
+          matches: () => true,
+          compare: compareByKey,
+          offset: 0,
+          limit: 10,
+        }),
+      ).toBeUndefined();
+
+      expect(
+        readModel.compareRawSlots?.({
+          predicate: {
+            filters: [],
+            callbackRequired: false,
+          },
+          orderBy: [{ field: "price", direction: "asc" }],
+          storageOrderBy: [{ field: "missing", direction: "asc" }],
+          matches: () => true,
+          compare: compareByKey,
+          offset: 0,
+          limit: 10,
+        }),
+      ).toBeUndefined();
+
+      const cachedStorageOrderBy: ReadonlyArray<TopicRawOrderByPlan> = [
+        { field: "price", direction: "asc" },
+      ];
+      const cachedComparatorPlan = {
+        predicate: {
+          filters: [],
+          callbackRequired: false,
+        },
+        orderBy: cachedStorageOrderBy,
+        storageOrderBy: cachedStorageOrderBy,
+        matches: () => true,
+        compare: compareByKey,
+        offset: 0,
+        limit: 10,
+      };
+      const firstCachedComparator = expectDefined(
+        readModel.compareRawSlots?.(cachedComparatorPlan),
+      );
+      const secondCachedComparator = expectDefined(
+        readModel.compareRawSlots?.(cachedComparatorPlan),
+      );
+      expect(firstCachedComparator(0, 1)).toBe(1);
+      expect(secondCachedComparator(0, 1)).toBe(1);
+
+      const missingOrderedSlotIndex = rawWindowOrderedSlotIndex(
+        {
+          columns: new Map(),
+          orderedSlotIndexes: new Map(),
+          rawQueryMetadata: rawQueryCompilerMetadata(Order),
+          slots: [],
+        },
+        [{ field: "missing", direction: "asc" }],
+      );
+      expect(missingOrderedSlotIndex).toStrictEqual({
+        orderBy: [{ field: "missing", direction: "asc" }],
+        orderColumns: [],
+        slots: [],
+      });
 
       const multiFieldStorageOrderZeroLimit = readModel.scanRawWindow({
         predicate: {

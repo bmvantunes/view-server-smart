@@ -20,6 +20,7 @@ import {
   type OrderedRawWindow,
   type OrderedRawWindowSpan,
   type OrderedSlotIndex,
+  type RawStorageOrderColumn,
 } from "./topic-ordered-window";
 
 export type RawOrderedWindowIndexState = {
@@ -35,7 +36,7 @@ export const insertSlotIntoRawWindowIndexes = (
 ): void => {
   for (const index of state.orderedSlotIndexes.values()) {
     const insertAt = orderedSlotIndexInsertionPoint(index.slots, slot, (left, right) =>
-      compareSlotsByStorageOrder(state, left, right, index.orderBy),
+      compareSlotsByStorageOrder(state, left, right, index.orderColumns),
     );
     index.slots.splice(insertAt, 0, slot);
   }
@@ -104,10 +105,19 @@ export const rawWindowOrderedSlotIndex = (
   if (existing !== undefined) {
     return existing;
   }
+  const orderColumns = compiledRawStorageOrder(state, storageOrderBy);
+  if (orderColumns === undefined) {
+    return {
+      orderBy: storageOrderBy,
+      orderColumns: [],
+      slots: [],
+    };
+  }
   const slots = Array.from({ length: state.slots.length }, (_value, slot) => slot);
-  slots.sort((left, right) => compareSlotsByStorageOrder(state, left, right, storageOrderBy));
+  slots.sort((left, right) => compareSlotsByStorageOrder(state, left, right, orderColumns));
   const index: OrderedSlotIndex = {
     orderBy: storageOrderBy,
+    orderColumns,
     slots,
   };
   state.orderedSlotIndexes.set(indexKey, index);
@@ -138,24 +148,42 @@ export const rawWindowSlotComparator = (
   if (storageOrderBy === undefined) {
     return undefined;
   }
-  if (!storageOrderByFieldsExist(state, storageOrderBy)) {
+  const orderColumns = compiledRawStorageOrder(state, storageOrderBy);
+  if (orderColumns === undefined) {
     return undefined;
   }
 
   return (left, right) => {
-    return compareSlotsByStorageOrder(state, left, right, storageOrderBy);
+    return compareSlotsByStorageOrder(state, left, right, orderColumns);
   };
 };
 
-const compareSlotsByStorageOrder = (
-  state: RawOrderedWindowIndexState,
+export const compiledRawStorageOrder = (
+  state: Pick<RawOrderedWindowIndexState, "columns">,
+  storageOrderBy: ReadonlyArray<TopicRawOrderByPlan>,
+): ReadonlyArray<RawStorageOrderColumn> | undefined => {
+  const orderColumns: Array<RawStorageOrderColumn> = [];
+  for (const order of storageOrderBy) {
+    const column = state.columns.get(order.field);
+    if (column === undefined) {
+      return undefined;
+    }
+    orderColumns.push({
+      column,
+      direction: order.direction,
+    });
+  }
+  return orderColumns;
+};
+
+export const compareSlotsByStorageOrder = (
+  state: Pick<RawOrderedWindowIndexState, "slots">,
   left: number,
   right: number,
-  storageOrderBy: ReadonlyArray<TopicRawOrderByPlan>,
+  storageOrderBy: ReadonlyArray<RawStorageOrderColumn>,
 ): number => {
   for (const order of storageOrderBy) {
-    const column = state.columns.get(order.field)!;
-    const comparison = compareSlotColumnValues(column, left, right);
+    const comparison = compareSlotColumnValues(order.column, left, right);
     if (comparison !== 0) {
       return order.direction === "asc" ? comparison : -comparison;
     }
