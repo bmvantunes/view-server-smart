@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ViewServerLiveClient } from "@view-server/client";
 import * as clientPackage from "@view-server/client";
 import * as clientRemotePackage from "@view-server/client/remote";
@@ -31,6 +34,106 @@ import * as reactPackage from "@view-server/react";
 import * as reactTestingPackage from "@view-server/react/testing";
 import * as runtimeRootPackage from "@view-server/runtime";
 import * as serverPackage from "@view-server/server";
+
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const packagesRoot = join(repoRoot, "packages");
+
+type PackageManifest = {
+  readonly name: string;
+  readonly exports: Record<string, unknown>;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const readPackageManifest = (packageDirectory: string): PackageManifest => {
+  const manifestPath = join(packagesRoot, packageDirectory, "package.json");
+  const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+  if (!isRecord(parsed) || typeof parsed.name !== "string" || !isRecord(parsed.exports)) {
+    throw new Error(`${manifestPath} must declare a package name and exports object`);
+  }
+
+  return {
+    name: parsed.name,
+    exports: parsed.exports,
+  };
+};
+
+const exportedSpecifier = (manifest: PackageManifest, exportPath: string): string => {
+  if (exportPath === ".") {
+    return manifest.name;
+  }
+  if (!exportPath.startsWith("./")) {
+    throw new Error(`${manifest.name} has unsupported export path ${exportPath}`);
+  }
+  return `${manifest.name}/${exportPath.slice("./".length)}`;
+};
+
+const workspacePackageDirectories = readdirSync(packagesRoot, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort();
+
+const packageManifests = workspacePackageDirectories.map(readPackageManifest);
+
+const manifestPackageExports = packageManifests
+  .flatMap((manifest) =>
+    Object.keys(manifest.exports)
+      .sort()
+      .map((exportPath) => exportedSpecifier(manifest, exportPath)),
+  )
+  .sort();
+
+const approvedPackageExports = [
+  "@view-server/client",
+  "@view-server/client/remote",
+  "@view-server/column-live-view-engine",
+  "@view-server/config",
+  "@view-server/config/health",
+  "@view-server/config/kafka",
+  "@view-server/config/live-protocol",
+  "@view-server/config/query",
+  "@view-server/config/runtime",
+  "@view-server/effect-utils",
+  "@view-server/in-memory",
+  "@view-server/protocol",
+  "@view-server/react",
+  "@view-server/react/testing",
+  "@view-server/runtime",
+  "@view-server/runtime-core",
+  "@view-server/server",
+].sort();
+
+const describeSpecifiers = (specifiers: ReadonlyArray<string>): string =>
+  specifiers.map((specifier) => `- ${specifier}`).join("\n");
+
+const manifestExportSet = new Set(manifestPackageExports);
+const approvedExportSet = new Set(approvedPackageExports);
+const unapprovedManifestExports = manifestPackageExports.filter(
+  (specifier) => !approvedExportSet.has(specifier),
+);
+const missingManifestExports = approvedPackageExports.filter(
+  (specifier) => !manifestExportSet.has(specifier),
+);
+
+if (unapprovedManifestExports.length > 0 || missingManifestExports.length > 0) {
+  throw new Error(
+    [
+      "Package manifests must match the approved public export surface.",
+      unapprovedManifestExports.length === 0
+        ? undefined
+        : `Unapproved manifest exports:\n${describeSpecifiers(unapprovedManifestExports)}`,
+      missingManifestExports.length === 0
+        ? undefined
+        : `Approved exports missing from manifests:\n${describeSpecifiers(missingManifestExports)}`,
+    ]
+      .filter((message) => message !== undefined)
+      .join("\n"),
+  );
+}
+
+const publicPackageExports = manifestPackageExports;
 
 const requireExport = (moduleName: string, moduleValue: object, exportName: string) => {
   if (!(exportName in moduleValue)) {
@@ -70,27 +173,16 @@ const rejectResolvablePackageExport = (specifier: string) => {
   }
 };
 
-const publicPackageExports = [
-  "@view-server/client",
-  "@view-server/client/remote",
-  "@view-server/column-live-view-engine",
-  "@view-server/config",
-  "@view-server/config/health",
-  "@view-server/config/kafka",
-  "@view-server/config/live-protocol",
-  "@view-server/config/query",
-  "@view-server/config/runtime",
-  "@view-server/effect-utils",
-  "@view-server/in-memory",
-  "@view-server/protocol",
-  "@view-server/react",
-  "@view-server/react/testing",
-  "@view-server/runtime",
-  "@view-server/runtime-core",
-  "@view-server/server",
+const forbiddenDeepImportSuffixes = [
+  "dist/index.d.ts",
+  "dist/index.js",
+  "dist/internal",
+  "dist/internal.js",
+  "internal",
+  "src/index",
+  "src/index.ts",
+  "src/internal",
 ];
-
-const forbiddenDeepImportSuffixes = ["dist/index.js", "internal", "src/index"];
 
 const forbiddenPackageSubpathDeepImports = publicPackageExports.flatMap((specifier) =>
   forbiddenDeepImportSuffixes.map((suffix) => `${specifier}/${suffix}`),
