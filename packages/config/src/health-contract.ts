@@ -37,6 +37,8 @@ export type TopicRuntimeHealth = {
   readonly activeFallbackGroupedViews: number;
   readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
+  readonly groupedFullEvaluationCount: number;
+  readonly groupedPatchedEvaluationCount: number;
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
   readonly maxQueueDepth: number;
@@ -153,6 +155,8 @@ export type ViewServerHealthTopicRow<Topic extends string = string> = {
   readonly activeFallbackGroupedViews: number;
   readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
+  readonly groupedFullEvaluationCount: number;
+  readonly groupedPatchedEvaluationCount: number;
   readonly activeSubscriptions: number;
   readonly queuedEvents: number;
   readonly maxQueueDepth: number;
@@ -321,6 +325,8 @@ export const viewServerHealthTopicRowsFromHealth = <Topics extends object>(
       activeFallbackGroupedViews: topic.activeFallbackGroupedViews,
       activeIncrementalGroupedViews: topic.activeIncrementalGroupedViews,
       activeViews: topic.activeViews,
+      groupedFullEvaluationCount: topic.groupedFullEvaluationCount,
+      groupedPatchedEvaluationCount: topic.groupedPatchedEvaluationCount,
       activeSubscriptions: topic.activeSubscriptions,
       queuedEvents: topic.queuedEvents,
       maxQueueDepth: topic.maxQueueDepth,

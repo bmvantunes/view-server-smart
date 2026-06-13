@@ -67,6 +67,8 @@ export const collectColumnLiveViewEngineHealth = Effect.fn("ColumnLiveViewEngine
         activeFallbackGroupedViews: topicHealth.activeFallbackGroupedViews,
         activeIncrementalGroupedViews: topicHealth.activeIncrementalGroupedViews,
         activeViews: topicHealth.activeViews,
+        groupedFullEvaluationCount: topicHealth.groupedFullEvaluationCount,
+        groupedPatchedEvaluationCount: topicHealth.groupedPatchedEvaluationCount,
         activeSubscriptions: topicHealth.activeSubscriptions,
         queuedEvents: topicQueuedEvents,
         maxQueueDepth: topicMaxQueueDepth,

@@ -19,6 +19,8 @@ import {
   benchmarkOutputJsonPath,
   cleanupLeakCountFromEngineHealth,
   failOnBenchmarkCleanupLeaks,
+  groupedFullEvaluationCountFromEngineHealth,
+  groupedPatchedEvaluationCountFromEngineHealth,
   isBenchmarkEngineHealth,
   memorySnapshot,
   queuedEventCountFromEngineHealth,
@@ -90,6 +92,8 @@ type BenchmarkProfile = {
   setupActiveFallbackGroupedViews: number;
   setupActiveIncrementalGroupedViews: number;
   setupActiveViews: number;
+  setupGroupedFullEvaluationCount: number;
+  setupGroupedPatchedEvaluationCount: number;
   statusReader: GroupedEventReader | undefined;
   statusScope: Scope.Closeable | undefined;
   statusSubscription: GroupedSubscription | undefined;
@@ -298,6 +302,8 @@ const profile: BenchmarkProfile = {
   setupActiveFallbackGroupedViews: 0,
   setupActiveIncrementalGroupedViews: 0,
   setupActiveViews: 0,
+  setupGroupedFullEvaluationCount: 0,
+  setupGroupedPatchedEvaluationCount: 0,
   statusReader: undefined,
   statusScope: undefined,
   statusSubscription: undefined,
@@ -620,6 +626,8 @@ const activeGroupedViewCounts = (
   readonly activeFallbackGroupedViews: number;
   readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
+  readonly groupedFullEvaluationCount: number;
+  readonly groupedPatchedEvaluationCount: number;
 } => {
   expect(isBenchmarkEngineHealth(health)).toBe(true);
   if (!isBenchmarkEngineHealth(health)) {
@@ -632,6 +640,8 @@ const activeGroupedViewCounts = (
     activeFallbackGroupedViews: activeFallbackGroupedViewCountFromEngineHealth(health),
     activeIncrementalGroupedViews: activeIncrementalGroupedViewCountFromEngineHealth(health),
     activeViews: activeViewCountFromEngineHealth(health),
+    groupedFullEvaluationCount: groupedFullEvaluationCountFromEngineHealth(health),
+    groupedPatchedEvaluationCount: groupedPatchedEvaluationCountFromEngineHealth(health),
   };
 };
 
@@ -639,6 +649,8 @@ const expectGroupedAdmission = (counts: {
   readonly activeFallbackGroupedViews: number;
   readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
+  readonly groupedFullEvaluationCount: number;
+  readonly groupedPatchedEvaluationCount: number;
 }): void => {
   expect(counts.activeViews).toBe(groupedReaderCount);
   if (expectedGroupedAdmission === "incremental") {
@@ -714,6 +726,8 @@ beforeAll(async () => {
   profile.setupActiveFallbackGroupedViews = setupCounts.activeFallbackGroupedViews;
   profile.setupActiveIncrementalGroupedViews = setupCounts.activeIncrementalGroupedViews;
   profile.setupActiveViews = setupCounts.activeViews;
+  profile.setupGroupedFullEvaluationCount = setupCounts.groupedFullEvaluationCount;
+  profile.setupGroupedPatchedEvaluationCount = setupCounts.groupedPatchedEvaluationCount;
 }, 0);
 
 afterAll(async () => {
@@ -733,6 +747,8 @@ afterAll(async () => {
   let activeFallbackGroupedViewsBeforeCleanup = 0;
   let activeIncrementalGroupedViewsBeforeCleanup = 0;
   let activeViewsBeforeCleanup = 0;
+  let groupedFullEvaluationCountBeforeCleanup = 0;
+  let groupedPatchedEvaluationCountBeforeCleanup = 0;
   expect(profile.deltaRecords.length).toBe(expectedMutationDeltaEvents);
   expect(statusFromVersions).toStrictEqual(
     readerProfileIncludesPrimary(groupedReaderProfile) ? expectedFromVersions : [],
@@ -753,6 +769,8 @@ afterAll(async () => {
     activeFallbackGroupedViewsBeforeCleanup = preCleanupCounts.activeFallbackGroupedViews;
     activeIncrementalGroupedViewsBeforeCleanup = preCleanupCounts.activeIncrementalGroupedViews;
     activeViewsBeforeCleanup = preCleanupCounts.activeViews;
+    groupedFullEvaluationCountBeforeCleanup = preCleanupCounts.groupedFullEvaluationCount;
+    groupedPatchedEvaluationCountBeforeCleanup = preCleanupCounts.groupedPatchedEvaluationCount;
   }
   if (profile.statusSubscription !== undefined) {
     await Effect.runPromise(profile.statusSubscription.close());
@@ -810,6 +828,10 @@ afterAll(async () => {
       activeViewsBeforeCleanup,
       configuredMode: groupedWriteMode,
       expectedAdmission: expectedGroupedAdmission,
+      groupedFullEvaluationCountAfterSetup: profile.setupGroupedFullEvaluationCount,
+      groupedFullEvaluationCountBeforeCleanup,
+      groupedPatchedEvaluationCountAfterSetup: profile.setupGroupedPatchedEvaluationCount,
+      groupedPatchedEvaluationCountBeforeCleanup,
       incrementalAdmissionLimits: groupedIncrementalAdmissionLimits,
       priceThreshold:
         groupedWriteMode === "incremental" ? incrementalPriceThreshold(benchmarkRowCount) : null,

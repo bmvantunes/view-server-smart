@@ -470,6 +470,8 @@ type ViewServerHealth = {
         activeFallbackGroupedViews: number;
         activeIncrementalGroupedViews: number;
         activeViews: number;
+        groupedFullEvaluationCount: number;
+        groupedPatchedEvaluationCount: number;
         activeSubscriptions: number;
         queuedEvents: number;
         maxQueueDepth: number;
@@ -1610,7 +1612,9 @@ incremental admission run, and a broad fallback run. Forced fallback and broad f
 `VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX` so they do not overwrite the default incremental artifact
 for the same row count and write batch. The summary sidecar includes `groupedWriteAdmission` and
 `preCleanupHealth`, so every run records whether grouped subscriptions were admitted as incremental
-views or demoted to fallback before cleanup.
+views or demoted to fallback before cleanup. `groupedWriteAdmission` also records grouped full
+evaluation and patched-evaluation counters after setup and before cleanup, so order-neutral patch
+regressions are visible in baseline comparisons.
 
 Order-neutral grouped evaluation patching uses a dedicated serial baseline profile:
 
@@ -1690,6 +1694,10 @@ Interpretation notes:
 - Check `groupedWriteAdmission.activeIncrementalGroupedViewsBeforeCleanup` and
   `groupedWriteAdmission.activeFallbackGroupedViewsBeforeCleanup` before interpreting benchmark
   numbers. A run configured as incremental but admitted as fallback is a fallback result.
+- Check `groupedWriteAdmission.groupedFullEvaluationCountBeforeCleanup` and
+  `groupedWriteAdmission.groupedPatchedEvaluationCountBeforeCleanup` when evaluating grouped write
+  changes. Order-neutral patch cases should increase patched evaluations; aggregate-ordered or
+  fallback cases legitimately increase full evaluations.
 - The benchmark does not prove a future grouped materialized index is worthwhile by itself; compare
   it with grouped read benchmarks before adopting storage that adds write maintenance.
 - Keep grouped write and grouped aggregate benchmarks together when evaluating grouped engine

@@ -223,6 +223,8 @@ describe("@view-server/runtime", () => {
             activeFallbackGroupedViews: 0,
             activeIncrementalGroupedViews: 1,
             activeViews: 1,
+            groupedFullEvaluationCount: 0,
+            groupedPatchedEvaluationCount: 0,
             activeSubscriptions: 4,
             queuedEvents: 5,
             maxQueueDepth: 6,
