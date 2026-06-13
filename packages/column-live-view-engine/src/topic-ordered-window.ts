@@ -7,6 +7,7 @@ import {
 } from "./raw-query-compiler";
 import { scalarEqualityKey } from "./row-values";
 import { columnValue, type TopicColumnValues } from "./topic-column-vector";
+import { Order as orderBigDecimal, isBigDecimal } from "effect/BigDecimal";
 
 export type OrderedSlotIndex = {
   readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
@@ -230,7 +231,7 @@ export const orderedSlotBoundIndex = (
   let high = slots.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    const comparison = compareOrderedRangeValue(columnValue(column, slots[middle]!), value);
+    const comparison = compareOrderedSlotRangeValue(column, slots[middle]!, value);
     if (predicate(comparison)) {
       high = middle;
     } else {
@@ -238,6 +239,38 @@ export const orderedSlotBoundIndex = (
     }
   }
   return low;
+};
+
+const compareOrderedSlotRangeValue = (
+  column: TopicColumnValues,
+  slot: number,
+  value: unknown,
+): number => {
+  if (column.kind === "string" && typeof value === "string") {
+    const slotValue = column.stringAt(slot);
+    if (slotValue !== undefined) {
+      return slotValue === value ? 0 : slotValue < value ? -1 : 1;
+    }
+  }
+  if (column.kind === "number" && typeof value === "number") {
+    const slotValue = column.numberAt(slot);
+    if (slotValue !== undefined && Number.isFinite(slotValue) && Number.isFinite(value)) {
+      return slotValue === value ? 0 : slotValue < value ? -1 : 1;
+    }
+  }
+  if (column.kind === "bigint" && typeof value === "bigint") {
+    const slotValue = column.bigintAt(slot);
+    if (slotValue !== undefined) {
+      return slotValue === value ? 0 : slotValue < value ? -1 : 1;
+    }
+  }
+  if (column.kind === "bigDecimal" && isBigDecimal(value)) {
+    const slotValue = column.bigDecimalAt(slot);
+    if (slotValue !== undefined) {
+      return orderBigDecimal(slotValue, value);
+    }
+  }
+  return compareOrderedRangeValue(columnValue(column, slot), value);
 };
 
 export const orderedWindowSpansInIndexOrder = (

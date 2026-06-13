@@ -85,6 +85,7 @@ import {
   compareExactRangeColumnValue,
   compareRangeColumnValue,
 } from "./topic-range-value";
+import { orderedSlotBoundIndex } from "./topic-ordered-window";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -384,6 +385,46 @@ it("keeps scalar range helpers exact for numeric runtime domains", () => {
   expect(columnValueDoesNotEqual(1, Number.NaN)).toBe(false);
   expect(columnValueDoesNotEqual(true, false)).toBe(true);
   expect(columnValueDoesNotEqual("1", 1)).toBe(false);
+});
+
+it("uses typed column values for ordered slot bound indexes", () => {
+  const Metric = Schema.Struct({
+    decimalPrice: Schema.BigDecimal,
+    id: Schema.String,
+    price: Schema.Number,
+    quantity: Schema.BigInt,
+    status: Schema.String,
+  });
+  const metadata = rawQueryCompilerMetadata(Metric);
+  const status = createTopicColumnValuesFromArray("status", metadata, ["closed", "open", "open"]);
+  const sparseStatus = createTopicColumnValuesFromArray("status", metadata, [undefined, "open"]);
+  const price = createTopicColumnValuesFromArray("price", metadata, [1, 2, 3]);
+  const nonFinitePrice = createTopicColumnValuesFromArray("price", metadata, [Number.NaN]);
+  const quantity = createTopicColumnValuesFromArray("quantity", metadata, [1n, 2n, 3n]);
+  const decimalPrice = createTopicColumnValuesFromArray("decimalPrice", metadata, [
+    fromStringUnsafe("1"),
+    fromStringUnsafe("2"),
+    fromStringUnsafe("3"),
+  ]);
+  const generic = createTopicColumnValuesFromArray("unknown", metadata, ["closed", "open"]);
+
+  expect(orderedSlotBoundIndex([0, 1, 2], status, "open", (comparison) => comparison >= 0)).toBe(1);
+  expect(orderedSlotBoundIndex([0, 1, 2], status, "open", (comparison) => comparison > 0)).toBe(3);
+  expect(orderedSlotBoundIndex([0, 1], sparseStatus, "open", (comparison) => comparison >= 0)).toBe(
+    1,
+  );
+  expect(orderedSlotBoundIndex([0, 1, 2], price, 2, (comparison) => comparison >= 0)).toBe(1);
+  expect(orderedSlotBoundIndex([0], nonFinitePrice, 1, (comparison) => comparison > 0)).toBe(0);
+  expect(orderedSlotBoundIndex([0, 1, 2], quantity, 2n, (comparison) => comparison >= 0)).toBe(1);
+  expect(
+    orderedSlotBoundIndex(
+      [0, 1, 2],
+      decimalPrice,
+      fromStringUnsafe("2"),
+      (comparison) => comparison >= 0,
+    ),
+  ).toBe(1);
+  expect(orderedSlotBoundIndex([0, 1], generic, "open", (comparison) => comparison >= 0)).toBe(1);
 });
 
 const numericRowField = (row: object, field: string): number => {
