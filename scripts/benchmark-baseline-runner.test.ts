@@ -227,6 +227,57 @@ describe("benchmark baseline runner", () => {
     ]);
   });
 
+  it("defines grouped key width smoke and release tasks", () => {
+    const smokeGroupedKeyWidthTasks = (profiles.get("smoke") ?? []).filter((task) =>
+      task.label.startsWith("grouped key width "),
+    );
+    const releaseGroupedKeyWidthTasks = (profiles.get("release") ?? []).filter((task) =>
+      task.label.startsWith("grouped key width "),
+    );
+
+    expect(
+      smokeGroupedKeyWidthTasks.map((task) => ({
+        benchmarkScope: task.expectedBenchmarkScope,
+        iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+        timeMs: task.env["VIEW_SERVER_ENGINE_BENCH_TIME_MS"],
+      })),
+    ).toStrictEqual([
+      {
+        benchmarkScope: "engine-grouped-key-width",
+        iterations: "5",
+        outputJsonPath: ".artifacts/grouped-key-width-1000rows.json",
+        rowCount: "1000",
+        timeMs: "1",
+      },
+    ]);
+    expect(
+      releaseGroupedKeyWidthTasks.map((task) => ({
+        benchmarkScope: task.expectedBenchmarkScope,
+        iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+        timeMs: task.env["VIEW_SERVER_ENGINE_BENCH_TIME_MS"],
+      })),
+    ).toStrictEqual([
+      {
+        benchmarkScope: "engine-grouped-key-width",
+        iterations: "3",
+        outputJsonPath: ".artifacts/grouped-key-width-100000rows.json",
+        rowCount: "100000",
+        timeMs: "0",
+      },
+      {
+        benchmarkScope: "engine-grouped-key-width",
+        iterations: "3",
+        outputJsonPath: ".artifacts/grouped-key-width-1000000rows.json",
+        rowCount: "1000000",
+        timeMs: "0",
+      },
+    ]);
+  });
+
   it("updates and compares a tiny profile with fresh artifacts", async () => {
     const directory = makeDirectory();
     const task = makeTask(directory);
@@ -274,6 +325,7 @@ describe("benchmark baseline runner", () => {
         tasks: [
           {
             ...observation,
+            groupedKeyWidthParameters: undefined,
             outputJsonPath: task.outputJsonPath,
             summaryPath: task.summaryPath,
           },

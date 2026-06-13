@@ -65,6 +65,25 @@ export type BenchmarkGroupedWriteAdmission = {
   readonly writeBatchSize: number;
 };
 
+export type BenchmarkGroupedKeyWidthParameters = {
+  readonly constantGroupCount: number;
+  readonly keyWidths: ReadonlyArray<number>;
+  readonly orderedKeyCount: number;
+  readonly semanticProbe: {
+    readonly groupByEightTotalRows: number;
+    readonly groupByEightOrderedTotalRows: number;
+    readonly groupByFourTotalRows: number;
+    readonly groupByOneTotalRows: number;
+    readonly groupByTwoTotalRows: number;
+    readonly orderedFirstGroupKey8: string;
+    readonly orderedFirstRowCount: string;
+    readonly orderedSecondGroupKey8: string;
+    readonly orderedSecondRowCount: string;
+    readonly orderedWindowRows: number;
+  };
+  readonly windowLimit: number;
+};
+
 export type BenchmarkArtifactInput = {
   readonly artifactKind: "engine-benchmark-summary";
   readonly benchmarkName: string;
@@ -75,6 +94,7 @@ export type BenchmarkArtifactInput = {
     | "engine-raw-active-retained-delta"
     | "engine-raw-write"
     | "engine-grouped-aggregate"
+    | "engine-grouped-key-width"
     | "engine-grouped-write";
   readonly rowCount: number;
   readonly mutationCount: number;
@@ -91,6 +111,7 @@ export type BenchmarkArtifactInput = {
   };
   readonly backpressureCount: number;
   readonly cleanupLeakCount: number;
+  readonly groupedKeyWidthParameters?: BenchmarkGroupedKeyWidthParameters;
   readonly groupedWriteAdmission?: BenchmarkGroupedWriteAdmission;
   readonly queuedEventCount: number;
   readonly health: unknown;
@@ -276,6 +297,7 @@ export const writeBenchmarkArtifact = (input: BenchmarkArtifactInput): void => {
         benchmarkName: input.benchmarkName,
         benchmarkScope: input.benchmarkScope,
         cleanupLeakCount: input.cleanupLeakCount,
+        groupedKeyWidthParameters: input.groupedKeyWidthParameters,
         groupedWriteAdmission: input.groupedWriteAdmission,
         health: input.health,
         latency: input.latency,

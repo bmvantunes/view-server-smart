@@ -66,13 +66,10 @@ export type ViewServerRuntimeClient<Topics extends object> = {
     topic: Topic,
     rows: ReadonlyArray<TopicRow<Topics, Topic>>,
   ) => Effect.Effect<void, ViewServerRuntimeError>;
-  readonly patch: <
-    Topic extends Extract<keyof Topics, string>,
-    const Patch extends Partial<TopicRow<Topics, Topic>>,
-  >(
+  readonly patch: <Topic extends Extract<keyof Topics, string>, const Patch>(
     topic: Topic,
     key: string,
-    patch: ExactPatch<TopicRow<Topics, Topic>, Patch>,
+    patch: Patch & Partial<TopicRow<Topics, Topic>> & ExactPatch<TopicRow<Topics, Topic>, Patch>,
   ) => Effect.Effect<void, ViewServerRuntimeError>;
   readonly delete: <Topic extends Extract<keyof Topics, string>>(
     topic: Topic,

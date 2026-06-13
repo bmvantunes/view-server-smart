@@ -201,6 +201,10 @@ export const readBenchmarkObservation = (task) => {
     benchmarkScope,
     browser: optionalObjectValue(summary.browser, `${task.summaryPath}.browser`),
     cleanupLeakCount: finiteNumber(summary.cleanupLeakCount, `${task.summaryPath}.cleanupLeakCount`),
+    groupedKeyWidthParameters: optionalObjectValue(
+      summary.groupedKeyWidthParameters,
+      `${task.summaryPath}.groupedKeyWidthParameters`,
+    ),
     groupedWriteAdmission: optionalObjectValue(
       summary.groupedWriteAdmission,
       `${task.summaryPath}.groupedWriteAdmission`,
@@ -319,6 +323,10 @@ const validateTask = (task, path) => {
     benchmarkScope: stringValue(task.benchmarkScope, `${path}.benchmarkScope`),
     browser: optionalObjectValue(task.browser, `${path}.browser`),
     cleanupLeakCount: finiteNumber(task.cleanupLeakCount, `${path}.cleanupLeakCount`),
+    groupedKeyWidthParameters: optionalObjectValue(
+      task.groupedKeyWidthParameters,
+      `${path}.groupedKeyWidthParameters`,
+    ),
     groupedWriteAdmission: optionalObjectValue(
       task.groupedWriteAdmission,
       `${path}.groupedWriteAdmission`,
@@ -523,6 +531,13 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
       "seedBatchSize",
       baselineTask.seedBatchSize,
       actualTask.seedBatchSize,
+    );
+    compareExactJson(
+      regressions,
+      taskLabel,
+      "groupedKeyWidthParameters",
+      baselineTask.groupedKeyWidthParameters,
+      actualTask.groupedKeyWidthParameters,
     );
     compareExactJson(
       regressions,

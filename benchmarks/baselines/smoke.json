@@ -547,6 +547,96 @@
       "backpressureCount": 0,
       "benchmarks": [
         {
+          "groupName": "src/grouped-key-width.bench.ts > grouped key width engine benchmark: 1000 rows",
+          "maxMs": 0.9777919999999654,
+          "meanMs": 0.7973419999999919,
+          "minMs": 0.7362090000000308,
+          "name": "groupBy one key",
+          "p99Ms": 0.9777919999999654,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-key-width.bench.ts > grouped key width engine benchmark: 1000 rows",
+          "maxMs": 1.280541000000028,
+          "meanMs": 1.1753916000000004,
+          "minMs": 1.0281669999999963,
+          "name": "groupBy two keys",
+          "p99Ms": 1.280541000000028,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-key-width.bench.ts > grouped key width engine benchmark: 1000 rows",
+          "maxMs": 1.6018750000000068,
+          "meanMs": 1.47560840000001,
+          "minMs": 1.4137499999999932,
+          "name": "groupBy four keys",
+          "p99Ms": 1.6018750000000068,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-key-width.bench.ts > grouped key width engine benchmark: 1000 rows",
+          "maxMs": 2.611624999999947,
+          "meanMs": 2.442508399999997,
+          "minMs": 2.332375000000013,
+          "name": "groupBy eight keys",
+          "p99Ms": 2.611624999999947,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/grouped-key-width.bench.ts > grouped key width engine benchmark: 1000 rows",
+          "maxMs": 2.799541999999974,
+          "meanMs": 2.686991599999999,
+          "minMs": 2.6196669999999926,
+          "name": "groupBy eight ordered keys",
+          "p99Ms": 2.799541999999974,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": [
+        "groupBy one key",
+        "groupBy two keys",
+        "groupBy four keys",
+        "groupBy eight keys",
+        "groupBy eight ordered keys"
+      ],
+      "benchmarkName": "grouped key width engine benchmark",
+      "benchmarkScope": "engine-grouped-key-width",
+      "cleanupLeakCount": 0,
+      "groupedKeyWidthParameters": {
+        "constantGroupCount": 257,
+        "keyWidths": [1, 2, 4, 8],
+        "orderedKeyCount": 8,
+        "semanticProbe": {
+          "groupByEightOrderedTotalRows": 257,
+          "groupByEightTotalRows": 257,
+          "groupByFourTotalRows": 257,
+          "groupByOneTotalRows": 257,
+          "groupByTwoTotalRows": 257,
+          "orderedFirstGroupKey8": "key-8-0000",
+          "orderedFirstRowCount": "3",
+          "orderedSecondGroupKey8": "key-8-0003",
+          "orderedSecondRowCount": "3",
+          "orderedWindowRows": 250
+        },
+        "windowLimit": 250
+      },
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 56098816,
+      "minimumSampleCount": 5,
+      "mutationCount": 1000,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-key-width-1000rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 0,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/grouped-key-width-1000rows.summary.json",
+      "taskLabel": "grouped key width 1000 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
           "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
           "maxMs": 0.9849159999999983,
           "meanMs": 0.47495860000000223,

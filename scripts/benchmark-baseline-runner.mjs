@@ -51,7 +51,7 @@ const retainedDeltaReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
 };
 
-const groupedAggregateReleaseEnv = {
+const groupedReadReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "3",
   VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
   VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS: "0",
@@ -210,6 +210,25 @@ const groupedAggregateTask = (rowCount, env) => {
   });
 };
 
+const groupedKeyWidthTask = (rowCount, env) => {
+  const outputJsonPath = engineArtifactName(`grouped-key-width-${rowCount}rows.json`);
+  return task({
+    artifactKind: "engine-benchmark-summary",
+    benchmarkScope: "engine-grouped-key-width",
+    env: {
+      VIEW_SERVER_ENGINE_BENCH_OUTPUT_JSON: outputJsonPath,
+      VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
+      ...env,
+    },
+    label: `grouped key width ${rowCount} rows`,
+    minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_ENGINE_BENCH_ITERATIONS"),
+    outputJsonPath,
+    packageDirectory: enginePackageDirectory,
+    rowCount,
+    vpTask: "column-live-view-engine#bench:grouped-key-width",
+  });
+};
+
 const groupedWriteTask = (mode, rowCount, env) => {
   const writeBatchSize = env.VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE;
   const readerProfile = env.VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE ?? "dual";
@@ -316,6 +335,10 @@ export const profiles = new Map([
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
         ...commonEngineSmokeEnv,
       }),
+      groupedKeyWidthTask(1_000, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
+        ...commonEngineSmokeEnv,
+      }),
       groupedWriteTask("incremental", 1_000, {
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
         VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE: "1",
@@ -390,9 +413,11 @@ export const profiles = new Map([
       rawLiveFanoutTask("ten-window", 100_000, 50),
       rawLiveFanoutTask("same-window", 1_000_000, 250),
       rawLiveFanoutTask("ten-window", 1_000_000, 250),
-      groupedAggregateTask(100_000, groupedAggregateReleaseEnv),
-      groupedAggregateTask(1_000_000, groupedAggregateReleaseEnv),
-      groupedAggregateTask(5_000_000, groupedAggregateReleaseEnv),
+      groupedAggregateTask(100_000, groupedReadReleaseEnv),
+      groupedAggregateTask(1_000_000, groupedReadReleaseEnv),
+      groupedAggregateTask(5_000_000, groupedReadReleaseEnv),
+      groupedKeyWidthTask(100_000, groupedReadReleaseEnv),
+      groupedKeyWidthTask(1_000_000, groupedReadReleaseEnv),
       groupedWriteTask("incremental", 100_000, groupedWriteReleaseEnv),
       groupedWriteTask("incremental", 1_000_000, groupedWriteReleaseEnv),
       groupedWriteTask("incremental", 5_000_000, groupedWriteReleaseEnv),

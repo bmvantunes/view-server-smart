@@ -1521,6 +1521,48 @@ Interpretation notes:
   must add matching grouped write-path cases before adoption, because faster grouped reads can easily
   regress publish/patch/delete costs.
 
+Current grouped key width benchmark harness:
+
+```bash
+vp run --no-cache column-live-view-engine#bench:grouped-key-width
+```
+
+This harness uses Vitest `bench()` against the public `ColumnLiveViewEngine` grouped snapshot path.
+It keeps aggregate work intentionally small (`count` only) and varies the number of grouped key
+columns: one, two, four, and eight while keeping grouped cardinality constant. It also includes an
+eight-key grouped-field ordering case that orders by `groupKey2..groupKey8`, so early order fields
+have ties and later fields must participate as tie-breakers. The purpose is to make grouped key
+materialization and grouped field order-plan costs visible without mixing them with BigDecimal
+sum/avg, live delta work, or accidental group-count growth.
+
+It writes `grouped-key-width-<rows>rows.json` plus a matching `.summary.json` sidecar under
+`packages/column-live-view-engine/.artifacts/`. Run each row count in a separate process:
+
+```bash
+VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:grouped-key-width
+VIEW_SERVER_ENGINE_BENCH_ROWS=1000000 vp run --no-cache column-live-view-engine#bench:grouped-key-width
+```
+
+The smoke baseline runner includes the 1k-row profile. The release baseline runner includes 100k
+and 1M rows with the same bounded grouped read iteration/time settings as grouped aggregate.
+
+Grouped key width benchmark cases:
+
+- `groupBy one key`
+- `groupBy two keys`
+- `groupBy four keys`
+- `groupBy eight keys`
+- `groupBy eight ordered keys`
+
+Interpretation notes:
+
+- This is a grouped read benchmark only. Pair it with grouped write benchmarks before adopting any
+  per-group or per-key-width cached state.
+- The eight-key ordered case measures grouped field orderBy work in addition to key materialization,
+  including real tie-breaker participation across multiple grouped fields.
+- It is intentionally public-API based so a future columnar/SIMD/Rust-backed grouped engine can keep
+  the same benchmark contract.
+
 Current grouped write benchmark harness:
 
 ```bash
