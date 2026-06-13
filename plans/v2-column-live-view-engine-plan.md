@@ -1515,7 +1515,7 @@ vp run --no-cache column-live-view-engine#bench:grouped-write
 ```
 
 This harness uses Vitest `bench()` against the public `ColumnLiveViewEngine` subscribe and mutation
-path. It seeds one topic, opens two grouped live subscriptions, drains their initial snapshots, then
+path. It seeds one topic, opens grouped live subscriptions, drains their initial snapshots, then
 times grouped writes while also draining one delta from each active subscription. This is an
 end-to-end grouped write signal: publish/patch/delete plus grouped delta publication, not only raw
 mutation enqueue cost.
@@ -1526,9 +1526,11 @@ grouped subscriptions sized under the current grouped incremental admission limi
 full grouped fallback rebuild pressure; do not interpret fallback mode as materialized grouped write
 maintenance.
 
-It writes `grouped-write-<mode>-<rows>rows-<mutations>mutations.json` plus a matching `.summary.json`
-sidecar under `packages/column-live-view-engine/.artifacts/`. Run each row count in a separate
-process so previous profiles do not contaminate GC/RSS/latency or overwrite artifacts:
+It writes `grouped-write-<mode>-<rows>rows-<mutations>mutations.json` for the default dual-reader
+profile, or `grouped-write-<mode>-<reader-profile>-<rows>rows-<mutations>mutations.json` for
+isolated reader profiles, plus a matching `.summary.json` sidecar under
+`packages/column-live-view-engine/.artifacts/`. Run each row count in a separate process so previous
+profiles do not contaminate GC/RSS/latency or overwrite artifacts:
 
 ```bash
 VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE=incremental VIEW_SERVER_ENGINE_BENCH_ROWS=100000 vp run --no-cache column-live-view-engine#bench:grouped-write
@@ -1555,6 +1557,18 @@ for the same row count and write batch. The summary sidecar includes `groupedWri
 `preCleanupHealth`, so every run records whether grouped subscriptions were admitted as incremental
 views or demoted to fallback before cleanup.
 
+Order-neutral grouped evaluation patching uses a dedicated serial baseline profile:
+
+```bash
+pnpm run bench:baseline:grouped-order-neutral
+```
+
+That profile sets `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE=order-neutral` and runs the
+same 100k, 1M, and 5M grouped write row counts as the release grouped-write profile. It keeps only
+the field-ordered grouped subscription open, so `grouped patch aggregate values` isolates the
+order-neutral evaluation patch path instead of mixing it with an aggregate-ordered subscriber that
+must rebuild the grouped window.
+
 Grouped write benchmark cases:
 
 - `grouped publishMany append batch`
@@ -1567,6 +1581,10 @@ Grouped write knobs:
 
 - `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE`: `incremental` or `fallback`; defaults to
   `incremental`.
+- `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE`: `dual`, `order-neutral`, or
+  `aggregate-ordered`; defaults to `dual`. `dual` keeps the historical mixed-reader benchmark.
+  `order-neutral` keeps only the field-ordered grouped subscription. `aggregate-ordered` keeps only
+  the aggregate-ordered grouped subscription.
 - `VIEW_SERVER_ENGINE_BENCH_ROWS`: row count for this benchmark process.
 - `VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE`: publish batch size while seeding.
 - `VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE`: number of rows mutated by batch-style samples and by
@@ -1590,8 +1608,8 @@ Grouped write knobs:
 
 Interpretation notes:
 
-- Timed bodies include grouped mutation work and live grouped event drain for both active grouped
-  subscriptions.
+- Timed bodies include grouped mutation work and live grouped event drain for every active grouped
+  subscription selected by `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE`.
 - Incremental mode covers admitted grouped insert/update/move/delete write pressure. Fallback mode
   covers broad grouped rebuild pressure and is intentionally a different signal.
 - Current incremental grouped write maintenance updates aggregate states reversibly for inserts,
@@ -1605,9 +1623,9 @@ Interpretation notes:
 - The default grouped-write benchmark keeps both a field-ordered grouped subscription and an
   aggregate-ordered grouped subscription open. `grouped patch aggregate values` is therefore a mixed
   signal: the field-ordered subscription can use the order-neutral evaluation patch, while the
-  aggregate-ordered subscription still rebuilds its grouped window. The diagnostics-backed grouped
-  correctness tests are the isolated regression guard for the order-neutral patch path until a
-  dedicated benchmark profile is added.
+  aggregate-ordered subscription still rebuilds its grouped window. Use
+  `pnpm run bench:baseline:grouped-order-neutral` when the decision needs an isolated order-neutral
+  write-path signal.
 - Retained `min`/`max` removals can invalidate the current extremum. The incremental executor batches
   those invalidations and recomputes each dirty `{group, aggregate}` once after the mutation batch,
   avoiding repeated retained-map scans when a single `publishMany` replaces or deletes many extrema.

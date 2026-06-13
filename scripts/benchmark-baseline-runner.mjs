@@ -212,6 +212,9 @@ const groupedAggregateTask = (rowCount, env) => {
 
 const groupedWriteTask = (mode, rowCount, env) => {
   const writeBatchSize = env.VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE;
+  const readerProfile = env.VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE ?? "dual";
+  const readerProfileLabel = readerProfile === "dual" ? "" : ` ${readerProfile}`;
+  const readerProfileSegment = readerProfile === "dual" ? "" : `-${readerProfile}`;
   const labelSuffix =
     env.VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX === undefined
       ? ""
@@ -221,7 +224,7 @@ const groupedWriteTask = (mode, rowCount, env) => {
       ? ""
       : `-${env.VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX}`;
   const outputJsonPath = engineArtifactName(
-    `grouped-write-${mode}-${rowCount}rows-${writeBatchSize}mutations${suffix}.json`,
+    `grouped-write-${mode}${readerProfileSegment}-${rowCount}rows-${writeBatchSize}mutations${suffix}.json`,
   );
   return task({
     artifactKind: "engine-benchmark-summary",
@@ -233,7 +236,7 @@ const groupedWriteTask = (mode, rowCount, env) => {
       VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
       ...env,
     },
-    label: `grouped write ${mode} ${rowCount} rows ${writeBatchSize} mutations${labelSuffix}`,
+    label: `grouped write ${mode}${readerProfileLabel} ${rowCount} rows ${writeBatchSize} mutations${labelSuffix}`,
     minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_ENGINE_BENCH_ITERATIONS"),
     outputJsonPath,
     packageDirectory: enginePackageDirectory,
@@ -348,6 +351,23 @@ export const profiles = new Map([
         ...groupedAdmissionReleaseEnv,
         VIEW_SERVER_ENGINE_BENCH_ARTIFACT_SUFFIX: "broad-fallback",
         VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE: "fallback",
+      }),
+    ],
+  ],
+  [
+    "grouped-order-neutral",
+    [
+      groupedWriteTask("incremental", 100_000, {
+        ...groupedWriteReleaseEnv,
+        VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE: "order-neutral",
+      }),
+      groupedWriteTask("incremental", 1_000_000, {
+        ...groupedWriteReleaseEnv,
+        VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE: "order-neutral",
+      }),
+      groupedWriteTask("incremental", 5_000_000, {
+        ...groupedWriteReleaseEnv,
+        VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE: "order-neutral",
       }),
     ],
   ],

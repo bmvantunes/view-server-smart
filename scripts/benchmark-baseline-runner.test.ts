@@ -14,6 +14,7 @@ import {
   baselinePath,
   cleanBenchmarkEnvironment,
   exitCodeForSignal,
+  profiles,
   removeTaskArtifacts,
   runBenchmarkBaseline,
   summaryPath,
@@ -178,6 +179,52 @@ describe("benchmark baseline runner", () => {
       summary: ".artifacts/result.summary.json",
       unknownSignalExitCode: 1,
     });
+  });
+
+  it("defines isolated grouped order-neutral tasks without changing dual grouped-write artifacts", () => {
+    const groupedOrderNeutralTasks = profiles.get("grouped-order-neutral") ?? [];
+    const releaseGroupedWriteTasks = (profiles.get("release") ?? []).filter((task) =>
+      task.label.startsWith("grouped write "),
+    );
+    const smokeGroupedWriteTasks = (profiles.get("smoke") ?? []).filter((task) =>
+      task.label.startsWith("grouped write "),
+    );
+
+    expect(
+      groupedOrderNeutralTasks.map((task) => ({
+        outputJsonPath: task.packageOutputJsonPath,
+        readerProfile: task.env["VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE"],
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+      })),
+    ).toStrictEqual([
+      {
+        outputJsonPath: ".artifacts/grouped-write-incremental-order-neutral-100000rows-1mutations.json",
+        readerProfile: "order-neutral",
+        rowCount: "100000",
+      },
+      {
+        outputJsonPath:
+          ".artifacts/grouped-write-incremental-order-neutral-1000000rows-1mutations.json",
+        readerProfile: "order-neutral",
+        rowCount: "1000000",
+      },
+      {
+        outputJsonPath:
+          ".artifacts/grouped-write-incremental-order-neutral-5000000rows-1mutations.json",
+        readerProfile: "order-neutral",
+        rowCount: "5000000",
+      },
+    ]);
+    expect(
+      smokeGroupedWriteTasks.map((task) => task.packageOutputJsonPath),
+    ).toStrictEqual([".artifacts/grouped-write-incremental-1000rows-1mutations.json"]);
+    expect(
+      releaseGroupedWriteTasks.map((task) => task.packageOutputJsonPath),
+    ).toStrictEqual([
+      ".artifacts/grouped-write-incremental-100000rows-1mutations.json",
+      ".artifacts/grouped-write-incremental-1000000rows-1mutations.json",
+      ".artifacts/grouped-write-incremental-5000000rows-1mutations.json",
+    ]);
   });
 
   it("updates and compares a tiny profile with fresh artifacts", async () => {
@@ -700,7 +747,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       message:
-        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, grouped-admission, release",
+        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, grouped-admission, grouped-order-neutral, release",
     });
   });
 

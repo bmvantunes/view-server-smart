@@ -59,6 +59,7 @@ export type BenchmarkGroupedWriteAdmission = {
     readonly maxRetainedValueEntries: number;
   };
   readonly priceThreshold: number | null;
+  readonly readerProfile?: "aggregate-ordered" | "dual" | "order-neutral";
   readonly seedMutationCount: number;
   readonly timedMutationCount: number;
   readonly writeBatchSize: number;

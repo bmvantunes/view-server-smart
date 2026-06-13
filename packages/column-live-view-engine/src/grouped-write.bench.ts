@@ -54,6 +54,7 @@ type OrderRow = typeof Order.Type;
 type OrderStatus = OrderRow["status"];
 type GroupedWriteMode = "fallback" | "incremental";
 type ExpectedGroupedAdmission = "fallback" | "incremental";
+type GroupedReaderProfile = "aggregate-ordered" | "dual" | "order-neutral";
 type GroupedReaderName = "primary" | "secondary";
 type GroupedEvent = ColumnLiveViewEngineEvent<object>;
 type GroupedSubscription = ColumnLiveViewSubscription<object>;
@@ -164,6 +165,20 @@ const groupedWriteModeFromEnv = (): GroupedWriteMode => {
   throw new Error("VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_MODE must be fallback or incremental.");
 };
 
+const groupedReaderProfileFromEnv = (): GroupedReaderProfile => {
+  const raw = process.env["VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE"];
+  if (raw === undefined || raw.trim() === "") {
+    return "dual";
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "aggregate-ordered" || trimmed === "dual" || trimmed === "order-neutral") {
+    return trimmed;
+  }
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE must be aggregate-ordered, dual, or order-neutral.",
+  );
+};
+
 const expectedGroupedAdmissionFromEnv = (
   defaultAdmission: ExpectedGroupedAdmission,
 ): ExpectedGroupedAdmission => {
@@ -182,6 +197,7 @@ const expectedGroupedAdmissionFromEnv = (
 
 const benchmarkRowCount = rowCountFromEnv();
 const groupedWriteMode = groupedWriteModeFromEnv();
+const groupedReaderProfile = groupedReaderProfileFromEnv();
 const expectedGroupedAdmission = expectedGroupedAdmissionFromEnv(groupedWriteMode);
 const seedBatchSize = positiveIntegerFromEnv(
   "VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE",
@@ -232,8 +248,11 @@ if (mutationBatchSize > maximumSafeMutationBatchSize) {
 }
 
 const outputJsonPath = benchmarkOutputJsonPath(
-  `grouped-write-${groupedWriteMode}-${benchmarkRowCount}rows-${mutationBatchSize}mutations.json`,
+  groupedReaderProfile === "dual"
+    ? `grouped-write-${groupedWriteMode}-${benchmarkRowCount}rows-${mutationBatchSize}mutations.json`
+    : `grouped-write-${groupedWriteMode}-${groupedReaderProfile}-${benchmarkRowCount}rows-${mutationBatchSize}mutations.json`,
 );
+const groupedReaderCount = groupedReaderProfile === "dual" ? 2 : 1;
 const expectedInitialVersion = Math.ceil(benchmarkRowCount / seedBatchSize);
 const memoryBefore = memorySnapshot();
 const benchOptions = {
@@ -282,6 +301,25 @@ const profile: BenchmarkProfile = {
   statusReader: undefined,
   statusScope: undefined,
   statusSubscription: undefined,
+};
+
+const readerProfileIncludesPrimary = (readerProfile: GroupedReaderProfile): boolean =>
+  readerProfile === "dual" || readerProfile === "order-neutral";
+
+const readerProfileIncludesSecondary = (readerProfile: GroupedReaderProfile): boolean =>
+  readerProfile === "aggregate-ordered" || readerProfile === "dual";
+
+const groupedReaderProfileNote = (): string => {
+  if (groupedReaderProfile === "order-neutral") {
+    if (groupedWriteMode !== "incremental" || expectedGroupedAdmission !== "incremental") {
+      return "Reader profile order-neutral keeps only the primary field-ordered grouped subscription open; fallback-admitted runs do not isolate the order-neutral aggregate patch fast path.";
+    }
+    return "Reader profile order-neutral keeps only the primary field-ordered grouped subscription open; the grouped patch aggregate values case isolates the order-neutral aggregate patch fast path.";
+  }
+  if (groupedReaderProfile === "aggregate-ordered") {
+    return "Reader profile aggregate-ordered keeps only the secondary aggregate-ordered grouped subscription open, isolating the grouped-window rebuild path for aggregate-order changes.";
+  }
+  return "Reader profile dual keeps two grouped live subscriptions open: primary region/status field-ordered aggregates and secondary status/region aggregate-ordered aggregates.";
 };
 
 const orderStatus = (index: number): OrderStatus => {
@@ -563,12 +601,16 @@ const profileRegionStatusReader = (benchmarkProfile: BenchmarkProfile): GroupedE
 };
 
 const drainDeltas = async (benchmarkProfile: BenchmarkProfile, caseName: string): Promise<void> => {
-  const statusEvents = await Effect.runPromise(profileStatusReader(benchmarkProfile)(1));
-  const regionStatusEvents = await Effect.runPromise(
-    profileRegionStatusReader(benchmarkProfile)(1),
-  );
-  benchmarkProfile.deltaRecords.push(deltaRecord(statusEvents, "primary", caseName));
-  benchmarkProfile.deltaRecords.push(deltaRecord(regionStatusEvents, "secondary", caseName));
+  if (readerProfileIncludesPrimary(groupedReaderProfile)) {
+    const statusEvents = await Effect.runPromise(profileStatusReader(benchmarkProfile)(1));
+    benchmarkProfile.deltaRecords.push(deltaRecord(statusEvents, "primary", caseName));
+  }
+  if (readerProfileIncludesSecondary(groupedReaderProfile)) {
+    const regionStatusEvents = await Effect.runPromise(
+      profileRegionStatusReader(benchmarkProfile)(1),
+    );
+    benchmarkProfile.deltaRecords.push(deltaRecord(regionStatusEvents, "secondary", caseName));
+  }
 };
 
 const activeGroupedViewCounts = (
@@ -583,7 +625,7 @@ const activeGroupedViewCounts = (
   if (!isBenchmarkEngineHealth(health)) {
     throw new Error(`Grouped write benchmark ${label} health is malformed.`);
   }
-  expect(health.activeSubscriptions).toBe(2);
+  expect(health.activeSubscriptions).toBe(groupedReaderCount);
   expect(health.backpressureEvents).toBe(0);
   expect(health.queuedEvents).toBe(0);
   return {
@@ -598,13 +640,13 @@ const expectGroupedAdmission = (counts: {
   readonly activeIncrementalGroupedViews: number;
   readonly activeViews: number;
 }): void => {
-  expect(counts.activeViews).toBe(2);
+  expect(counts.activeViews).toBe(groupedReaderCount);
   if (expectedGroupedAdmission === "incremental") {
     expect(counts.activeFallbackGroupedViews).toBe(0);
-    expect(counts.activeIncrementalGroupedViews).toBe(2);
+    expect(counts.activeIncrementalGroupedViews).toBe(groupedReaderCount);
     return;
   }
-  expect(counts.activeFallbackGroupedViews).toBe(2);
+  expect(counts.activeFallbackGroupedViews).toBe(groupedReaderCount);
   expect(counts.activeIncrementalGroupedViews).toBe(0);
 };
 
@@ -618,29 +660,38 @@ beforeAll(async () => {
   await Effect.runPromise(seedEngine(engine, profile.rowCount));
   const requiredMutationKeys = benchOptions.iterations * mutationBatchSize;
 
-  const statusSubscription = await Effect.runPromise(
-    engine.subscribe("orders", primaryGroupedAggregateQuery()),
-  );
-  const regionStatusSubscription = await Effect.runPromise(
-    engine.subscribe("orders", secondaryGroupedAggregateQuery()),
-  );
-  const statusScope = Effect.runSync(Scope.make("parallel"));
-  const regionStatusScope = Effect.runSync(Scope.make("parallel"));
-  const statusReader = await Effect.runPromise(makeEventReader(statusSubscription, statusScope));
-  const regionStatusReader = await Effect.runPromise(
-    makeEventReader(regionStatusSubscription, regionStatusScope),
-  );
-  const statusInitialVersion = initialSnapshotVersion(
-    await Effect.runPromise(statusReader(1)),
-    "primary grouped",
-  );
-  const regionStatusInitialVersion = initialSnapshotVersion(
-    await Effect.runPromise(regionStatusReader(1)),
-    "secondary grouped",
-  );
-
-  expect(statusInitialVersion).toBe(expectedInitialVersion);
-  expect(regionStatusInitialVersion).toBe(expectedInitialVersion);
+  if (readerProfileIncludesPrimary(groupedReaderProfile)) {
+    const statusSubscription = await Effect.runPromise(
+      engine.subscribe("orders", primaryGroupedAggregateQuery()),
+    );
+    const statusScope = Effect.runSync(Scope.make("parallel"));
+    const statusReader = await Effect.runPromise(makeEventReader(statusSubscription, statusScope));
+    const statusInitialVersion = initialSnapshotVersion(
+      await Effect.runPromise(statusReader(1)),
+      "primary grouped",
+    );
+    expect(statusInitialVersion).toBe(expectedInitialVersion);
+    profile.statusReader = statusReader;
+    profile.statusScope = statusScope;
+    profile.statusSubscription = statusSubscription;
+  }
+  if (readerProfileIncludesSecondary(groupedReaderProfile)) {
+    const regionStatusSubscription = await Effect.runPromise(
+      engine.subscribe("orders", secondaryGroupedAggregateQuery()),
+    );
+    const regionStatusScope = Effect.runSync(Scope.make("parallel"));
+    const regionStatusReader = await Effect.runPromise(
+      makeEventReader(regionStatusSubscription, regionStatusScope),
+    );
+    const regionStatusInitialVersion = initialSnapshotVersion(
+      await Effect.runPromise(regionStatusReader(1)),
+      "secondary grouped",
+    );
+    expect(regionStatusInitialVersion).toBe(expectedInitialVersion);
+    profile.regionStatusReader = regionStatusReader;
+    profile.regionStatusScope = regionStatusScope;
+    profile.regionStatusSubscription = regionStatusSubscription;
+  }
 
   const setupHealth = await Effect.runPromise(engine.health());
   const setupCounts = activeGroupedViewCounts(setupHealth, "after setup");
@@ -659,20 +710,14 @@ beforeAll(async () => {
     "open",
   );
   profile.memoryAfterSetup = memorySnapshot();
-  profile.regionStatusReader = regionStatusReader;
-  profile.regionStatusScope = regionStatusScope;
-  profile.regionStatusSubscription = regionStatusSubscription;
   profile.sameGroupPatchKeys = matchingSeedKeysForStatus(0, requiredMutationKeys, "open");
   profile.setupActiveFallbackGroupedViews = setupCounts.activeFallbackGroupedViews;
   profile.setupActiveIncrementalGroupedViews = setupCounts.activeIncrementalGroupedViews;
   profile.setupActiveViews = setupCounts.activeViews;
-  profile.statusReader = statusReader;
-  profile.statusScope = statusScope;
-  profile.statusSubscription = statusSubscription;
 }, 0);
 
 afterAll(async () => {
-  const expectedMutationDeltaEvents = profile.deltaVersionCount * 2;
+  const expectedMutationDeltaEvents = profile.deltaVersionCount * groupedReaderCount;
   const expectedFromVersions = Array.from(
     { length: profile.deltaVersionCount },
     (_value, index) => expectedInitialVersion + index,
@@ -689,8 +734,12 @@ afterAll(async () => {
   let activeIncrementalGroupedViewsBeforeCleanup = 0;
   let activeViewsBeforeCleanup = 0;
   expect(profile.deltaRecords.length).toBe(expectedMutationDeltaEvents);
-  expect(statusFromVersions).toStrictEqual(expectedFromVersions);
-  expect(regionStatusFromVersions).toStrictEqual(expectedFromVersions);
+  expect(statusFromVersions).toStrictEqual(
+    readerProfileIncludesPrimary(groupedReaderProfile) ? expectedFromVersions : [],
+  );
+  expect(regionStatusFromVersions).toStrictEqual(
+    readerProfileIncludesSecondary(groupedReaderProfile) ? expectedFromVersions : [],
+  );
   for (const record of profile.deltaRecords) {
     expect(record.toVersion).toBe(record.fromVersion + 1);
     expect(record.operationCount > 0).toBe(true);
@@ -764,6 +813,7 @@ afterAll(async () => {
       incrementalAdmissionLimits: groupedIncrementalAdmissionLimits,
       priceThreshold:
         groupedWriteMode === "incremental" ? incrementalPriceThreshold(benchmarkRowCount) : null,
+      ...(groupedReaderProfile === "dual" ? {} : { readerProfile: groupedReaderProfile }),
       seedMutationCount: profile.rowCount,
       timedMutationCount: profile.rowMutationCount - profile.rowCount,
       writeBatchSize: mutationBatchSize,
@@ -783,9 +833,10 @@ afterAll(async () => {
       groupedWriteMode === "incremental"
         ? "Incremental mode uses selective grouped subscriptions sized under the current grouped incremental admission limits."
         : "Fallback mode intentionally uses broad grouped subscriptions with forced fallback admission limits and measures full grouped fallback rebuild pressure.",
-      "The benchmark keeps two grouped live subscriptions open: primary region/status aggregates and secondary status/region aggregates.",
+      groupedReaderProfileNote(),
       `Seed mutation count: ${profile.rowCount}. Timed mutation count: ${profile.rowMutationCount - profile.rowCount}. Configured write batch size: ${mutationBatchSize}.`,
       `Grouped write mode: ${groupedWriteMode}.`,
+      `Grouped reader profile: ${groupedReaderProfile}.`,
       `Expected grouped admission: ${expectedGroupedAdmission}.`,
       groupedWriteMode === "incremental"
         ? `Incremental mode price threshold: ${incrementalPriceThreshold(benchmarkRowCount)}.`
@@ -796,7 +847,7 @@ afterAll(async () => {
     preCleanupHealth,
     queuedEventCount: queuedEventCountFromEngineHealth(health),
     rowCount: profile.rowCount,
-    subscriberCount: 2,
+    subscriberCount: groupedReaderCount,
     topics: ["orders"],
   });
   failOnBenchmarkCleanupLeaks(cleanupLeakCount);
