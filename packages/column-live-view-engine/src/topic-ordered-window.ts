@@ -9,7 +9,13 @@ import { scalarEqualityKey } from "./row-values";
 import { columnValue, type TopicColumnValues } from "./topic-column-vector";
 import { Order as orderBigDecimal, isBigDecimal } from "effect/BigDecimal";
 
+export type RawStorageOrderColumn = {
+  readonly column: TopicColumnValues;
+  readonly direction: "asc" | "desc";
+};
+
 export type OrderedSlotIndex = {
+  readonly orderColumns: ReadonlyArray<RawStorageOrderColumn>;
   readonly orderBy: ReadonlyArray<TopicRawOrderByPlan>;
   readonly slots: Array<number>;
 };

@@ -6,8 +6,12 @@ import type {
   TopicRowEntry,
   TopicRowVisitor,
 } from "./row-scan";
-import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-window-scan";
-import type { OrderedSlotIndex } from "./topic-ordered-window";
+import type {
+  TopicRawOrderByPlan,
+  TopicRawWindowScanPlan,
+  TopicRawWindowScanResult,
+} from "./raw-window-scan";
+import type { OrderedSlotIndex, RawStorageOrderColumn } from "./topic-ordered-window";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
 import { cloneUnknown, fieldValue } from "./row-values";
 import {
@@ -36,7 +40,10 @@ import {
   scanTopicRawWindow,
   type TopicRawWindowScanState,
 } from "./topic-raw-window-scanner";
-import { rawWindowSlotComparator } from "./topic-raw-ordered-window-index";
+import {
+  compareSlotsByStorageOrder,
+  compiledRawStorageOrder,
+} from "./topic-raw-ordered-window-index";
 
 type RowObject = object;
 
@@ -66,6 +73,10 @@ export class TopicRowStorage {
   private readonly rawProjectionPlans = new WeakMap<
     ReadonlyArray<string>,
     ReadonlyArray<RawProjectionColumn>
+  >();
+  private readonly rawStorageOrderPlans = new WeakMap<
+    ReadonlyArray<TopicRawOrderByPlan>,
+    ReadonlyArray<RawStorageOrderColumn>
   >();
   private readonly reservableColumns: Array<MutableTopicColumnValues> = [];
   private readonly orderedSlotIndexes = new Map<string, OrderedSlotIndex>();
@@ -112,7 +123,7 @@ export class TopicRowStorage {
       activeQueries: createActiveQueryRegistry(),
       topic,
       changesSince: (version) => this.changesSince(version),
-      compareRawSlots: (plan) => rawWindowSlotComparator(this.rawWindowScanState, plan),
+      compareRawSlots: (plan) => this.compareRawSlots(plan),
       projectRawRow: (slot, selectedFields) => this.projectRawRow(slot, selectedFields),
       releaseChanges: () => this.releaseChanges(),
       retainChanges: () => this.retainChanges(),
@@ -242,6 +253,21 @@ export class TopicRowStorage {
     return scanTopicRawWindow(this.rawWindowScanState, plan);
   }
 
+  private compareRawSlots(
+    plan: TopicRawWindowScanPlan<object>,
+  ): ((left: number, right: number) => number) | undefined {
+    const storageOrderBy = plan.storageOrderBy;
+    if (storageOrderBy === undefined) {
+      return undefined;
+    }
+    const orderColumns = this.rawStorageOrderPlan(storageOrderBy);
+    if (orderColumns === undefined) {
+      return undefined;
+    }
+    return (left, right) =>
+      compareSlotsByStorageOrder(this.rawWindowScanState, left, right, orderColumns);
+  }
+
   private projectRawRow(slot: number, selectedFields: ReadonlyArray<string>): RowObject {
     const projected: Record<string, unknown> = {};
     for (const projection of this.rawProjectionPlan(selectedFields)) {
@@ -312,6 +338,20 @@ export class TopicRowStorage {
       };
     });
     this.rawProjectionPlans.set(selectedFields, plan);
+    return plan;
+  }
+
+  private rawStorageOrderPlan(
+    storageOrderBy: ReadonlyArray<TopicRawOrderByPlan>,
+  ): ReadonlyArray<RawStorageOrderColumn> | undefined {
+    const cached = this.rawStorageOrderPlans.get(storageOrderBy);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const plan = compiledRawStorageOrder(this.rawWindowScanState, storageOrderBy);
+    if (plan !== undefined) {
+      this.rawStorageOrderPlans.set(storageOrderBy, plan);
+    }
     return plan;
   }
 
