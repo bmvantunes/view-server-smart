@@ -33,6 +33,7 @@ import {
   scanTopicRawWindow,
   type TopicRawWindowScanState,
 } from "./topic-raw-window-scanner";
+import { rawWindowSlotComparator } from "./topic-raw-ordered-window-index";
 
 type RowObject = object;
 
@@ -89,6 +90,7 @@ export class TopicRowStorage {
       activeQueries: createActiveQueryRegistry(),
       topic,
       changesSince: (version) => this.changesSince(version),
+      compareRawSlots: (plan) => rawWindowSlotComparator(this.rawWindowScanState, plan),
       projectRawRow: (slot, selectedFields) => this.projectRawRow(slot, selectedFields),
       releaseChanges: () => this.releaseChanges(),
       retainChanges: () => this.retainChanges(),

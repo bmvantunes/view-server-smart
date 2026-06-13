@@ -121,6 +121,25 @@ const replaceRetainedMatchingEntry = <Row extends RowObject>(
   };
 };
 
+const retainedEntrySortComparator = <Row extends RowObject, ResultRow extends RowObject>(
+  store: TopicRawWindowScan<Row>,
+  compiled: CompiledRawQuery<Row, ResultRow>,
+  queryWindow: RawQueryPlanWindow,
+): ((left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number) => {
+  const compareSlots = store.compareRawSlots?.(rawQueryWindowScanPlan(compiled.plan, queryWindow));
+  const slotForKey = store.slotForKey;
+  if (compareSlots === undefined || slotForKey === undefined) {
+    return compiled.plan.compare;
+  }
+  return (left, right) => {
+    const leftSlot = slotForKey(left.key);
+    const rightSlot = slotForKey(right.key);
+    return leftSlot === undefined || rightSlot === undefined
+      ? compiled.plan.compare(left, right)
+      : compareSlots(leftSlot, rightSlot);
+  };
+};
+
 const updateBaseEvaluationFromRetainedChanges = (
   store: ActiveQueryStoreState,
   compiled: CompiledRawQuery<object, object>,
@@ -247,7 +266,8 @@ const updateBaseEvaluationFromRetainedChanges = (
     return undefined;
   }
 
-  const window = [...windowEntries, ...insertedWindowEntries.values()].sort(compiled.plan.compare);
+  const compareRetainedEntries = retainedEntrySortComparator(store, compiled, queryWindow);
+  const window = [...windowEntries, ...insertedWindowEntries.values()].sort(compareRetainedEntries);
   const retainedLimit =
     removedRetainedEntry && requiredWindowEntries !== undefined
       ? requiredWindowEntries

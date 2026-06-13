@@ -1246,6 +1246,193 @@ describe("column-live-view-engine active query execution", () => {
     }),
   );
 
+  it.effect("sorts retained raw inserts with the storage slot comparator", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-retained-insert-slot-sort",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+
+      const compiled = yield* prepareRawQuery(
+        "raw-retained-insert-slot-sort",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+      let compareCount = 0;
+      const observedCompiled = {
+        ...compiled,
+        plan: {
+          ...compiled.plan,
+          compare: (
+            left: Parameters<typeof compiled.plan.compare>[0],
+            right: Parameters<typeof compiled.plan.compare>[1],
+          ) => {
+            compareCount += 1;
+            return compiled.plan.compare(left, right);
+          },
+        },
+      };
+
+      const execution = yield* acquireRawQueryExecution(
+        topicStoreReadModel(store),
+        observedCompiled,
+      );
+      expect(execution.initial("query").keys).toStrictEqual(["b", "a"]);
+      const cursor = execution.createCursor();
+      compareCount = 0;
+
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.isSome(delta)).toBe(true);
+      expect(cursor.evaluation.keys).toStrictEqual(["c", "b"]);
+      expect(compareCount).toBe(0);
+
+      yield* releaseRawQueryExecution(topicStoreReadModel(store), observedCompiled);
+    }),
+  );
+
+  it.effect("falls back to the row comparator when retained raw slot sorting is unavailable", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-retained-insert-row-sort-fallback",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+
+      const compiled = yield* prepareRawQuery(
+        "raw-retained-insert-row-sort-fallback",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+      let compareCount = 0;
+      const observedCompiled = {
+        ...compiled,
+        plan: {
+          ...compiled.plan,
+          compare: (
+            left: Parameters<typeof compiled.plan.compare>[0],
+            right: Parameters<typeof compiled.plan.compare>[1],
+          ) => {
+            compareCount += 1;
+            return compiled.plan.compare(left, right);
+          },
+        },
+      };
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        compareRawSlots: () => undefined,
+      };
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, observedCompiled);
+      expect(execution.initial("query").keys).toStrictEqual(["b", "a"]);
+      const cursor = execution.createCursor();
+      compareCount = 0;
+
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.isSome(delta)).toBe(true);
+      expect(cursor.evaluation.keys).toStrictEqual(["c", "b"]);
+      expect(compareCount).toBeGreaterThan(0);
+
+      yield* releaseRawQueryExecution(observedReadModel, observedCompiled);
+    }),
+  );
+
+  it.effect("falls back to the row comparator when retained raw inserted slots disappear", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-retained-insert-missing-slot-fallback",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+
+      const compiled = yield* prepareRawQuery(
+        "raw-retained-insert-missing-slot-fallback",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+          limit: 2,
+        },
+      );
+      let compareCount = 0;
+      const observedCompiled = {
+        ...compiled,
+        plan: {
+          ...compiled.plan,
+          compare: (
+            left: Parameters<typeof compiled.plan.compare>[0],
+            right: Parameters<typeof compiled.plan.compare>[1],
+          ) => {
+            compareCount += 1;
+            return compiled.plan.compare(left, right);
+          },
+        },
+      };
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        slotForKey: (key: string) => (key === "c" ? undefined : readModel.slotForKey?.(key)),
+      };
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, observedCompiled);
+      expect(execution.initial("query").keys).toStrictEqual(["b", "a"]);
+      const cursor = execution.createCursor();
+      compareCount = 0;
+
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.isSome(delta)).toBe(true);
+      expect(cursor.evaluation.keys).toStrictEqual(["c", "b"]);
+      expect(compareCount).toBeGreaterThan(0);
+
+      yield* releaseRawQueryExecution(observedReadModel, observedCompiled);
+    }),
+  );
+
   it.effect(
     "emits the next visible raw delta from the last delivered version after no-op changes",
     () =>

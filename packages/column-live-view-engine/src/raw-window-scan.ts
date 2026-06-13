@@ -29,6 +29,9 @@ export type TopicRawWindowScanResult<Row extends RowObject> = {
 };
 
 export type TopicRawWindowScan<Row extends RowObject> = {
+  readonly compareRawSlots?: (
+    plan: TopicRawWindowScanPlan<Row>,
+  ) => ((leftSlot: number, rightSlot: number) => number) | undefined;
   readonly projectRawRow?: (slot: number, selectedFields: ReadonlyArray<string>) => RowObject;
   readonly scanRawWindow: (plan: TopicRawWindowScanPlan<Row>) => TopicRawWindowScanResult<Row>;
   readonly slotForKey?: (key: string) => number | undefined;
