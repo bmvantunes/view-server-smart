@@ -51,7 +51,7 @@ import {
   scalarEqualityKey,
   valuesEqual,
 } from "./row-values";
-import type { TopicRowChangeBatch } from "./row-scan";
+import type { TopicRowChangeBatch, TopicRowEntry } from "./row-scan";
 import type { TopicRawOrderByPlan } from "./raw-window-scan";
 import { scanTopicRawWindow } from "./topic-raw-window-scanner";
 import {
@@ -440,6 +440,164 @@ it("keeps schema field order for aligned column writes", () => {
     "note",
   ]);
 });
+
+it.effect("uses compiled raw row comparators for schema scalar fields and stable key ties", () =>
+  Effect.gen(function* () {
+    const compiled = yield* prepareRawQuery<PositionRow, object>(
+      "positions",
+      rawQueryCompilerMetadata(Position),
+      {
+        select: ["id", "accountId", "symbol", "active", "quantity", "price"],
+        orderBy: [
+          { field: "symbol", direction: "asc" },
+          { field: "quantity", direction: "desc" },
+          { field: "price", direction: "asc" },
+        ],
+      },
+    );
+    const rows: ReadonlyArray<TopicRowEntry<PositionRow>> = [
+      {
+        key: "tie-b",
+        row: {
+          id: "tie-b",
+          accountId: "A",
+          symbol: "MSFT",
+          active: true,
+          quantity: 10n,
+          price: fromStringUnsafe("2"),
+        },
+      },
+      {
+        key: "aapl",
+        row: {
+          id: "aapl",
+          accountId: "A",
+          symbol: "AAPL",
+          active: true,
+          quantity: 1n,
+          price: fromStringUnsafe("9"),
+        },
+      },
+      {
+        key: "tie-a",
+        row: {
+          id: "tie-a",
+          accountId: "A",
+          symbol: "MSFT",
+          active: true,
+          quantity: 10n,
+          price: fromStringUnsafe("2"),
+        },
+      },
+      {
+        key: "msft-cheap",
+        row: {
+          id: "msft-cheap",
+          accountId: "A",
+          symbol: "MSFT",
+          active: true,
+          quantity: 10n,
+          price: fromStringUnsafe("1"),
+        },
+      },
+      {
+        key: "msft-low-quantity",
+        row: {
+          id: "msft-low-quantity",
+          accountId: "A",
+          symbol: "MSFT",
+          active: true,
+          quantity: 1n,
+          price: fromStringUnsafe("1"),
+        },
+      },
+    ];
+
+    expect(rows.toSorted(compiled.plan.compare).map((entry) => entry.key)).toStrictEqual([
+      "aapl",
+      "msft-cheap",
+      "tie-a",
+      "tie-b",
+      "msft-low-quantity",
+    ]);
+  }),
+);
+
+it.effect("falls back to stable raw row comparison for abnormal scalar order values", () =>
+  Effect.gen(function* () {
+    const compiled = yield* prepareRawQuery<object, object>(
+      "orders",
+      rawQueryCompilerMetadata(Order),
+      {
+        select: ["id", "price", "note", "updatedAt"],
+        orderBy: [
+          { field: "updatedAt", direction: "asc" },
+          { field: "note", direction: "asc" },
+        ],
+      },
+    );
+    const rows: ReadonlyArray<TopicRowEntry<object>> = [
+      { key: "nan", row: { id: "nan", price: 1, note: "b", updatedAt: Number.NaN } },
+      { key: "finite-b", row: { id: "finite-b", price: 1, note: "b", updatedAt: 1 } },
+      { key: "finite-a", row: { id: "finite-a", price: 1, note: "a", updatedAt: 1 } },
+      { key: "missing-note", row: { id: "missing-note", price: 1, updatedAt: 1 } },
+      { key: "infinite", row: { id: "infinite", price: 1, note: "c", updatedAt: Infinity } },
+    ];
+
+    expect(rows.toSorted(compiled.plan.compare).map((entry) => entry.key)).toStrictEqual([
+      "missing-note",
+      "finite-a",
+      "finite-b",
+      "infinite",
+      "nan",
+    ]);
+  }),
+);
+
+it.effect(
+  "falls back to stable raw row comparison for abnormal bigint and BigDecimal order values",
+  () =>
+    Effect.gen(function* () {
+      const compiled = yield* prepareRawQuery<object, object>(
+        "positions",
+        rawQueryCompilerMetadata(Position),
+        {
+          select: ["id", "quantity", "price"],
+          orderBy: [
+            { field: "quantity", direction: "asc" },
+            { field: "price", direction: "asc" },
+          ],
+        },
+      );
+      const rows: ReadonlyArray<TopicRowEntry<object>> = [
+        {
+          key: "bigint-smaller",
+          row: { id: "bigint-smaller", quantity: 1n, price: fromStringUnsafe("9") },
+        },
+        {
+          key: "bigint-good-expensive",
+          row: { id: "bigint-good-expensive", quantity: 2n, price: fromStringUnsafe("2") },
+        },
+        {
+          key: "bigint-good-cheap",
+          row: { id: "bigint-good-cheap", quantity: 2n, price: fromStringUnsafe("1") },
+        },
+        { key: "missing-price", row: { id: "missing-price", quantity: 2n } },
+        {
+          key: "string-quantity",
+          row: { id: "string-quantity", quantity: "2", price: fromStringUnsafe("1") },
+        },
+      ];
+
+      expect(rows.toSorted(compiled.plan.compare).map((entry) => entry.key)).toStrictEqual([
+        "bigint-smaller",
+        "missing-price",
+        "bigint-good-cheap",
+        "bigint-good-expensive",
+        "string-quantity",
+      ]);
+    }),
+);
 
 const numericRowField = (row: object, field: string): number => {
   const value = fieldValue(row, field);
