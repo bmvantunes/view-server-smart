@@ -736,6 +736,88 @@ describe("column-live-view-engine active query execution", () => {
     }),
   );
 
+  it.effect("repositions unlimited retained match-to-match raw rows without rescanning", () =>
+    Effect.gen(function* () {
+      const store = new TopicStore(
+        "raw-match-update-unlimited-move-down",
+        Schema.Struct({
+          id: Schema.String,
+          status: Schema.String,
+          score: Schema.Number,
+        }),
+        "id",
+        () => {},
+      );
+      yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 1 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 3 }, invalidRow);
+
+      const scanLimits: Array<number | undefined> = [];
+      const readModel = topicStoreReadModel(store);
+      const observedReadModel = {
+        ...readModel,
+        scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+          scanLimits.push(plan.limit);
+          return readModel.scanRawWindow(plan);
+        },
+      };
+
+      const compiled = yield* prepareRawQuery(
+        "raw-match-update-unlimited-move-down",
+        topicStoreRawQueryMetadata(store),
+        {
+          select: ["id", "score"],
+          where: {
+            status: "open",
+          },
+          orderBy: [{ field: "score", direction: "desc" }],
+        },
+      );
+
+      const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+      expect(execution.initial("query").keys).toStrictEqual(["c", "b", "a"]);
+      const cursor = execution.createCursor();
+
+      yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 0 }, invalidRow);
+
+      const delta = yield* execution.next("query", cursor);
+      expect(Option.getOrThrow(delta)).toStrictEqual({
+        type: "delta",
+        topic: "raw-match-update-unlimited-move-down",
+        queryId: "query",
+        fromVersion: 3,
+        toVersion: 4,
+        operations: [
+          {
+            type: "move",
+            key: "b",
+            fromIndex: 1,
+            toIndex: 0,
+          },
+          {
+            type: "move",
+            key: "a",
+            fromIndex: 2,
+            toIndex: 1,
+          },
+          {
+            type: "update",
+            key: "c",
+            row: {
+              id: "c",
+              score: 0,
+            },
+            index: 2,
+          },
+        ],
+        totalRows: 3,
+      });
+      expect(scanLimits).toStrictEqual([undefined]);
+
+      yield* releaseRawQueryExecution(observedReadModel, compiled);
+    }),
+  );
+
   it.effect("falls back when retained match-to-match raw updates touch outside lookahead", () =>
     Effect.gen(function* () {
       const store = new TopicStore(

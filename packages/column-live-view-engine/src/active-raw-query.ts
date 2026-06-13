@@ -70,6 +70,25 @@ const getActiveRawQueryEntry = <ResultRow extends RowObject>(
   return { map, key };
 };
 
+const insertionIndexForSortedRetainedEntries = <Row extends RowObject>(
+  windowEntries: ReadonlyArray<RetainedWindowEntry<Row>>,
+  nextEntry: RetainedWindowEntry<Row>,
+  compare: (left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number,
+): number => {
+  let low = 0;
+  let high = windowEntries.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const middleEntry = windowEntries[middle]!;
+    if (compare(nextEntry, middleEntry) < 0) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return low;
+};
+
 const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   store: TopicRawWindowScan<Row> & { readonly version: () => number },
   compiled: CompiledRawQuery<Row, ResultRow>,
@@ -112,12 +131,22 @@ const replaceRetainedMatchingEntry = <Row extends RowObject>(
   if (retainedLimit !== undefined && compare(nextEntry, previousEntry) > 0) {
     return undefined;
   }
-  const replaced = windowEntries.map((entry, index) =>
-    index === previousIndex ? nextEntry : entry,
+  const withoutPrevious = [
+    ...windowEntries.slice(0, previousIndex),
+    ...windowEntries.slice(previousIndex + 1),
+  ];
+  const insertionIndex = insertionIndexForSortedRetainedEntries(
+    withoutPrevious,
+    nextEntry,
+    compare,
   );
-  const sorted = replaced.toSorted(compare);
+  const replaced = [
+    ...withoutPrevious.slice(0, insertionIndex),
+    nextEntry,
+    ...withoutPrevious.slice(insertionIndex),
+  ];
   return {
-    window: retainedLimit === undefined ? sorted : sorted.slice(0, retainedLimit),
+    window: replaced,
   };
 };
 
