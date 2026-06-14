@@ -1051,7 +1051,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
               regions: nullRecord({
                 local: {
                   connected: false,
-                  assignedPartitions: 2,
+                  assignedPartitions: 0,
                   messagesPerSecond: 3,
                   bytesPerSecond: 35,
                   decodedMessagesPerSecond: 2,
@@ -1276,7 +1276,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         topicStatus: "degraded",
         topicRegion: {
           connected: false,
-          assignedPartitions: 2,
+          assignedPartitions: 0,
           messagesPerSecond: 0,
           bytesPerSecond: 0,
           decodedMessagesPerSecond: 0,
@@ -1372,7 +1372,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         topicStatus: "degraded",
         topicRegion: {
           connected: false,
-          assignedPartitions: 2,
+          assignedPartitions: 0,
           messagesPerSecond: 0,
           bytesPerSecond: 0,
           decodedMessagesPerSecond: 0,
@@ -2022,7 +2022,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           regions: nullRecord({
             local: {
               connected: false,
-              assignedPartitions: 1,
+              assignedPartitions: 0,
               messagesPerSecond: 0,
               bytesPerSecond: 0,
               decodedMessagesPerSecond: 0,
@@ -2256,7 +2256,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
               regions: nullRecord({
                 local: {
                   connected: false,
-                  assignedPartitions: 1,
+                  assignedPartitions: 0,
                   messagesPerSecond: 1,
                   bytesPerSecond: 59,
                   decodedMessagesPerSecond: 1,
@@ -2408,7 +2408,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           regions: nullRecord({
             local: {
               connected: false,
-              assignedPartitions: 1,
+              assignedPartitions: 0,
               messagesPerSecond: 0,
               bytesPerSecond: 0,
               decodedMessagesPerSecond: 0,
@@ -2821,7 +2821,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           regions: nullRecord({
             local: {
               connected: false,
-              assignedPartitions: 1,
+              assignedPartitions: 0,
               messagesPerSecond: 2,
               bytesPerSecond: 130,
               decodedMessagesPerSecond: 0,
@@ -2960,7 +2960,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           regions: nullRecord({
             local: {
               connected: false,
-              assignedPartitions: 1,
+              assignedPartitions: 0,
               messagesPerSecond: 3,
               bytesPerSecond: 139,
               decodedMessagesPerSecond: 2,
@@ -3066,7 +3066,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
               regions: nullRecord({
                 local: {
                   connected: false,
-                  assignedPartitions: 1,
+                  assignedPartitions: 0,
                   messagesPerSecond: 1,
                   bytesPerSecond: expectedMessageBytes,
                   decodedMessagesPerSecond: 0,
@@ -3168,7 +3168,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
           regions: nullRecord({
             local: {
               connected: false,
-              assignedPartitions: 1,
+              assignedPartitions: 0,
               messagesPerSecond: 1,
               bytesPerSecond: 9,
               decodedMessagesPerSecond: 0,

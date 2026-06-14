@@ -398,6 +398,7 @@ export const makeViewServerKafkaHealthLedger = <
           const topicRegion = topic.regions.get(region);
           if (topicRegion !== undefined) {
             topicRegion.connected = false;
+            topicRegion.assignedPartitions = 0;
             topicRegion.regionLastError = message;
             if (options?.preserveTopicErrors !== true) {
               topicRegion.lastError = null;
