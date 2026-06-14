@@ -298,6 +298,118 @@ describe("benchmark baseline runner", () => {
     ]);
   });
 
+  it("defines retained delta move cases for smoke and release baseline gates", () => {
+    const smokeRetainedDeltaTasks = (profiles.get("smoke") ?? []).filter((task) =>
+      task.label.startsWith("raw active retained delta "),
+    );
+    const releaseRetainedDeltaTasks = (profiles.get("release") ?? []).filter((task) =>
+      task.label.startsWith("raw active retained delta "),
+    );
+
+    expect(
+      smokeRetainedDeltaTasks.map((task) => ({
+        caseName: task.env["VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE"],
+        iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+      })),
+    ).toStrictEqual([
+      {
+        caseName: "noop",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-noop-101rows.json",
+        rowCount: "101",
+      },
+      {
+        caseName: "match-update",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-match-update-101rows.json",
+        rowCount: "101",
+      },
+      {
+        caseName: "match-move-down",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-match-move-down-101rows.json",
+        rowCount: "101",
+      },
+      {
+        caseName: "predicate-enter",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-predicate-enter-101rows.json",
+        rowCount: "101",
+      },
+      {
+        caseName: "visible-delete",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-visible-delete-101rows.json",
+        rowCount: "101",
+      },
+      {
+        caseName: "exhausted-lookahead",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-exhausted-lookahead-101rows.json",
+        rowCount: "101",
+      },
+      {
+        caseName: "count-only",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-count-only-101rows.json",
+        rowCount: "101",
+      },
+    ]);
+    expect(
+      releaseRetainedDeltaTasks.map((task) => ({
+        caseName: task.env["VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE"],
+        iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+      })),
+    ).toStrictEqual([
+      {
+        caseName: "noop",
+        iterations: "100",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-noop-100000rows.json",
+        rowCount: "100000",
+      },
+      {
+        caseName: "match-update",
+        iterations: "100",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-match-update-100000rows.json",
+        rowCount: "100000",
+      },
+      {
+        caseName: "match-move-down",
+        iterations: "49",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-match-move-down-100000rows.json",
+        rowCount: "100000",
+      },
+      {
+        caseName: "predicate-enter",
+        iterations: "100",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-predicate-enter-100000rows.json",
+        rowCount: "100000",
+      },
+      {
+        caseName: "visible-delete",
+        iterations: "100",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-visible-delete-100000rows.json",
+        rowCount: "100000",
+      },
+      {
+        caseName: "exhausted-lookahead",
+        iterations: "100",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-exhausted-lookahead-100000rows.json",
+        rowCount: "100000",
+      },
+      {
+        caseName: "count-only",
+        iterations: "100",
+        outputJsonPath: ".artifacts/raw-active-retained-delta-count-only-100000rows.json",
+        rowCount: "100000",
+      },
+    ]);
+  });
+
   it("updates and compares a tiny profile with fresh artifacts", async () => {
     const directory = makeDirectory();
     const task = makeTask(directory);

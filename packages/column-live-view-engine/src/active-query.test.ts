@@ -790,15 +790,9 @@ describe("column-live-view-engine active query execution", () => {
         operations: [
           {
             type: "move",
-            key: "b",
-            fromIndex: 1,
-            toIndex: 0,
-          },
-          {
-            type: "move",
-            key: "a",
-            fromIndex: 2,
-            toIndex: 1,
+            key: "c",
+            fromIndex: 0,
+            toIndex: 2,
           },
           {
             type: "update",

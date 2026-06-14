@@ -1426,7 +1426,7 @@ describe("@view-server/server", () => {
         fromVersion: 1,
         toVersion: 2,
         operations: [
-          { type: "move", key: "b", fromIndex: 1, toIndex: 0 },
+          { type: "move", key: "a", fromIndex: 0, toIndex: 1 },
           { type: "update", key: "a", row: { id: "a", price: 30 }, index: 1 },
         ],
         totalRows: 2,

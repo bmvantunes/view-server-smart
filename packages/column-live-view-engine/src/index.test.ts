@@ -10700,14 +10700,18 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       yield* engine.patch("orders", "1", { price: 30 });
       const events = yield* take(1);
       const event = firstEvent(events);
-      expect(event).toMatchObject({
+      expect(event).toStrictEqual({
         type: "delta",
+        topic: "orders",
+        queryId: "query-0",
+        fromVersion: 1,
+        toVersion: 2,
         operations: [
           {
             type: "move",
-            key: "2",
-            fromIndex: 1,
-            toIndex: 0,
+            key: "1",
+            fromIndex: 0,
+            toIndex: 1,
           },
           {
             type: "update",
@@ -10716,12 +10720,74 @@ describe("ColumnLiveViewEngine subscriptions", () => {
             index: 1,
           },
         ],
+        totalRows: 2,
       });
       state = expectDeltaConverges(state, event, [
         order("2", "open", 20, 2),
         order("1", "open", 30, 1),
       ]);
       expect(state.keys).toStrictEqual(["2", "1"]);
+      yield* subscription.close();
+    }),
+  );
+
+  it.effect("falls back to multi-move deltas when a batch reorders more than one row", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [
+        order("1", "open", 10, 1),
+        order("2", "open", 20, 2),
+        order("3", "open", 30, 3),
+      ]);
+      const subscription = yield* engine.subscribe("orders", {
+        select: orderSelect,
+        orderBy: [{ field: "price", direction: "asc" }],
+      });
+      const take = yield* makeEventReader(subscription);
+      let state = stateFromSnapshot(firstEvent(yield* take(1)));
+
+      yield* engine.publishMany("orders", [order("1", "open", 30, 1), order("3", "open", 10, 3)]);
+      const event = firstEvent(yield* take(1));
+      expect(event).toStrictEqual({
+        type: "delta",
+        topic: "orders",
+        queryId: "query-0",
+        fromVersion: 1,
+        toVersion: 2,
+        operations: [
+          {
+            type: "move",
+            key: "3",
+            fromIndex: 2,
+            toIndex: 0,
+          },
+          {
+            type: "update",
+            key: "3",
+            row: order("3", "open", 10, 3),
+            index: 0,
+          },
+          {
+            type: "move",
+            key: "2",
+            fromIndex: 2,
+            toIndex: 1,
+          },
+          {
+            type: "update",
+            key: "1",
+            row: order("1", "open", 30, 1),
+            index: 2,
+          },
+        ],
+        totalRows: 3,
+      });
+      state = expectDeltaConverges(state, event, [
+        order("3", "open", 10, 3),
+        order("2", "open", 20, 2),
+        order("1", "open", 30, 1),
+      ]);
+      expect(state.keys).toStrictEqual(["3", "2", "1"]);
       yield* subscription.close();
     }),
   );

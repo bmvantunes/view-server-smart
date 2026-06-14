@@ -51,6 +51,11 @@ const retainedDeltaReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
 };
 
+const retainedDeltaMoveDownReleaseEnv = {
+  ...retainedDeltaReleaseEnv,
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "49",
+};
+
 const groupedReadReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "3",
   VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
@@ -346,6 +351,7 @@ export const profiles = new Map([
       }),
       rawActiveRetainedDeltaTask("noop", 101, retainedDeltaSmokeEnv),
       rawActiveRetainedDeltaTask("match-update", 101, retainedDeltaSmokeEnv),
+      rawActiveRetainedDeltaTask("match-move-down", 101, retainedDeltaSmokeEnv),
       rawActiveRetainedDeltaTask("predicate-enter", 101, retainedDeltaSmokeEnv),
       rawActiveRetainedDeltaTask("visible-delete", 101, retainedDeltaSmokeEnv),
       rawActiveRetainedDeltaTask("exhausted-lookahead", 101, retainedDeltaSmokeEnv),
@@ -423,6 +429,11 @@ export const profiles = new Map([
       groupedWriteTask("incremental", 5_000_000, groupedWriteReleaseEnv),
       rawActiveRetainedDeltaTask("noop", 100_000, retainedDeltaReleaseEnv),
       rawActiveRetainedDeltaTask("match-update", 100_000, retainedDeltaReleaseEnv),
+      rawActiveRetainedDeltaTask(
+        "match-move-down",
+        100_000,
+        retainedDeltaMoveDownReleaseEnv,
+      ),
       rawActiveRetainedDeltaTask("predicate-enter", 100_000, retainedDeltaReleaseEnv),
       rawActiveRetainedDeltaTask("visible-delete", 100_000, retainedDeltaReleaseEnv),
       rawActiveRetainedDeltaTask("exhausted-lookahead", 100_000, retainedDeltaReleaseEnv),

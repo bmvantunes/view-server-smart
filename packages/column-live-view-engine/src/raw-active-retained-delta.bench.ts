@@ -51,6 +51,7 @@ type SelectedOrderRow = Pick<OrderRow, "id" | "score" | "status" | "updatedAt">;
 type RetainedDeltaCaseName =
   | "count-only"
   | "exhausted-lookahead"
+  | "match-move-down"
   | "match-move-up"
   | "match-update"
   | "noop"
@@ -97,6 +98,15 @@ type MatchMoveUpValidation = {
   readonly toVersion: number;
   readonly totalRows: number;
 };
+type MatchMoveDownValidation = {
+  readonly caseName: "match-move-down";
+  readonly events: ReadonlyArray<OrderEvent>;
+  readonly fromVersion: number;
+  readonly row: OrderRow;
+  readonly toIndex: number;
+  readonly toVersion: number;
+  readonly totalRows: number;
+};
 type PredicateEnterValidation = {
   readonly caseName: "predicate-enter";
   readonly enteredRow: OrderRow;
@@ -118,6 +128,7 @@ type VisibleDeleteValidation = {
 type RecordedValidation =
   | CountOnlyValidation
   | ExhaustedLookaheadValidation
+  | MatchMoveDownValidation
   | MatchMoveUpValidation
   | MatchUpdateValidation
   | PredicateEnterValidation
@@ -142,6 +153,8 @@ type BenchmarkProfile = {
   memoryAfterSetup: BenchmarkMemorySnapshot | undefined;
   nextCountIndex: number;
   nextExhaustedDeleteIndex: number;
+  nextMatchMoveDownIndex: number;
+  nextMatchMoveDownOrdinal: number;
   nextMatchMoveUpIndex: number;
   nextMatchMoveUpScore: number;
   nextMatchUpdateScore: number;
@@ -218,6 +231,7 @@ const retainedCaseNameFromEnv = (): RetainedDeltaCaseName => {
   if (
     trimmed === "count-only" ||
     trimmed === "exhausted-lookahead" ||
+    trimmed === "match-move-down" ||
     trimmed === "match-move-up" ||
     trimmed === "match-update" ||
     trimmed === "noop" ||
@@ -227,7 +241,7 @@ const retainedCaseNameFromEnv = (): RetainedDeltaCaseName => {
     return trimmed;
   }
   throw new Error(
-    "VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE must be count-only, exhausted-lookahead, match-move-up, match-update, noop, predicate-enter, or visible-delete.",
+    "VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE must be count-only, exhausted-lookahead, match-move-down, match-move-up, match-update, noop, predicate-enter, or visible-delete.",
   );
 };
 
@@ -265,6 +279,9 @@ if (retainedCaseName === "visible-delete" && benchmarkRowCount < 50 + benchOptio
     "VIEW_SERVER_ENGINE_BENCH_ROWS must be at least limit + iterations for visible-delete.",
   );
 }
+if (retainedCaseName === "match-move-down" && benchOptions.iterations > 49) {
+  throw new Error("VIEW_SERVER_ENGINE_BENCH_ITERATIONS must be at most 49 for match-move-down.");
+}
 if (retainedCaseName === "match-move-up" && benchOptions.iterations > 50) {
   throw new Error("VIEW_SERVER_ENGINE_BENCH_ITERATIONS must be at most 50 for match-move-up.");
 }
@@ -288,6 +305,8 @@ const profile: BenchmarkProfile = {
   memoryAfterSetup: undefined,
   nextCountIndex: benchmarkRowCount,
   nextExhaustedDeleteIndex: benchmarkRowCount - 1,
+  nextMatchMoveDownIndex: benchmarkRowCount - 1,
+  nextMatchMoveDownOrdinal: 0,
   nextMatchMoveUpIndex: benchmarkRowCount - 50,
   nextMatchMoveUpScore: 5_000_000_000,
   nextMatchUpdateScore: 5_000_000_000,
@@ -555,6 +574,33 @@ const validateMatchMoveUp = (validation: MatchMoveUpValidation): void => {
   });
 };
 
+const validateMatchMoveDown = (validation: MatchMoveDownValidation): void => {
+  expectSingleDelta(validation.events, {
+    fromVersion: validation.fromVersion,
+    toVersion: validation.toVersion,
+    operations: [
+      {
+        type: "move",
+        key: validation.row.id,
+        fromIndex: 0,
+        toIndex: validation.toIndex,
+      },
+      {
+        type: "update",
+        key: validation.row.id,
+        row: {
+          id: validation.row.id,
+          score: validation.row.score,
+          status: "open",
+          updatedAt: validation.row.updatedAt,
+        },
+        index: validation.toIndex,
+      },
+    ],
+    totalRows: validation.totalRows,
+  });
+};
+
 const validatePredicateEnter = (validation: PredicateEnterValidation): void => {
   expectSingleDelta(validation.events, {
     fromVersion: validation.fromVersion,
@@ -613,6 +659,10 @@ const validateRecordedEvents = (validation: RecordedValidation): void => {
     }
     case "exhausted-lookahead": {
       validateExhaustedLookahead(validation);
+      return;
+    }
+    case "match-move-down": {
+      validateMatchMoveDown(validation);
       return;
     }
     case "match-move-up": {
@@ -689,6 +739,44 @@ const retainedCases: Record<RetainedDeltaCaseName, RetainedDeltaCaseDefinition> 
           toVersion,
           totalRowsAfterFirstDelete: benchmarkProfile.nextExhaustedDeleteIndex + 2,
           totalRowsAfterSecondDelete: benchmarkProfile.nextExhaustedDeleteIndex + 1,
+        });
+        benchmarkProfile.lastDeliveredVersion = toVersion;
+      },
+    ),
+  },
+  "match-move-down": {
+    benchmarkLabel: "retained match-to-match visible head move-down delta",
+    subscribe: subscribeTopK,
+    run: Effect.fn("ColumnLiveViewEngine.bench.rawActiveRetainedDelta.matchMoveDown")(
+      function* (benchmarkProfile) {
+        const engine = profileEngine(benchmarkProfile);
+        const readEvent = profileEventReader(benchmarkProfile);
+        const rowIndex = benchmarkProfile.nextMatchMoveDownIndex;
+        const ordinal = benchmarkProfile.nextMatchMoveDownOrdinal;
+        benchmarkProfile.nextMatchMoveDownIndex -= 1;
+        benchmarkProfile.nextMatchMoveDownOrdinal += 1;
+        const score = benchmarkProfile.rowCount - 50 + (50 - ordinal) / 1000;
+        const row = {
+          ...seedOrder(rowIndex),
+          score,
+          updatedAt: score,
+        };
+        const fromVersion = benchmarkProfile.lastDeliveredVersion;
+        const toVersion = fromVersion + 1;
+        yield* engine.patch("orders", row.id, {
+          score: row.score,
+          updatedAt: row.updatedAt,
+        });
+        benchmarkProfile.measuredMutationCount += 1;
+        const events = yield* readEvent(1);
+        benchmarkProfile.validations.push({
+          caseName: "match-move-down",
+          events,
+          fromVersion,
+          row,
+          toIndex: 48,
+          toVersion,
+          totalRows: benchmarkProfile.rowCount,
         });
         benchmarkProfile.lastDeliveredVersion = toVersion;
       },

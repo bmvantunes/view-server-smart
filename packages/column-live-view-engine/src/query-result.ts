@@ -55,10 +55,137 @@ const reindexCurrentKeys = (
   }
 };
 
+type SingleMovedKey = {
+  readonly fromIndex: number;
+  readonly key: string;
+  readonly toIndex: number;
+};
+
+const singleMovedKey = (
+  previous: QueryEvaluation<RowObject>,
+  next: QueryEvaluation<RowObject>,
+): SingleMovedKey | undefined => {
+  const previousKeys = previous.keys;
+  const nextKeys = next.keys;
+  if (previousKeys.length !== nextKeys.length) {
+    return undefined;
+  }
+
+  let firstChanged = -1;
+  let lastChanged = -1;
+  for (let index = 0; index < previousKeys.length; index += 1) {
+    if (previousKeys[index] !== nextKeys[index]) {
+      if (firstChanged === -1) {
+        firstChanged = index;
+      }
+      lastChanged = index;
+    }
+  }
+
+  if (firstChanged === -1) {
+    return undefined;
+  }
+
+  let movedDown: SingleMovedKey | undefined;
+  let movedUp: SingleMovedKey | undefined;
+  const movedDownKey = previousKeys[firstChanged]!;
+  if (movedDownKey === nextKeys[lastChanged]) {
+    let movedDownMatches = true;
+    for (let index = firstChanged; index < lastChanged; index += 1) {
+      if (previousKeys[index + 1] !== nextKeys[index]) {
+        movedDownMatches = false;
+        break;
+      }
+    }
+    if (movedDownMatches) {
+      movedDown = {
+        fromIndex: firstChanged,
+        key: movedDownKey,
+        toIndex: lastChanged,
+      };
+    }
+  }
+
+  const movedUpKey = previousKeys[lastChanged]!;
+  if (movedUpKey === nextKeys[firstChanged]) {
+    let movedUpMatches = true;
+    for (let index = firstChanged + 1; index <= lastChanged; index += 1) {
+      if (previousKeys[index - 1] !== nextKeys[index]) {
+        movedUpMatches = false;
+        break;
+      }
+    }
+    if (movedUpMatches) {
+      movedUp = {
+        fromIndex: lastChanged,
+        key: movedUpKey,
+        toIndex: firstChanged,
+      };
+    }
+  }
+
+  if (movedDown === undefined) {
+    return movedUp;
+  }
+  if (movedUp === undefined) {
+    return movedDown;
+  }
+
+  const movedDownRowChanged = !rowsEqual(
+    previous.rows[movedDown.fromIndex]!,
+    next.rows[movedDown.toIndex]!,
+  );
+  const movedUpRowChanged = !rowsEqual(
+    previous.rows[movedUp.fromIndex]!,
+    next.rows[movedUp.toIndex]!,
+  );
+  return movedUpRowChanged && !movedDownRowChanged ? movedUp : movedDown;
+};
+
+const singleMoveDeltaOperations = <Row extends RowObject>(
+  previous: QueryEvaluation<Row>,
+  next: QueryEvaluation<Row>,
+): ReadonlyArray<DeltaOperation<Row>> | undefined => {
+  const moved = singleMovedKey(previous, next);
+  if (moved === undefined) {
+    return undefined;
+  }
+
+  const operations: Array<DeltaOperation<Row>> = [
+    {
+      type: "move",
+      key: moved.key,
+      fromIndex: moved.fromIndex,
+      toIndex: moved.toIndex,
+    },
+  ];
+
+  const movedRows = [...previous.rows];
+  const movedRow = movedRows.splice(moved.fromIndex, 1);
+  movedRows.splice(moved.toIndex, 0, ...movedRow);
+  for (const [index, { key, row }] of next.window.entries()) {
+    const currentRow = movedRows[index];
+    if (currentRow === undefined || !rowsEqual(currentRow, row)) {
+      operations.push({
+        type: "update",
+        key,
+        row,
+        index,
+      });
+    }
+  }
+  return operations;
+};
+
 export const deltaOperations = <Row extends RowObject>(
   previous: QueryEvaluation<Row>,
   next: QueryEvaluation<Row>,
 ): ReadonlyArray<DeltaOperation<Row>> => {
+  const singleMoveOperations = singleMoveDeltaOperations(previous, next);
+  if (singleMoveOperations !== undefined) {
+    return singleMoveOperations;
+  }
+
   const operations: Array<DeltaOperation<Row>> = [];
   const nextKeys = new Set(next.keys);
   const currentKeys = [...previous.keys];
