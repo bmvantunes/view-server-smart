@@ -67,15 +67,58 @@ const groupedQueryPlanCacheKey = (query: GroupedQueryPlanInput): string =>
     query.limit ?? null,
   ]);
 
+const stableScalarGroupedKeyValueTokenString = (value: unknown): string | undefined => {
+  if (value === null) {
+    return `["null"]`;
+  }
+  if (typeof value === "bigint") {
+    return `["bigint",${JSON.stringify(value.toString())}]`;
+  }
+  if (typeof value === "number") {
+    return `["number",${JSON.stringify(Object.is(value, -0) ? "-0" : String(value))}]`;
+  }
+  if (typeof value === "string") {
+    return `["string",${JSON.stringify(value)}]`;
+  }
+  if (typeof value === "boolean") {
+    return `["boolean",${value ? "true" : "false"}]`;
+  }
+  if (value === undefined) {
+    return `["undefined"]`;
+  }
+  return undefined;
+};
+
+const stableScalarGroupedKeyFieldTokenString = (
+  field: string,
+  value: unknown,
+): string | undefined => {
+  const valueToken = stableScalarGroupedKeyValueTokenString(value);
+  if (valueToken === undefined) {
+    return undefined;
+  }
+  return `["array",[["string",${JSON.stringify(field)}],${valueToken}]]`;
+};
+
 const groupedQueryPlanGroupKey = <Row extends RowObject>(
   keyFields: ReadonlyArray<CompiledGroupedKeyField<Row>>,
   row: Row,
 ): string => {
+  const tokens: Array<string> = [];
   const values: Array<readonly [string, unknown]> = [];
   for (const keyField of keyFields) {
-    values.push([keyField.field, keyField.value(row)]);
+    const value = keyField.value(row);
+    values.push([keyField.field, value]);
+    const token = stableScalarGroupedKeyFieldTokenString(keyField.field, value);
+    if (token === undefined) {
+      for (const fallbackKeyField of keyFields.slice(values.length)) {
+        values.push([fallbackKeyField.field, fallbackKeyField.value(row)]);
+      }
+      return stableQueryValueString(values);
+    }
+    tokens.push(token);
   }
-  return stableQueryValueString(values);
+  return `["array",[${tokens.join(",")}]]`;
 };
 
 const compileGroupedKeyFields = <Row extends RowObject>(
