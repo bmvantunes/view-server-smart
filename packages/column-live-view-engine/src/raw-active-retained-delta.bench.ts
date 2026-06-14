@@ -53,6 +53,7 @@ type RetainedDeltaCaseName =
   | "exhausted-lookahead"
   | "match-move-down"
   | "match-move-up"
+  | "match-replacement-batch"
   | "match-update"
   | "noop"
   | "predicate-enter"
@@ -107,6 +108,16 @@ type MatchMoveDownValidation = {
   readonly toVersion: number;
   readonly totalRows: number;
 };
+type MatchReplacementBatchValidation = {
+  readonly caseName: "match-replacement-batch";
+  readonly events: ReadonlyArray<OrderEvent>;
+  readonly firstRow: OrderRow;
+  readonly fromIndex: number;
+  readonly fromVersion: number;
+  readonly secondRow: OrderRow;
+  readonly toVersion: number;
+  readonly totalRows: number;
+};
 type PredicateEnterValidation = {
   readonly caseName: "predicate-enter";
   readonly enteredRow: OrderRow;
@@ -130,6 +141,7 @@ type RecordedValidation =
   | ExhaustedLookaheadValidation
   | MatchMoveDownValidation
   | MatchMoveUpValidation
+  | MatchReplacementBatchValidation
   | MatchUpdateValidation
   | PredicateEnterValidation
   | VisibleDeleteValidation;
@@ -157,6 +169,8 @@ type BenchmarkProfile = {
   nextMatchMoveDownOrdinal: number;
   nextMatchMoveUpIndex: number;
   nextMatchMoveUpScore: number;
+  nextMatchReplacementBatchIndex: number;
+  nextMatchReplacementBatchScore: number;
   nextMatchUpdateScore: number;
   nextNoopIndex: number;
   nextPredicateEnterIndex: number;
@@ -233,6 +247,7 @@ const retainedCaseNameFromEnv = (): RetainedDeltaCaseName => {
     trimmed === "exhausted-lookahead" ||
     trimmed === "match-move-down" ||
     trimmed === "match-move-up" ||
+    trimmed === "match-replacement-batch" ||
     trimmed === "match-update" ||
     trimmed === "noop" ||
     trimmed === "predicate-enter" ||
@@ -241,7 +256,7 @@ const retainedCaseNameFromEnv = (): RetainedDeltaCaseName => {
     return trimmed;
   }
   throw new Error(
-    "VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE must be count-only, exhausted-lookahead, match-move-down, match-move-up, match-update, noop, predicate-enter, or visible-delete.",
+    "VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE must be count-only, exhausted-lookahead, match-move-down, match-move-up, match-replacement-batch, match-update, noop, predicate-enter, or visible-delete.",
   );
 };
 
@@ -285,6 +300,11 @@ if (retainedCaseName === "match-move-down" && benchOptions.iterations > 49) {
 if (retainedCaseName === "match-move-up" && benchOptions.iterations > 50) {
   throw new Error("VIEW_SERVER_ENGINE_BENCH_ITERATIONS must be at most 50 for match-move-up.");
 }
+if (retainedCaseName === "match-replacement-batch" && benchOptions.iterations > 24) {
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_ITERATIONS must be at most 24 for match-replacement-batch.",
+  );
+}
 if (
   retainedCaseName === "exhausted-lookahead" &&
   benchmarkRowCount < 50 + benchOptions.iterations * 2
@@ -309,6 +329,8 @@ const profile: BenchmarkProfile = {
   nextMatchMoveDownOrdinal: 0,
   nextMatchMoveUpIndex: benchmarkRowCount - 50,
   nextMatchMoveUpScore: 5_000_000_000,
+  nextMatchReplacementBatchIndex: benchmarkRowCount - 2,
+  nextMatchReplacementBatchScore: 6_000_000_000,
   nextMatchUpdateScore: 5_000_000_000,
   nextNoopIndex: 0,
   nextPredicateEnterIndex: 0,
@@ -601,6 +623,50 @@ const validateMatchMoveDown = (validation: MatchMoveDownValidation): void => {
   });
 };
 
+const validateMatchReplacementBatch = (validation: MatchReplacementBatchValidation): void => {
+  expectSingleDelta(validation.events, {
+    fromVersion: validation.fromVersion,
+    toVersion: validation.toVersion,
+    operations: [
+      {
+        type: "move",
+        key: validation.secondRow.id,
+        fromIndex: validation.fromIndex,
+        toIndex: 0,
+      },
+      {
+        type: "update",
+        key: validation.secondRow.id,
+        row: {
+          id: validation.secondRow.id,
+          score: validation.secondRow.score,
+          status: "open",
+          updatedAt: validation.secondRow.updatedAt,
+        },
+        index: 0,
+      },
+      {
+        type: "move",
+        key: validation.firstRow.id,
+        fromIndex: validation.fromIndex,
+        toIndex: 1,
+      },
+      {
+        type: "update",
+        key: validation.firstRow.id,
+        row: {
+          id: validation.firstRow.id,
+          score: validation.firstRow.score,
+          status: "open",
+          updatedAt: validation.firstRow.updatedAt,
+        },
+        index: 1,
+      },
+    ],
+    totalRows: validation.totalRows,
+  });
+};
+
 const validatePredicateEnter = (validation: PredicateEnterValidation): void => {
   expectSingleDelta(validation.events, {
     fromVersion: validation.fromVersion,
@@ -667,6 +733,10 @@ const validateRecordedEvents = (validation: RecordedValidation): void => {
     }
     case "match-move-up": {
       validateMatchMoveUp(validation);
+      return;
+    }
+    case "match-replacement-batch": {
+      validateMatchReplacementBatch(validation);
       return;
     }
     case "match-update": {
@@ -812,6 +882,49 @@ const retainedCases: Record<RetainedDeltaCaseName, RetainedDeltaCaseDefinition> 
           fromIndex: 49,
           fromVersion,
           row,
+          toVersion,
+          totalRows: benchmarkProfile.rowCount,
+        });
+        benchmarkProfile.lastDeliveredVersion = toVersion;
+      },
+    ),
+  },
+  "match-replacement-batch": {
+    benchmarkLabel: "retained match-to-match replacement batch delta",
+    subscribe: subscribeTopK,
+    run: Effect.fn("ColumnLiveViewEngine.bench.rawActiveRetainedDelta.matchReplacementBatch")(
+      function* (benchmarkProfile) {
+        const engine = profileEngine(benchmarkProfile);
+        const readEvent = profileEventReader(benchmarkProfile);
+        const firstRowIndex = benchmarkProfile.nextMatchReplacementBatchIndex;
+        const secondRowIndex = firstRowIndex - 1;
+        const firstScore = benchmarkProfile.nextMatchReplacementBatchScore;
+        const secondScore = firstScore + 1;
+        const fromIndex = benchmarkProfile.rowCount - secondRowIndex - 1;
+        benchmarkProfile.nextMatchReplacementBatchIndex -= 2;
+        benchmarkProfile.nextMatchReplacementBatchScore += 2;
+        const firstRow = {
+          ...seedOrder(firstRowIndex),
+          score: firstScore,
+          updatedAt: firstScore,
+        };
+        const secondRow = {
+          ...seedOrder(secondRowIndex),
+          score: secondScore,
+          updatedAt: secondScore,
+        };
+        const fromVersion = benchmarkProfile.lastDeliveredVersion;
+        const toVersion = fromVersion + 1;
+        yield* engine.publishMany("orders", [firstRow, secondRow]);
+        benchmarkProfile.measuredMutationCount += 2;
+        const events = yield* readEvent(1);
+        benchmarkProfile.validations.push({
+          caseName: "match-replacement-batch",
+          events,
+          firstRow,
+          fromIndex,
+          fromVersion,
+          secondRow,
           toVersion,
           totalRows: benchmarkProfile.rowCount,
         });

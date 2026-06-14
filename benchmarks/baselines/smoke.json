@@ -823,6 +823,36 @@
       "backpressureCount": 0,
       "benchmarks": [
         {
+          "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: match-replacement-batch, 101 rows",
+          "maxMs": 1.146792000000005,
+          "meanMs": 0.5359249999999974,
+          "minMs": 0.3498329999999896,
+          "name": "retained match-to-match replacement batch delta",
+          "p99Ms": 1.146792000000005,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["retained match-to-match replacement batch delta"],
+      "benchmarkName": "raw active retained delta benchmark (match-replacement-batch)",
+      "benchmarkScope": "engine-raw-active-retained-delta",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 10354688,
+      "minimumSampleCount": 5,
+      "mutationCount": 111,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-match-replacement-batch-101rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 101,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-active-retained-delta-match-replacement-batch-101rows.summary.json",
+      "taskLabel": "raw active retained delta match-replacement-batch 101 rows",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
           "groupName": "src/raw-active-retained-delta.bench.ts > raw active retained delta benchmark: predicate-enter, 101 rows",
           "maxMs": 1.3971670000000245,
           "meanMs": 0.6796835999999871,

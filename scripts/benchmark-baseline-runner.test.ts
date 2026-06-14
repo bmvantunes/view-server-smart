@@ -333,6 +333,13 @@ describe("benchmark baseline runner", () => {
         rowCount: "101",
       },
       {
+        caseName: "match-replacement-batch",
+        iterations: "5",
+        outputJsonPath:
+          ".artifacts/raw-active-retained-delta-match-replacement-batch-101rows.json",
+        rowCount: "101",
+      },
+      {
         caseName: "predicate-enter",
         iterations: "5",
         outputJsonPath: ".artifacts/raw-active-retained-delta-predicate-enter-101rows.json",
@@ -381,6 +388,13 @@ describe("benchmark baseline runner", () => {
         caseName: "match-move-down",
         iterations: "49",
         outputJsonPath: ".artifacts/raw-active-retained-delta-match-move-down-100000rows.json",
+        rowCount: "100000",
+      },
+      {
+        caseName: "match-replacement-batch",
+        iterations: "24",
+        outputJsonPath:
+          ".artifacts/raw-active-retained-delta-match-replacement-batch-100000rows.json",
         rowCount: "100000",
       },
       {
