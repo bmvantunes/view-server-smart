@@ -10,6 +10,7 @@ export type PreparedTopicRow = {
   readonly changedFields?: TopicRowChangedFields;
   readonly key: string;
   readonly row: object;
+  readonly source: "patch" | "row";
 };
 
 export type TopicRowPreparationContext = {
@@ -86,6 +87,7 @@ export const prepareTopicRow = Effect.fn("ColumnLiveViewEngine.topicRow.prepare"
   return {
     key,
     row: decoded,
+    source: "row",
   } satisfies PreparedTopicRow;
 });
 
@@ -116,12 +118,17 @@ export const prepareTopicPatch = Effect.fn("ColumnLiveViewEngine.topicRow.patch.
       return {
         key,
         row: decoded,
+        source: "patch",
       } satisfies PreparedTopicRow;
     }
     return {
       changedFields: topicRowChangedFields,
       key,
       row: decoded,
+      source: "patch",
     } satisfies PreparedTopicRow;
   },
 );
+
+export const preparedTopicRowChangesRow = (prepared: PreparedTopicRow): boolean =>
+  prepared.source === "row" || prepared.changedFields !== undefined;

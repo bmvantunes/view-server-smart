@@ -3,6 +3,7 @@ import { createActiveQueryRegistry, type ActiveQueryStoreState } from "./active-
 import type {
   TopicRowChange,
   TopicRowChangeBatch,
+  TopicRowChangedFields,
   TopicRowEntry,
   TopicRowVisitor,
 } from "./row-scan";
@@ -32,12 +33,16 @@ import {
 import {
   prepareTopicPatch,
   prepareTopicRow,
+  preparedTopicRowChangesRow,
   type InvalidRowErrorFactory,
   type PreparedTopicRow,
   type TopicRowPreparationContext,
 } from "./topic-row-preparation";
 import {
+  insertSlotIntoRawWindowIndex,
   insertSlotIntoRawWindowIndexes,
+  removeSlotFromRawWindowIndex,
+  removeSlotFromRawWindowIndexes,
   scanTopicRawWindow,
   type TopicRawWindowScanState,
 } from "./topic-raw-window-scanner";
@@ -171,12 +176,16 @@ export class TopicRowStorage {
   setPrepared(prepared: PreparedTopicRow): void {
     const existingSlot = this.keyToSlot.get(prepared.key);
     if (existingSlot !== undefined) {
+      if (!preparedTopicRowChangesRow(prepared)) {
+        return;
+      }
       const previous = this.slots[existingSlot]!.row;
       this.removeSlotFromScalarIndexes(existingSlot);
+      this.removeSlotFromReplacementOrderedIndexes(existingSlot, prepared.changedFields);
       this.writeSlot(existingSlot, prepared);
       this.addSlotToScalarIndexes(existingSlot);
       this.recordPreparedReplacementChange(prepared, previous);
-      this.orderedSlotIndexes.clear();
+      this.insertSlotIntoReplacementOrderedIndexes(existingSlot, prepared.changedFields);
       return;
     }
 
@@ -193,17 +202,25 @@ export class TopicRowStorage {
   }
 
   setPreparedMany(preparedRows: ReadonlyArray<PreparedTopicRow>): void {
-    const appendReservation = this.createAppendBatchReservation(preparedRows);
-    if (preparedRows.length > 1 && this.orderedSlotIndexes.size > 0) {
+    const changedPreparedRows = preparedRows.filter((prepared) => {
+      const existingSlot = this.keyToSlot.get(prepared.key);
+      return existingSlot === undefined || preparedTopicRowChangesRow(prepared);
+    });
+    const appendReservation = this.createAppendBatchReservation(changedPreparedRows);
+    if (changedPreparedRows.length > 1 && this.orderedSlotIndexes.size > 0) {
       this.orderedSlotIndexes.clear();
-      for (let index = 0; index < preparedRows.length; index += 1) {
-        this.setPreparedWithoutIndexMaintenance(preparedRows[index]!, appendReservation, index);
+      for (let index = 0; index < changedPreparedRows.length; index += 1) {
+        this.setPreparedWithoutIndexMaintenance(
+          changedPreparedRows[index]!,
+          appendReservation,
+          index,
+        );
       }
       return;
     }
 
-    for (let index = 0; index < preparedRows.length; index += 1) {
-      this.setPreparedInBatch(preparedRows[index]!, appendReservation, index);
+    for (let index = 0; index < changedPreparedRows.length; index += 1) {
+      this.setPreparedInBatch(changedPreparedRows[index]!, appendReservation, index);
     }
   }
 
@@ -213,20 +230,22 @@ export class TopicRowStorage {
       return 0;
     }
 
-    this.orderedSlotIndexes.clear();
     const lastSlot = this.slots.length - 1;
     const lastEntry = this.slots[lastSlot]!;
     const previous = this.slots[slot]!.row;
     this.removeSlotFromScalarIndexes(slot);
+    this.removeSlotFromOrderedIndexes(slot);
     this.keyToSlot.delete(key);
     if (slot !== lastSlot) {
       this.removeSlotFromScalarIndexes(lastSlot);
+      this.removeSlotFromOrderedIndexes(lastSlot);
       this.slots[slot] = lastEntry;
       this.keyToSlot.set(lastEntry.key, slot);
       for (const column of this.columns.values()) {
         column.copySlot(slot, lastSlot);
       }
       this.addSlotToScalarIndexes(slot);
+      this.insertSlotIntoOrderedIndexes(slot);
     }
     this.slots.pop();
     for (const column of this.columns.values()) {
@@ -402,10 +421,11 @@ export class TopicRowStorage {
     if (existingSlot !== undefined) {
       const previous = this.slots[existingSlot]!.row;
       this.removeSlotFromScalarIndexes(existingSlot);
+      this.removeSlotFromReplacementOrderedIndexes(existingSlot, prepared.changedFields);
       this.writeSlot(existingSlot, prepared);
       this.addSlotToScalarIndexes(existingSlot);
       this.recordPreparedReplacementChange(prepared, previous);
-      this.orderedSlotIndexes.clear();
+      this.insertSlotIntoReplacementOrderedIndexes(existingSlot, prepared.changedFields);
       return;
     }
 
@@ -424,6 +444,39 @@ export class TopicRowStorage {
 
   private insertSlotIntoOrderedIndexes(slot: number): void {
     insertSlotIntoRawWindowIndexes(this.rawWindowScanState, slot);
+  }
+
+  private removeSlotFromOrderedIndexes(slot: number): void {
+    removeSlotFromRawWindowIndexes(this.rawWindowScanState, slot);
+  }
+
+  private insertSlotIntoReplacementOrderedIndexes(
+    slot: number,
+    changedFields: TopicRowChangedFields | undefined,
+  ): void {
+    for (const index of this.replacementOrderedIndexes(changedFields)) {
+      insertSlotIntoRawWindowIndex(this.rawWindowScanState, index, slot);
+    }
+  }
+
+  private removeSlotFromReplacementOrderedIndexes(
+    slot: number,
+    changedFields: TopicRowChangedFields | undefined,
+  ): void {
+    for (const index of this.replacementOrderedIndexes(changedFields)) {
+      removeSlotFromRawWindowIndex(index, slot);
+    }
+  }
+
+  private replacementOrderedIndexes(
+    changedFields: TopicRowChangedFields | undefined,
+  ): ReadonlyArray<OrderedSlotIndex> {
+    if (changedFields === undefined) {
+      return [...this.orderedSlotIndexes.values()];
+    }
+    return [...this.orderedSlotIndexes.values()].filter((index) =>
+      index.orderBy.some((order) => changedFields.fields.has(order.field)),
+    );
   }
 
   private setPreparedWithoutIndexMaintenance(

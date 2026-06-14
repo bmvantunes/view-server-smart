@@ -76,6 +76,7 @@ import {
   closeTopicStoreSubscriptions,
   collectTopicStoreHealth,
   deleteTopicStoreRow,
+  patchTopicStoreRow,
   publishTopicStoreRow,
   publishTopicStoreRows,
   registerTopicStoreSubscription,
@@ -88,8 +89,11 @@ import {
   compareExactRangeColumnValue,
   compareRangeColumnValue,
 } from "./topic-range-value";
-import { orderedSlotBoundIndex } from "./topic-ordered-window";
-import { rawWindowOrderedSlotIndex } from "./topic-raw-ordered-window-index";
+import { orderedSlotBoundIndex, type OrderedSlotIndex } from "./topic-ordered-window";
+import {
+  rawWindowOrderedSlotIndex,
+  removeSlotFromRawWindowIndexes,
+} from "./topic-raw-ordered-window-index";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -445,6 +449,30 @@ it("uses typed column values for ordered slot bound indexes", () => {
     ),
   ).toBe(1);
   expect(orderedSlotBoundIndex([0, 1], generic, "open", (comparison) => comparison >= 0)).toBe(1);
+
+  const priceAscendingOrderBy: ReadonlyArray<TopicRawOrderByPlan> = [
+    { field: "price", direction: "asc" },
+  ];
+  const orderedSlotIndexes = new Map<string, OrderedSlotIndex>([
+    [
+      "5:price:asc",
+      {
+        orderBy: priceAscendingOrderBy,
+        orderColumns: [],
+        slots: [0, 1, 2],
+      },
+    ],
+  ]);
+  removeSlotFromRawWindowIndexes(
+    {
+      columns: new Map(),
+      orderedSlotIndexes,
+      rawQueryMetadata: metadata,
+      slots: [],
+    },
+    99,
+  );
+  expect(orderedSlotIndexes.get("5:price:asc")?.slots).toStrictEqual([0, 1, 2]);
 });
 
 it("keeps schema field order for aligned column writes", () => {
@@ -6987,6 +7015,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       yield* publishTopicStoreRow(store, order("1", "open", 10, 1), invalidRow);
       expect(notifyCount).toBe(1);
 
+      yield* patchTopicStoreRow(store, "1", { price: 10 }, invalidRow);
       yield* deleteTopicStoreRow(store, "missing");
       yield* publishTopicStoreRows(store, [], invalidRow);
 
@@ -7850,6 +7879,172 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(cappedLargeWindow.keys).toStrictEqual([]);
       expect(cappedLargeWindow.window).toStrictEqual([]);
       expect(cappedLargeWindow.totalRows).toBe(5);
+    }),
+  );
+
+  it.effect("keeps ordered raw indexes current after single-row replacements", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [
+        order("a", "open", 10, 1),
+        order("b", "open", 20, 2),
+        order("c", "open", 30, 3),
+      ]);
+
+      const warmed = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 3,
+      });
+      expect(rowIds(warmed.rows)).toStrictEqual(["a", "b", "c"]);
+
+      yield* engine.publish("orders", order("b", "open", 5, 4));
+
+      const replaced = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 3,
+      });
+      expect(replaced.rows).toStrictEqual([
+        { id: "b", price: 5 },
+        { id: "a", price: 10 },
+        { id: "c", price: 30 },
+      ]);
+
+      yield* engine.close();
+    }),
+  );
+
+  it.effect("keeps ordered raw indexes current after patches that do not change order fields", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [
+        order("a", "open", 10, 1),
+        order("b", "open", 20, 2),
+        order("c", "open", 30, 3),
+      ]);
+
+      const warmed = yield* engine.snapshot("orders", {
+        select: ["id", "price", "updatedAt"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 3,
+      });
+      expect(rowIds(warmed.rows)).toStrictEqual(["a", "b", "c"]);
+
+      yield* engine.patch("orders", "b", { updatedAt: 9 });
+
+      const patched = yield* engine.snapshot("orders", {
+        select: ["id", "price", "updatedAt"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 3,
+      });
+      expect(patched.rows).toStrictEqual([
+        { id: "a", price: 10, updatedAt: 1 },
+        { id: "b", price: 20, updatedAt: 9 },
+        { id: "c", price: 30, updatedAt: 3 },
+      ]);
+
+      yield* engine.close();
+    }),
+  );
+
+  it.effect("ignores prepared no-op patches in storage replacement paths", () =>
+    Effect.gen(function* () {
+      const storage = new TopicRowStorage("orders", Order, "id");
+      const invalidRow = (topic: string, message: string) =>
+        InvalidRowError.make({ topic, message });
+      const compareByPriceThenKey = (
+        left: { readonly key: string; readonly row: object },
+        right: { readonly key: string; readonly row: object },
+      ) => {
+        const priceComparison =
+          numericRowField(left.row, "price") - numericRowField(right.row, "price");
+        if (priceComparison !== 0) {
+          return priceComparison;
+        }
+        return left.key.localeCompare(right.key);
+      };
+      const initial = order("a", "open", 10, 1);
+      storage.setPrepared(yield* storage.prepareRow(initial, invalidRow));
+      const firstNoOpPatch = yield* storage.preparePatch("a", { price: 10 }, invalidRow);
+      storage.setPrepared(firstNoOpPatch);
+      const secondNoOpPatch = yield* storage.preparePatch("a", { updatedAt: 1 }, invalidRow);
+      storage.setPreparedMany([secondNoOpPatch]);
+      const secondRow = order("b", "open", 20, 2);
+      storage.setPrepared(yield* storage.prepareRow(secondRow, invalidRow));
+      storage.scanRawWindow({
+        predicate: {
+          callbackRequired: false,
+          callbackSkippable: true,
+          filters: [],
+        },
+        orderBy: [{ direction: "asc", field: "price" }],
+        storageOrderBy: [{ direction: "asc", field: "price" }],
+        matches: () => true,
+        compare: compareByPriceThenKey,
+        offset: 0,
+        limit: 2,
+      });
+      storage.setPreparedMany([
+        yield* storage.preparePatch("a", { price: 10 }, invalidRow),
+        yield* storage.preparePatch("b", { price: 20 }, invalidRow),
+      ]);
+
+      const rows: Array<object> = [];
+      storage.scanRows((_key, row) => {
+        rows.push(row);
+      });
+      const orderedWindow = storage.scanRawWindow({
+        predicate: {
+          callbackRequired: false,
+          callbackSkippable: true,
+          filters: [],
+        },
+        orderBy: [{ direction: "asc", field: "price" }],
+        storageOrderBy: [{ direction: "asc", field: "price" }],
+        matches: () => true,
+        compare: compareByPriceThenKey,
+        offset: 0,
+        limit: 2,
+      });
+
+      expect(storage.rowCount).toBe(2);
+      expect(rows).toStrictEqual([initial, secondRow]);
+      expect(orderedWindow.keys).toStrictEqual(["a", "b"]);
+    }),
+  );
+
+  it.effect("keeps ordered raw indexes current after deletes move the last slot", () =>
+    Effect.gen(function* () {
+      const engine = yield* makeEngine();
+      yield* engine.publishMany("orders", [
+        order("a", "open", 10, 1),
+        order("b", "open", 20, 2),
+        order("c", "open", 30, 3),
+        order("d", "open", 40, 4),
+      ]);
+
+      const warmed = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 4,
+      });
+      expect(rowIds(warmed.rows)).toStrictEqual(["a", "b", "c", "d"]);
+
+      yield* engine.delete("orders", "b");
+
+      const deleted = yield* engine.snapshot("orders", {
+        select: ["id", "price"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 4,
+      });
+      expect(deleted.rows).toStrictEqual([
+        { id: "a", price: 10 },
+        { id: "c", price: 30 },
+        { id: "d", price: 40 },
+      ]);
+
+      yield* engine.close();
     }),
   );
 

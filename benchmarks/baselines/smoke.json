@@ -271,6 +271,15 @@
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 6.401499999999999,
+          "meanMs": 5.926566600000013,
+          "minMs": 5.667209000000014,
+          "name": "patch existing rows one by one",
+          "p99Ms": 6.401499999999999,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
           "maxMs": 2.6354580000000283,
           "meanMs": 2.1617250000000015,
           "minMs": 1.74512500000003,
@@ -289,15 +298,6 @@
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 6.401499999999999,
-          "meanMs": 5.926566600000013,
-          "minMs": 5.667209000000014,
-          "name": "patch existing rows one by one",
-          "p99Ms": 6.401499999999999,
-          "sampleCount": 5
-        },
-        {
-          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
           "maxMs": 5.605582999999967,
           "meanMs": 4.993016399999988,
           "minMs": 4.413915999999972,
@@ -308,9 +308,9 @@
       ],
       "benchmarkCases": [
         "publish append single row",
+        "patch existing rows one by one",
         "publishMany append batch",
         "publishMany replace existing batch",
-        "patch existing rows one by one",
         "append then delete batch"
       ],
       "benchmarkName": "raw write engine benchmark (base)",
@@ -343,6 +343,33 @@
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 6.150833999999975,
+          "meanMs": 6.041875199999993,
+          "minMs": 5.866833999999983,
+          "name": "patch existing rows one by one",
+          "p99Ms": 6.150833999999975,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 0.5610409999999888,
+          "meanMs": 0.29748339999999873,
+          "minMs": 0.19854099999997743,
+          "name": "replace single row then indexed snapshot",
+          "p99Ms": 0.5610409999999888,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
+          "maxMs": 0.36120799999997644,
+          "meanMs": 0.27156679999999367,
+          "minMs": 0.22658399999994572,
+          "name": "delete non-last row then indexed snapshot",
+          "p99Ms": 0.36120799999997644,
+          "sampleCount": 5
+        },
+        {
+          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
           "maxMs": 2.746832999999981,
           "meanMs": 2.2046500000000036,
           "minMs": 1.8466660000000275,
@@ -361,15 +388,6 @@
         },
         {
           "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
-          "maxMs": 6.150833999999975,
-          "meanMs": 6.041875199999993,
-          "minMs": 5.866833999999983,
-          "name": "patch existing rows one by one",
-          "p99Ms": 6.150833999999975,
-          "sampleCount": 5
-        },
-        {
-          "groupName": "src/raw-write.bench.ts > raw write engine benchmark: 1000 rows",
           "maxMs": 5.389041999999961,
           "meanMs": 5.065483599999993,
           "minMs": 4.656584000000009,
@@ -380,9 +398,11 @@
       ],
       "benchmarkCases": [
         "publish append single row",
+        "patch existing rows one by one",
+        "replace single row then indexed snapshot",
+        "delete non-last row then indexed snapshot",
         "publishMany append batch",
         "publishMany replace existing batch",
-        "patch existing rows one by one",
         "append then delete batch"
       ],
       "benchmarkName": "raw write engine benchmark (indexed)",
@@ -391,7 +411,7 @@
       "latencySource": "vitest-output-json",
       "memoryRssTotalDeltaBytes": 57294848,
       "minimumSampleCount": 5,
-      "mutationCount": 3508,
+      "mutationCount": 3528,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-write-indexed-1000rows.json",
       "queuedEventCount": 0,
       "rowCount": 1000,

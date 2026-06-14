@@ -35,10 +35,34 @@ export const insertSlotIntoRawWindowIndexes = (
   slot: number,
 ): void => {
   for (const index of state.orderedSlotIndexes.values()) {
-    const insertAt = orderedSlotIndexInsertionPoint(index.slots, slot, (left, right) =>
-      compareSlotsByStorageOrder(state, left, right, index.orderColumns),
-    );
-    index.slots.splice(insertAt, 0, slot);
+    insertSlotIntoRawWindowIndex(state, index, slot);
+  }
+};
+
+export const insertSlotIntoRawWindowIndex = (
+  state: Pick<RawOrderedWindowIndexState, "slots">,
+  index: OrderedSlotIndex,
+  slot: number,
+): void => {
+  const insertAt = orderedSlotIndexInsertionPoint(index.slots, slot, (left, right) =>
+    compareSlotsByStorageOrder(state, left, right, index.orderColumns),
+  );
+  index.slots.splice(insertAt, 0, slot);
+};
+
+export const removeSlotFromRawWindowIndexes = (
+  state: RawOrderedWindowIndexState,
+  slot: number,
+): void => {
+  for (const index of state.orderedSlotIndexes.values()) {
+    removeSlotFromRawWindowIndex(index, slot);
+  }
+};
+
+export const removeSlotFromRawWindowIndex = (index: OrderedSlotIndex, slot: number): void => {
+  const slotIndex = index.slots.indexOf(slot);
+  if (slotIndex >= 0) {
+    index.slots.splice(slotIndex, 1);
   }
 };
 

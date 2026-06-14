@@ -52,8 +52,15 @@ type BenchmarkProfile = {
   nextAppendIndex: number;
   nextDeleteIndex: number;
   nextPatchGeneration: number;
+  nextReadAfterDeleteGeneration: number;
+  nextReadAfterReplaceGeneration: number;
   nextReplaceGeneration: number;
   rowCount: number;
+};
+
+type BenchmarkCase = {
+  readonly name: string;
+  readonly run: () => Promise<void>;
 };
 
 const defaultBatchSize = 1_000;
@@ -152,6 +159,8 @@ const profile: BenchmarkProfile = {
   nextAppendIndex: benchmarkRowCount,
   nextDeleteIndex: 0,
   nextPatchGeneration: 0,
+  nextReadAfterDeleteGeneration: 0,
+  nextReadAfterReplaceGeneration: 0,
   nextReplaceGeneration: 0,
   rowCount: benchmarkRowCount,
 };
@@ -181,7 +190,21 @@ const benchmarkMutationCount = (): number =>
   (profile.nextAppendIndex - benchmarkRowCount) +
   profile.nextReplaceGeneration * batchSize +
   profile.nextPatchGeneration * batchSize +
-  profile.nextDeleteIndex * 2;
+  profile.nextDeleteIndex * 2 +
+  (writeMode === "indexed"
+    ? profile.nextReadAfterReplaceGeneration + profile.nextReadAfterDeleteGeneration * 3
+    : 0);
+
+const benchmarkCases = [
+  "publish append single row",
+  "patch existing rows one by one",
+  ...(writeMode === "indexed"
+    ? ["replace single row then indexed snapshot", "delete non-last row then indexed snapshot"]
+    : []),
+  "publishMany append batch",
+  "publishMany replace existing batch",
+  "append then delete batch",
+];
 
 const seedOrder = (index: number): OrderRow => ({
   id: `order-${index}`,
@@ -321,13 +344,7 @@ afterAll(async () => {
   writeBenchmarkArtifact({
     artifactKind: "engine-benchmark-summary",
     backpressureCount: backpressureCountFromEngineHealth(health),
-    benchmarkCases: [
-      "publish append single row",
-      "publishMany append batch",
-      "publishMany replace existing batch",
-      "patch existing rows one by one",
-      "append then delete batch",
-    ],
+    benchmarkCases,
     benchmarkName: `raw write engine benchmark (${writeMode})`,
     benchmarkScope: "engine-raw-write",
     cleanupLeakCount,
@@ -343,7 +360,7 @@ afterAll(async () => {
     notes: [
       "Latency percentiles are emitted by Vitest in outputJsonPath.",
       writeMode === "indexed"
-        ? "Indexed write mode pre-warms scalar predicate buckets and one ordered raw window index before timed writes. Single-row appends pay ordered-index insertion cost; batch writes measure scalar maintenance plus the current ordered-index invalidation/clear behavior."
+        ? "Indexed write mode pre-warms scalar predicate buckets and three ordered raw window indexes before timed writes. Single-row appends, replacements, patches, and deletes maintain affected ordered indexes incrementally; multi-row batch writes still measure scalar maintenance plus ordered-index invalidation/clear behavior."
         : "Base write mode measures decoded engine writes without pre-warmed read-path indexes.",
       `Seed row count: ${profile.rowCount}. Final tracked row count: ${profile.currentRowCount}.`,
     ],
@@ -357,75 +374,121 @@ afterAll(async () => {
 }, 0);
 
 describe(`raw write engine benchmark: ${profile.rowCount} rows`, () => {
-  bench(
-    "publish append single row",
-    async () => {
-      const engine = profileEngine(profile);
-      const index = profile.nextAppendIndex;
-      profile.nextAppendIndex += 1;
-      profile.currentRowCount += 1;
-      await Effect.runPromise(
-        engine.publish("orders", generatedOrder("single-append", index, index)),
-      );
-    },
-    benchOptions,
-  );
-
-  bench(
-    "publishMany append batch",
-    async () => {
-      const engine = profileEngine(profile);
-      const rows = writeBatch("append", profile.nextAppendIndex, profile.nextAppendIndex);
-      profile.nextAppendIndex += batchSize;
-      profile.currentRowCount += batchSize;
-      await Effect.runPromise(engine.publishMany("orders", rows));
-    },
-    benchOptions,
-  );
-
-  bench(
-    "publishMany replace existing batch",
-    async () => {
-      const engine = profileEngine(profile);
-      const rows = writeBatch("order", 0, profile.nextReplaceGeneration);
-      profile.nextReplaceGeneration += 1;
-      await Effect.runPromise(engine.publishMany("orders", rows));
-    },
-    benchOptions,
-  );
-
-  bench(
-    "patch existing rows one by one",
-    async () => {
-      const engine = profileEngine(profile);
-      const generation = profile.nextPatchGeneration;
-      profile.nextPatchGeneration += 1;
-      for (let offset = 0; offset < batchSize; offset += 1) {
+  const benchmarkDefinitions: ReadonlyArray<BenchmarkCase> = [
+    {
+      name: "publish append single row",
+      run: async () => {
+        const engine = profileEngine(profile);
+        const index = profile.nextAppendIndex;
+        profile.nextAppendIndex += 1;
+        profile.currentRowCount += 1;
         await Effect.runPromise(
-          engine.patch("orders", `order-${offset}`, {
-            price: generation + offset,
-            quantity: BigInt(generation + offset),
-            decimalPrice: fromStringUnsafe(String(generation + offset)),
-            updatedAt: 2_000_000_000 + generation + offset,
-          }),
+          engine.publish("orders", generatedOrder("single-append", index, index)),
         );
-      }
+      },
     },
-    benchOptions,
-  );
+    ...(writeMode === "indexed"
+      ? [
+          {
+            name: "replace single row then indexed snapshot",
+            run: async () => {
+              const engine = profileEngine(profile);
+              const generation = profile.nextReadAfterReplaceGeneration;
+              profile.nextReadAfterReplaceGeneration += 1;
+              await Effect.runPromise(
+                engine.publish("orders", generatedOrder("order", 0, generation)),
+              );
+              await Effect.runPromise(
+                engine.snapshot("orders", {
+                  select: ["id", "price", "updatedAt"],
+                  where: {
+                    price: { gte: 0 },
+                  },
+                  orderBy: [{ field: "price", direction: "asc" }],
+                  limit: 50,
+                }),
+              );
+            },
+          },
+          {
+            name: "delete non-last row then indexed snapshot",
+            run: async () => {
+              const engine = profileEngine(profile);
+              const generation = profile.nextReadAfterDeleteGeneration;
+              profile.nextReadAfterDeleteGeneration += 1;
+              const deletedRow = generatedOrder("delete-read", generation * 2, generation);
+              const movedRow = generatedOrder("delete-read", generation * 2 + 1, generation);
+              await Effect.runPromise(engine.publish("orders", deletedRow));
+              await Effect.runPromise(engine.publish("orders", movedRow));
+              await Effect.runPromise(engine.delete("orders", deletedRow.id));
+              profile.currentRowCount += 1;
+              await Effect.runPromise(
+                engine.snapshot("orders", {
+                  select: ["id", "price", "updatedAt"],
+                  where: {
+                    price: { gte: 0 },
+                  },
+                  orderBy: [{ field: "price", direction: "asc" }],
+                  limit: 50,
+                }),
+              );
+            },
+          },
+        ]
+      : []),
+    {
+      name: "patch existing rows one by one",
+      run: async () => {
+        const engine = profileEngine(profile);
+        const generation = profile.nextPatchGeneration;
+        profile.nextPatchGeneration += 1;
+        for (let offset = 0; offset < batchSize; offset += 1) {
+          await Effect.runPromise(
+            engine.patch("orders", `order-${offset}`, {
+              price: generation + offset,
+              quantity: BigInt(generation + offset),
+              decimalPrice: fromStringUnsafe(String(generation + offset)),
+              updatedAt: 2_000_000_000 + generation + offset,
+            }),
+          );
+        }
+      },
+    },
+    {
+      name: "publishMany append batch",
+      run: async () => {
+        const engine = profileEngine(profile);
+        const rows = writeBatch("append", profile.nextAppendIndex, profile.nextAppendIndex);
+        profile.nextAppendIndex += batchSize;
+        profile.currentRowCount += batchSize;
+        await Effect.runPromise(engine.publishMany("orders", rows));
+      },
+    },
+    {
+      name: "publishMany replace existing batch",
+      run: async () => {
+        const engine = profileEngine(profile);
+        const rows = writeBatch("order", 0, profile.nextReplaceGeneration);
+        profile.nextReplaceGeneration += 1;
+        await Effect.runPromise(engine.publishMany("orders", rows));
+      },
+    },
+    {
+      name: "append then delete batch",
+      run: async () => {
+        const engine = profileEngine(profile);
+        const startIndex = profile.nextDeleteIndex;
+        const rows = writeBatch("delete", startIndex, startIndex);
+        profile.nextDeleteIndex += batchSize;
+        await Effect.runPromise(engine.publishMany("orders", rows));
+        for (const row of rows) {
+          await Effect.runPromise(engine.delete("orders", row.id));
+        }
+      },
+    },
+  ];
 
-  bench(
-    "append then delete batch",
-    async () => {
-      const engine = profileEngine(profile);
-      const startIndex = profile.nextDeleteIndex;
-      const rows = writeBatch("delete", startIndex, startIndex);
-      profile.nextDeleteIndex += batchSize;
-      await Effect.runPromise(engine.publishMany("orders", rows));
-      for (const row of rows) {
-        await Effect.runPromise(engine.delete("orders", row.id));
-      }
-    },
-    benchOptions,
-  );
+  for (const benchmarkCase of benchmarkDefinitions) {
+    bench(benchmarkCase.name, benchmarkCase.run, benchOptions);
+  }
 });

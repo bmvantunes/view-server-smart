@@ -87,6 +87,11 @@ export const scanTopicRawWindow = (
 };
 
 export { insertSlotIntoRawWindowIndexes };
+export {
+  insertSlotIntoRawWindowIndex,
+  removeSlotFromRawWindowIndex,
+  removeSlotFromRawWindowIndexes,
+} from "./topic-raw-ordered-window-index";
 
 const countRawWindowSlots = (
   state: TopicRawWindowScanState,
