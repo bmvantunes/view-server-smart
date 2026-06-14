@@ -812,6 +812,100 @@ describe("column-live-view-engine active query execution", () => {
     }),
   );
 
+  it.effect(
+    "keeps retained replacement batches sorted when multiple rows update before polling",
+    () =>
+      Effect.gen(function* () {
+        const store = new TopicStore(
+          "raw-match-update-batched-replacements",
+          Schema.Struct({
+            id: Schema.String,
+            status: Schema.String,
+            score: Schema.Number,
+          }),
+          "id",
+          () => {},
+        );
+        yield* publishTopicStoreRow(store, { id: "a", status: "open", score: 3 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 2 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 1 }, invalidRow);
+
+        const scanLimits: Array<number | undefined> = [];
+        const readModel = topicStoreReadModel(store);
+        const observedReadModel = {
+          ...readModel,
+          scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+            scanLimits.push(plan.limit);
+            return readModel.scanRawWindow(plan);
+          },
+        };
+
+        const compiled = yield* prepareRawQuery(
+          "raw-match-update-batched-replacements",
+          topicStoreRawQueryMetadata(store),
+          {
+            select: ["id", "score"],
+            where: {
+              status: "open",
+            },
+            orderBy: [{ field: "score", direction: "desc" }],
+          },
+        );
+
+        const execution = yield* acquireRawQueryExecution(observedReadModel, compiled);
+        expect(execution.initial("query").keys).toStrictEqual(["a", "b", "c"]);
+        const cursor = execution.createCursor();
+
+        yield* publishTopicStoreRow(store, { id: "b", status: "open", score: 4 }, invalidRow);
+        yield* publishTopicStoreRow(store, { id: "c", status: "open", score: 5 }, invalidRow);
+
+        const delta = yield* execution.next("query", cursor);
+        expect(Option.getOrThrow(delta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-match-update-batched-replacements",
+          queryId: "query",
+          fromVersion: 3,
+          toVersion: 5,
+          operations: [
+            {
+              type: "move",
+              key: "c",
+              fromIndex: 2,
+              toIndex: 0,
+            },
+            {
+              type: "update",
+              key: "c",
+              row: {
+                id: "c",
+                score: 5,
+              },
+              index: 0,
+            },
+            {
+              type: "move",
+              key: "b",
+              fromIndex: 2,
+              toIndex: 1,
+            },
+            {
+              type: "update",
+              key: "b",
+              row: {
+                id: "b",
+                score: 4,
+              },
+              index: 1,
+            },
+          ],
+          totalRows: 3,
+        });
+        expect(scanLimits).toStrictEqual([undefined]);
+
+        yield* releaseRawQueryExecution(observedReadModel, compiled);
+      }),
+  );
+
   it.effect("falls back when retained match-to-match raw updates touch outside lookahead", () =>
     Effect.gen(function* () {
       const store = new TopicStore(

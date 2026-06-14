@@ -121,7 +121,8 @@ const replaceRetainedMatchingEntry = <Row extends RowObject>(
   windowEntries: ReadonlyArray<RetainedWindowEntry<Row>>,
   key: string,
   row: Row,
-  compare: (left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number,
+  comparePrevious: (left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number,
+  compareInsertion: (left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number,
   retainedLimit: number | undefined,
 ): RetainedReplacementResult<Row> | undefined => {
   let previousIndex = -1;
@@ -137,7 +138,7 @@ const replaceRetainedMatchingEntry = <Row extends RowObject>(
     return undefined;
   }
   const nextEntry: RetainedWindowEntry<Row> = { key, row };
-  if (retainedLimit !== undefined && compare(nextEntry, previousEntry) > 0) {
+  if (retainedLimit !== undefined && comparePrevious(nextEntry, previousEntry) > 0) {
     return undefined;
   }
   const withoutPrevious = [
@@ -147,7 +148,7 @@ const replaceRetainedMatchingEntry = <Row extends RowObject>(
   const insertionIndex = insertionIndexForSortedRetainedEntries(
     withoutPrevious,
     nextEntry,
-    compare,
+    compareInsertion,
   );
   const replaced = [
     ...withoutPrevious.slice(0, insertionIndex),
@@ -193,7 +194,9 @@ const updateBaseEvaluationFromRetainedChanges = (
   let totalRows = evaluation.totalRows;
   let windowEntries = evaluation.window;
   let removedRetainedEntry = false;
+  let replacedRetainedEntry = false;
   const insertedWindowEntries = new Map<string, RetainedWindowEntry>();
+  const compareRetainedEntries = retainedEntrySortComparator(store, compiled, queryWindow);
   for (const batch of batches) {
     for (const change of batch.changes) {
       const previousMatches =
@@ -224,12 +227,14 @@ const updateBaseEvaluationFromRetainedChanges = (
             change.key,
             change.next,
             compiled.plan.compare,
+            compareRetainedEntries,
             queryWindow.limit,
           );
           if (replacedWindow === undefined) {
             return undefined;
           }
           windowEntries = replacedWindow.window;
+          replacedRetainedEntry = true;
           continue;
         }
         if (previousMatches) {
@@ -273,6 +278,10 @@ const updateBaseEvaluationFromRetainedChanges = (
     };
   }
 
+  if (replacedRetainedEntry) {
+    windowEntries = [...windowEntries].sort(compareRetainedEntries);
+  }
+
   const requiredWindowEntries =
     queryWindow.limit === undefined ? undefined : Math.max(0, queryWindow.limit - 1);
   if (
@@ -304,7 +313,6 @@ const updateBaseEvaluationFromRetainedChanges = (
     return undefined;
   }
 
-  const compareRetainedEntries = retainedEntrySortComparator(store, compiled, queryWindow);
   const window = [...windowEntries, ...insertedWindowEntries.values()].sort(compareRetainedEntries);
   const retainedLimit =
     removedRetainedEntry && requiredWindowEntries !== undefined
