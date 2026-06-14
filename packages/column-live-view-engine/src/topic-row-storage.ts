@@ -15,7 +15,7 @@ import type {
 import type { TopicRawPredicatePlan } from "./raw-predicate-plan";
 import type { OrderedSlotIndex, RawStorageOrderColumn } from "./topic-ordered-window";
 import { rawQueryCompilerMetadata, type RawQueryCompilerMetadata } from "./raw-query-compiler";
-import { cloneUnknown, trustedFieldValue } from "./row-values";
+import { cloneUnknown, rowsEqual, trustedFieldValue } from "./row-values";
 import {
   columnValue,
   createTopicColumnValues,
@@ -176,7 +176,7 @@ export class TopicRowStorage {
   setPrepared(prepared: PreparedTopicRow): void {
     const existingSlot = this.keyToSlot.get(prepared.key);
     if (existingSlot !== undefined) {
-      if (!preparedTopicRowChangesRow(prepared)) {
+      if (!this.preparedRowChangesCurrentSlot(prepared, existingSlot)) {
         return;
       }
       const previous = this.slots[existingSlot]!.row;
@@ -204,7 +204,9 @@ export class TopicRowStorage {
   setPreparedMany(preparedRows: ReadonlyArray<PreparedTopicRow>): void {
     const changedPreparedRows = preparedRows.filter((prepared) => {
       const existingSlot = this.keyToSlot.get(prepared.key);
-      return existingSlot === undefined || preparedTopicRowChangesRow(prepared);
+      return (
+        existingSlot === undefined || this.preparedRowChangesCurrentSlot(prepared, existingSlot)
+      );
     });
     const appendReservation = this.createAppendBatchReservation(changedPreparedRows);
     if (changedPreparedRows.length > 1 && this.orderedSlotIndexes.size > 0) {
@@ -504,6 +506,10 @@ export class TopicRowStorage {
       previous: undefined,
       next: prepared.row,
     });
+  }
+
+  private preparedRowChangesCurrentSlot(prepared: PreparedTopicRow, slot: number): boolean {
+    return preparedTopicRowChangesRow(prepared) || !rowsEqual(this.slots[slot]!.row, prepared.row);
   }
 
   private recordRowChange(change: TopicRowChange<object>): void {

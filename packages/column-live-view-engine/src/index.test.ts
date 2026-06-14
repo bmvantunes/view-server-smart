@@ -7840,10 +7840,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       ) => {
         const priceComparison =
           numericRowField(left.row, "price") - numericRowField(right.row, "price");
-        if (priceComparison !== 0) {
-          return priceComparison;
-        }
-        return left.key.localeCompare(right.key);
+        return priceComparison === 0 ? left.key.localeCompare(right.key) : priceComparison;
       };
 
       const readModel = topicStoreReadModel(store);
@@ -7959,10 +7956,7 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       ) => {
         const priceComparison =
           numericRowField(left.row, "price") - numericRowField(right.row, "price");
-        if (priceComparison !== 0) {
-          return priceComparison;
-        }
-        return left.key.localeCompare(right.key);
+        return priceComparison === 0 ? left.key.localeCompare(right.key) : priceComparison;
       };
       const initial = order("a", "open", 10, 1);
       storage.setPrepared(yield* storage.prepareRow(initial, invalidRow));
@@ -8011,6 +8005,77 @@ describe("ColumnLiveViewEngine subscriptions", () => {
       expect(storage.rowCount).toBe(2);
       expect(rows).toStrictEqual([initial, secondRow]);
       expect(orderedWindow.keys).toStrictEqual(["a", "b"]);
+    }),
+  );
+
+  it.effect("applies stale prepared no-op patches when the current row changed", () =>
+    Effect.gen(function* () {
+      const storage = new TopicRowStorage("orders", Order, "id");
+      const invalidRow = (topic: string, message: string) =>
+        InvalidRowError.make({ topic, message });
+      const compareByPriceThenKey = (
+        left: { readonly key: string; readonly row: object },
+        right: { readonly key: string; readonly row: object },
+      ) => {
+        const priceComparison =
+          numericRowField(left.row, "price") - numericRowField(right.row, "price");
+        return priceComparison === 0 ? left.key.localeCompare(right.key) : priceComparison;
+      };
+      const initial = order("a", "open", 10, 1);
+      storage.setPrepared(yield* storage.prepareRow(initial, invalidRow));
+
+      const staleSinglePatch = yield* storage.preparePatch("a", { price: 10 }, invalidRow);
+      storage.setPrepared(yield* storage.prepareRow(order("a", "open", 20, 2), invalidRow));
+      storage.setPrepared(staleSinglePatch);
+
+      const rowsAfterSingle: Array<object> = [];
+      storage.scanRows((_key, row) => {
+        rowsAfterSingle.push(row);
+      });
+      expect(rowsAfterSingle).toStrictEqual([initial]);
+
+      const staleBatchPatch = yield* storage.preparePatch("a", { price: 10 }, invalidRow);
+      const retained = order("b", "open", 40, 4);
+      storage.setPrepared(yield* storage.prepareRow(retained, invalidRow));
+      storage.scanRawWindow({
+        predicate: {
+          callbackRequired: false,
+          callbackSkippable: true,
+          filters: [],
+        },
+        orderBy: [{ direction: "asc", field: "price" }],
+        storageOrderBy: [{ direction: "asc", field: "price" }],
+        matches: () => true,
+        compare: compareByPriceThenKey,
+        offset: 0,
+        limit: 2,
+      });
+      storage.setPrepared(yield* storage.prepareRow(order("a", "open", 30, 3), invalidRow));
+      storage.setPreparedMany([
+        staleBatchPatch,
+        yield* storage.prepareRow(order("c", "open", 50, 5), invalidRow),
+      ]);
+
+      const rowsAfterBatch: Array<object> = [];
+      storage.scanRows((_key, row) => {
+        rowsAfterBatch.push(row);
+      });
+      const orderedWindow = storage.scanRawWindow({
+        predicate: {
+          callbackRequired: false,
+          callbackSkippable: true,
+          filters: [],
+        },
+        orderBy: [{ direction: "asc", field: "price" }],
+        storageOrderBy: [{ direction: "asc", field: "price" }],
+        matches: () => true,
+        compare: compareByPriceThenKey,
+        offset: 0,
+        limit: 3,
+      });
+
+      expect(rowsAfterBatch).toStrictEqual([initial, retained, order("c", "open", 50, 5)]);
+      expect(orderedWindow.keys).toStrictEqual(["a", "b", "c"]);
     }),
   );
 
