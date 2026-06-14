@@ -1613,6 +1613,7 @@ describe("@view-server/protocol", () => {
         }),
       );
       expect(invalidFilter.code).toBe("InvalidQuery");
+      expect(invalidFilter.message).toBe('Invalid filter for price: Expected number, got "nope"');
 
       const invalidEncodeStartsWith = yield* Effect.flip(
         viewServerEncodeRawQuery(viewServer, "orders", {
@@ -1628,7 +1629,7 @@ describe("@view-server/protocol", () => {
           where: { id: { startsWith: 1 } },
         }),
       );
-      expect(invalidStringStartsWith.message).toMatch(/Invalid filter for id/);
+      expect(invalidStringStartsWith.message).toBe("Invalid filter for id: expected string");
 
       const invalidDecodeStartsWith = yield* Effect.flip(
         viewServerDecodeRawQuery(viewServer, "orders", {
@@ -1644,7 +1645,7 @@ describe("@view-server/protocol", () => {
           where: { id: { startsWith: 1 } },
         }),
       );
-      expect(invalidDecodedStringStartsWith.message).toMatch(/Invalid filter for id/);
+      expect(invalidDecodedStringStartsWith.message).toBe("Invalid filter for id: expected string");
 
       const trimmedViewServer = defineViewServerConfig({
         topics: {
@@ -1817,7 +1818,9 @@ describe("@view-server/protocol", () => {
           where: { id: { eq: "x" } },
         }),
       );
-      expect(nonJsonFilter.message).toMatch(/Filter id is not JSON-safe/);
+      expect(nonJsonFilter.message).toBe(
+        "Filter id is not JSON-safe: Expected JSON value, got Symbol(not-json)",
+      );
 
       const badDecodedField = yield* Effect.flip(
         viewServerDecodeRawQuery(viewServer, "orders", {
@@ -1894,6 +1897,9 @@ describe("@view-server/protocol", () => {
         }),
       );
       expect(invalidEncodeFieldType.code).toBe("InvalidRow");
+      expect(invalidEncodeFieldType.message).toBe(
+        'Invalid field price: Expected number, got "nope"',
+      );
 
       const extraField = yield* Effect.flip(
         viewServerDecodeLiveEvent<typeof viewServer.topics, "orders", typeof Order.Type>(
@@ -1948,6 +1954,9 @@ describe("@view-server/protocol", () => {
         ),
       );
       expect(invalidFieldType.code).toBe("InvalidRow");
+      expect(invalidFieldType.message).toBe(
+        'Invalid field price: Expected "Infinity" | "-Infinity" | "NaN", got "nope"',
+      );
 
       const nonJsonRow = yield* Effect.flip(
         viewServerEncodeLiveEvent(viewServer, "badjson", idQuery, {
@@ -1960,7 +1969,9 @@ describe("@view-server/protocol", () => {
           totalRows: 1,
         }),
       );
-      expect(nonJsonRow.message).toMatch(/Field id is not JSON-safe/);
+      expect(nonJsonRow.message).toBe(
+        "Field id is not JSON-safe: Expected JSON value, got Symbol(not-json)",
+      );
 
       const BadJsonAggregateRow = Schema.Struct({
         id: Schema.String,
@@ -2151,7 +2162,7 @@ describe("@view-server/protocol", () => {
           },
         ),
       );
-      expect(invalidGroupedField.message).toMatch(/Invalid field id/);
+      expect(invalidGroupedField.message).toBe("Invalid field id: Expected string, got 10");
 
       const missingDecodedGroupedField = yield* Effect.flip(
         viewServerDecodeLiveEvent<typeof viewServer.topics, "orders", object>(
@@ -2465,7 +2476,9 @@ describe("@view-server/protocol", () => {
           },
         ),
       );
-      expect(invalidJsonAggregateValue.message).toMatch(/Invalid field minPrice/);
+      expect(invalidJsonAggregateValue.message).toBe(
+        'Invalid field minPrice: Expected "Infinity" | "-Infinity" | "NaN", got "not-a-number"',
+      );
 
       const missingAggregateSourceField = yield* Effect.flip(
         viewServerEncodeLiveEvent(

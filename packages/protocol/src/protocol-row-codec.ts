@@ -3,8 +3,8 @@ import { Effect, Schema } from "effect";
 import { decodeAggregateValue, encodeAggregateValue } from "./protocol-aggregate-row-codec";
 import { ViewServerWireRowSchema, type ViewServerWireRow } from "./protocol-event-schema";
 import {
-  decodeContextualJsonFieldValue,
-  encodeContextualJsonFieldValue,
+  decodeNamedJsonFieldValue,
+  encodeNamedJsonFieldValue,
   type JsonFieldSchema,
 } from "./protocol-json-field-codec";
 import type { ViewServerEventGroupedQuery, ViewServerEventQuery } from "./protocol-query-schema";
@@ -26,11 +26,11 @@ const encodeEventJsonFieldValue = Effect.fn("ViewServerProtocol.event.field.enco
   schema: JsonFieldSchema,
   value: unknown,
 ) {
-  return yield* encodeContextualJsonFieldValue(schema, value, {
+  return yield* encodeNamedJsonFieldValue(schema, value, {
+    field,
     invalid: (message) => invalidRow(topic, message),
-    invalidMessage: (message) => `Invalid field ${field}: ${message}`,
-    notJsonSafe: (message) => invalidRow(topic, message),
-    notJsonSafeMessage: (message) => `Field ${field} is not JSON-safe: ${message}`,
+    invalidPrefix: "Invalid field",
+    notJsonSafePrefix: "Field",
   });
 });
 
@@ -40,9 +40,10 @@ const decodeEventJsonFieldValue = Effect.fn("ViewServerProtocol.event.field.deco
   schema: JsonFieldSchema,
   value: unknown,
 ) {
-  return yield* decodeContextualJsonFieldValue(schema, value, {
+  return yield* decodeNamedJsonFieldValue(schema, value, {
+    field,
     invalid: (message) => invalidRow(topic, message),
-    invalidMessage: (message) => `Invalid field ${field}: ${message}`,
+    invalidPrefix: "Invalid field",
   });
 });
 

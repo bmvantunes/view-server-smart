@@ -1,8 +1,8 @@
 import { viewServerSchemaFieldMetadata, type ViewServerRuntimeError } from "@view-server/config";
 import { Effect, Schema } from "effect";
 import {
-  decodeContextualJsonFieldValue,
-  encodeContextualJsonFieldValue,
+  decodeNamedJsonFieldValue,
+  encodeNamedJsonFieldValue,
   type JsonFieldSchema,
 } from "./protocol-json-field-codec";
 
@@ -40,11 +40,11 @@ const encodeFilterJsonFieldValue = Effect.fn("ViewServerProtocol.field.encode")(
   schema: JsonFieldSchema,
   value: unknown,
 ) {
-  return yield* encodeContextualJsonFieldValue(schema, value, {
+  return yield* encodeNamedJsonFieldValue(schema, value, {
+    field,
     invalid: (message) => invalidQuery(topic, message),
-    invalidMessage: (message) => `Invalid filter for ${field}: ${message}`,
-    notJsonSafe: (message) => invalidQuery(topic, message),
-    notJsonSafeMessage: (message) => `Filter ${field} is not JSON-safe: ${message}`,
+    invalidPrefix: "Invalid filter for",
+    notJsonSafePrefix: "Filter",
   });
 });
 
@@ -54,9 +54,10 @@ const decodeFilterJsonFieldValue = Effect.fn("ViewServerProtocol.field.decode")(
   schema: JsonFieldSchema,
   value: unknown,
 ) {
-  return yield* decodeContextualJsonFieldValue(schema, value, {
+  return yield* decodeNamedJsonFieldValue(schema, value, {
+    field,
     invalid: (message) => invalidQuery(topic, message),
-    invalidMessage: (message) => `Invalid filter for ${field}: ${message}`,
+    invalidPrefix: "Invalid filter for",
   });
 });
 

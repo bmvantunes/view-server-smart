@@ -17,6 +17,16 @@ type JsonFieldEncodeContext<E> = JsonFieldCodecContext<E> & {
   readonly notJsonSafeMessage: (message: string) => string;
 };
 
+type NamedJsonFieldCodecContext<E> = {
+  readonly field: string;
+  readonly invalid: (message: string) => E;
+  readonly invalidPrefix: string;
+};
+
+type NamedJsonFieldEncodeContext<E> = NamedJsonFieldCodecContext<E> & {
+  readonly notJsonSafePrefix: string;
+};
+
 export const encodeJsonFieldValue = Effect.fn("ViewServerProtocol.jsonField.encode")(function* <E>(
   schema: JsonFieldSchema,
   value: unknown,
@@ -56,3 +66,31 @@ export const decodeContextualJsonFieldValue = Effect.fn(
     invalid: (message) => context.invalid(context.invalidMessage(message)),
   });
 });
+
+export const encodeNamedJsonFieldValue = Effect.fn("ViewServerProtocol.jsonField.named.encode")(
+  function* <E>(
+    schema: JsonFieldSchema,
+    value: unknown,
+    { field, invalid, invalidPrefix, notJsonSafePrefix }: NamedJsonFieldEncodeContext<E>,
+  ) {
+    return yield* encodeContextualJsonFieldValue(schema, value, {
+      invalid,
+      invalidMessage: (message) => `${invalidPrefix} ${field}: ${message}`,
+      notJsonSafe: invalid,
+      notJsonSafeMessage: (message) => `${notJsonSafePrefix} ${field} is not JSON-safe: ${message}`,
+    });
+  },
+);
+
+export const decodeNamedJsonFieldValue = Effect.fn("ViewServerProtocol.jsonField.named.decode")(
+  function* <E>(
+    schema: JsonFieldSchema,
+    value: unknown,
+    { field, invalid, invalidPrefix }: NamedJsonFieldCodecContext<E>,
+  ) {
+    return yield* decodeContextualJsonFieldValue(schema, value, {
+      invalid,
+      invalidMessage: (message) => `${invalidPrefix} ${field}: ${message}`,
+    });
+  },
+);
