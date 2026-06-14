@@ -24,14 +24,19 @@ export type TopicRawWindowScanPlan<Row extends RowObject> = {
 
 export type TopicRawWindowScanResult<Row extends RowObject> = {
   readonly keys: ReadonlyArray<string>;
-  readonly window: ReadonlyArray<TopicRowEntry<Row>>;
+  readonly window: ReadonlyArray<TopicRawWindowEntry<Row>>;
   readonly totalRows: number;
+};
+
+export type TopicRawWindowEntry<Row extends RowObject> = TopicRowEntry<Row> & {
+  readonly slot?: number;
 };
 
 export type TopicRawWindowScan<Row extends RowObject> = {
   readonly compareRawSlots?: (
     plan: TopicRawWindowScanPlan<Row>,
   ) => ((leftSlot: number, rightSlot: number) => number) | undefined;
+  readonly keyAtSlot?: (slot: number) => string | undefined;
   readonly projectRawRow?: (slot: number, selectedFields: ReadonlyArray<string>) => RowObject;
   readonly scanRawWindow: (plan: TopicRawWindowScanPlan<Row>) => TopicRawWindowScanResult<Row>;
   readonly slotForKey?: (key: string) => number | undefined;

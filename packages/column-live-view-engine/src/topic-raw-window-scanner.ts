@@ -1,6 +1,10 @@
 import type { RawQueryCompilerMetadata } from "./raw-query-metadata";
 import type { TopicRawPredicatePlan } from "./raw-predicate-plan";
-import type { TopicRawWindowScanPlan, TopicRawWindowScanResult } from "./raw-window-scan";
+import type {
+  TopicRawWindowEntry,
+  TopicRawWindowScanPlan,
+  TopicRawWindowScanResult,
+} from "./raw-window-scan";
 import type { TopicRowEntry } from "./row-scan";
 import type { TopicColumnValues } from "./topic-column-vector";
 import {
@@ -434,7 +438,10 @@ const rawWindowScanResult = (
   windowSlots: ReadonlyArray<number>,
   totalRows: number,
 ): TopicRawWindowScanResult<RowObject> => {
-  const window = windowSlots.map((slot) => state.slots[slot]!);
+  const window: Array<TopicRawWindowEntry<RowObject>> = windowSlots.map((slot) => ({
+    ...state.slots[slot]!,
+    slot,
+  }));
   return {
     keys: window.map((entry) => entry.key),
     window,

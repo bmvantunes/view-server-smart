@@ -3791,6 +3791,193 @@ describe("ColumnLiveViewEngine raw snapshots", () => {
     }),
   );
 
+  it.effect("projects raw snapshots from carried storage slots", () =>
+    Effect.gen(function* () {
+      const compiled = yield* prepareRawQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          select: ["id", "price"],
+        },
+      );
+      let slotForKeyCalls = 0;
+      const evaluation = evaluateRawQuery(
+        {
+          keyAtSlot: (slot) => `key-at-slot-${slot}`,
+          projectRawRow: (slot) => ({
+            id: `projected-from-slot-${slot}`,
+            price: slot * 10,
+          }),
+          scanRawWindow: () => ({
+            keys: ["key-at-slot-2"],
+            window: [
+              {
+                key: "key-at-slot-2",
+                row: order("row-object-should-not-project", "open", 1, 1),
+                slot: 2,
+              },
+            ],
+            totalRows: 1,
+          }),
+          slotForKey: () => {
+            slotForKeyCalls += 1;
+            return 99;
+          },
+          version: () => 1,
+        },
+        compiled,
+      );
+
+      expect(evaluation).toStrictEqual({
+        keys: ["key-at-slot-2"],
+        rows: [
+          {
+            id: "projected-from-slot-2",
+            price: 20,
+          },
+        ],
+        totalRows: 1,
+        version: 1,
+        window: [
+          {
+            key: "key-at-slot-2",
+            row: {
+              id: "projected-from-slot-2",
+              price: 20,
+            },
+          },
+        ],
+      });
+      expect(slotForKeyCalls).toBe(0);
+    }),
+  );
+
+  it.effect("falls back to key lookup when a carried storage slot is stale", () =>
+    Effect.gen(function* () {
+      const compiled = yield* prepareRawQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          select: ["id", "price"],
+        },
+      );
+      let slotForKeyCalls = 0;
+      const slotsByKey = new Map([["moved-row", 3]]);
+      const evaluation = evaluateRawQuery(
+        {
+          keyAtSlot: (slot) => `different-key-at-slot-${slot}`,
+          projectRawRow: (slot) => ({
+            id: `projected-from-slot-${slot}`,
+            price: slot * 10,
+          }),
+          scanRawWindow: () => ({
+            keys: ["moved-row"],
+            window: [
+              {
+                key: "moved-row",
+                row: order("row-object-should-not-project", "open", 1, 1),
+                slot: 0,
+              },
+            ],
+            totalRows: 1,
+          }),
+          slotForKey: (key) => {
+            slotForKeyCalls += 1;
+            return slotsByKey.get(key);
+          },
+          version: () => 2,
+        },
+        compiled,
+      );
+
+      expect(evaluation).toStrictEqual({
+        keys: ["moved-row"],
+        rows: [
+          {
+            id: "projected-from-slot-3",
+            price: 30,
+          },
+        ],
+        totalRows: 1,
+        version: 2,
+        window: [
+          {
+            key: "moved-row",
+            row: {
+              id: "projected-from-slot-3",
+              price: 30,
+            },
+          },
+        ],
+      });
+      expect(slotForKeyCalls).toBe(1);
+    }),
+  );
+
+  it.effect("projects raw snapshots correctly after storage delete compacts slots", () =>
+    Effect.gen(function* () {
+      const storage = new TopicRowStorage("orders", Order, "id");
+      const invalidRow = (topic: string, message: string) =>
+        InvalidRowError.make({ topic, message });
+      storage.setPrepared(yield* storage.prepareRow(order("deleted", "open", 10, 1), invalidRow));
+      storage.advanceVersion();
+      storage.setPrepared(yield* storage.prepareRow(order("retained", "open", 20, 2), invalidRow));
+      storage.advanceVersion();
+      storage.setPrepared(yield* storage.prepareRow(order("moved", "open", 30, 3), invalidRow));
+      storage.advanceVersion();
+
+      storage.delete("retained");
+      storage.advanceVersion();
+
+      const compiled = yield* prepareRawQuery<object, object>(
+        "orders",
+        rawQueryCompilerMetadata(Order),
+        {
+          select: ["id", "price", "updatedAt"],
+          orderBy: [{ field: "price", direction: "desc" }],
+          limit: 2,
+        },
+      );
+      const evaluation = evaluateRawQuery(storage.readModel, compiled);
+
+      expect(evaluation).toStrictEqual({
+        keys: ["moved", "deleted"],
+        rows: [
+          {
+            id: "moved",
+            price: 30,
+            updatedAt: 3,
+          },
+          {
+            id: "deleted",
+            price: 10,
+            updatedAt: 1,
+          },
+        ],
+        totalRows: 2,
+        version: 4,
+        window: [
+          {
+            key: "moved",
+            row: {
+              id: "moved",
+              price: 30,
+              updatedAt: 3,
+            },
+          },
+          {
+            key: "deleted",
+            row: {
+              id: "deleted",
+              price: 10,
+              updatedAt: 1,
+            },
+          },
+        ],
+      });
+    }),
+  );
+
   it.effect("passes scalar ordering semantics to custom storage scanners", () =>
     Effect.gen(function* () {
       const active = { key: "active", row: position("active", "AAPL", 1n, "1", true) };

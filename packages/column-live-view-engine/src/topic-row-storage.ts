@@ -131,6 +131,7 @@ export class TopicRowStorage {
       topic,
       changesSince: (version) => this.changesSince(version),
       compareRawSlots: (plan) => this.compareRawSlots(plan),
+      keyAtSlot: (slot) => this.keyAtSlot(slot),
       projectRawRow: (slot, selectedFields) => this.projectRawRow(slot, selectedFields),
       releaseChanges: () => this.releaseChanges(),
       retainChanges: () => this.retainChanges(),
@@ -286,6 +287,10 @@ export class TopicRowStorage {
 
   slotForKey(key: string): number | undefined {
     return this.keyToSlot.get(key);
+  }
+
+  keyAtSlot(slot: number): string | undefined {
+    return this.slots[slot]?.key;
   }
 
   prepareRow = Effect.fn("ColumnLiveViewEngine.topicRowStorage.row.prepare")(function* <

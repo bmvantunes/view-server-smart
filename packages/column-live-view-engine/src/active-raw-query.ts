@@ -41,6 +41,7 @@ type ActiveQueryBaseEvaluation<Row extends RowObject> = {
 type RetainedWindowEntry<Row extends RowObject = RowObject> = TopicRowEntry<Row> & {
   readonly key: string;
   readonly row: Row;
+  readonly slot?: number;
 };
 
 type RetainedReplacementResult<Row extends RowObject> = {
@@ -96,10 +97,18 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
 ): ActiveQueryBaseEvaluation<Row> => {
   const version = store.version();
   const scanResult = store.scanRawWindow(rawQueryWindowScanPlan(compiled.plan, queryWindow));
-  const window = scanResult.window.map((entry) => ({
-    key: entry.key,
-    row: entry.row,
-  }));
+  const window = scanResult.window.map((entry) =>
+    entry.slot === undefined
+      ? {
+          key: entry.key,
+          row: entry.row,
+        }
+      : {
+          key: entry.key,
+          row: entry.row,
+          slot: entry.slot,
+        },
+  );
   return {
     ...scanResult,
     retainedWindowFilled: retainedWindowFilled(window, scanResult.totalRows, queryWindow),
@@ -378,7 +387,11 @@ const projectRetainedEntry = <Row extends RowObject, ResultRow extends RowObject
   compiled: CompiledRawQuery<Row, ResultRow>,
   entry: RetainedWindowEntry<Row>,
 ): ResultRow => {
-  const slot = store.slotForKey?.(entry.key);
+  const carriedSlot =
+    entry.slot !== undefined && store.keyAtSlot?.(entry.slot) === entry.key
+      ? entry.slot
+      : undefined;
+  const slot = carriedSlot ?? store.slotForKey?.(entry.key);
   const projectRawRow = store.projectRawRow;
   return slot === undefined || projectRawRow === undefined
     ? compiled.plan.project(entry.row)
