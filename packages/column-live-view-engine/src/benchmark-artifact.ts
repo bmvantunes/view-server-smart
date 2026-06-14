@@ -97,6 +97,7 @@ export type BenchmarkArtifactInput = {
     | "engine-raw-snapshot"
     | "engine-raw-predicate-index"
     | "engine-raw-live-fanout"
+    | "engine-query-delta-operations"
     | "engine-raw-active-retained-delta"
     | "engine-raw-write"
     | "engine-grouped-aggregate"

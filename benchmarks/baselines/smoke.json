@@ -637,6 +637,36 @@
       "backpressureCount": 0,
       "benchmarks": [
         {
+          "groupName": "src/query-delta-operations.bench.ts > query delta operations benchmark: head-replacement-batch, 1000 rows",
+          "maxMs": 0.7214579999999984,
+          "meanMs": 0.6663834000000008,
+          "minMs": 0.5777920000000023,
+          "name": "delta operations head replacement batch",
+          "p99Ms": 0.7214579999999984,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["delta operations head replacement batch"],
+      "benchmarkName": "query delta operations benchmark (head-replacement-batch)",
+      "benchmarkScope": "engine-query-delta-operations",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 14712832,
+      "minimumSampleCount": 5,
+      "mutationCount": 32,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/query-delta-operations-head-replacement-batch-1000rows-32ops.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 1,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/query-delta-operations-head-replacement-batch-1000rows-32ops.summary.json",
+      "taskLabel": "query delta operations head-replacement-batch 1000 rows 32 ops",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
           "groupName": "src/grouped-write.bench.ts > grouped write engine benchmark: 1000 rows",
           "maxMs": 1.1857919999999922,
           "meanMs": 0.5336749999999938,

@@ -258,6 +258,37 @@ const groupedKeyWidthTask = (rowCount, env) => {
   });
 };
 
+const deltaOperationArtifactOperationCount = (_deltaCase, _rowCount, operationCount) =>
+  operationCount * 2;
+
+const queryDeltaOperationsTask = (deltaCase, rowCount, operationCount, env = {}) => {
+  const artifactOperationCount = deltaOperationArtifactOperationCount(
+    deltaCase,
+    rowCount,
+    operationCount,
+  );
+  const outputJsonPath = engineArtifactName(
+    `query-delta-operations-${deltaCase}-${rowCount}rows-${artifactOperationCount}ops.json`,
+  );
+  return task({
+    artifactKind: "engine-benchmark-summary",
+    benchmarkScope: "engine-query-delta-operations",
+    env: {
+      VIEW_SERVER_ENGINE_BENCH_DELTA_OPERATION_CASE: deltaCase,
+      VIEW_SERVER_ENGINE_BENCH_DELTA_OPERATION_COUNT: String(operationCount),
+      VIEW_SERVER_ENGINE_BENCH_OUTPUT_JSON: outputJsonPath,
+      VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
+      ...env,
+    },
+    label: `query delta operations ${deltaCase} ${rowCount} rows ${artifactOperationCount} ops`,
+    minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_ENGINE_BENCH_ITERATIONS"),
+    outputJsonPath,
+    packageDirectory: enginePackageDirectory,
+    rowCount,
+    vpTask: "column-live-view-engine#bench:query-delta-operations",
+  });
+};
+
 const groupedWriteTask = (mode, rowCount, env) => {
   const writeBatchSize = env.VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE;
   const readerProfile = env.VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE ?? "dual";
@@ -382,6 +413,7 @@ export const profiles = new Map([
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
         ...commonEngineSmokeEnv,
       }),
+      queryDeltaOperationsTask("head-replacement-batch", 1_000, 16, commonEngineSmokeEnv),
       groupedWriteTask("incremental", 1_000, {
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
         VIEW_SERVER_ENGINE_BENCH_WRITE_BATCH_SIZE: "1",
@@ -463,6 +495,9 @@ export const profiles = new Map([
       groupedAggregateTask(5_000_000, groupedReadReleaseEnv),
       groupedKeyWidthTask(100_000, groupedReadReleaseEnv),
       groupedKeyWidthTask(1_000_000, groupedReadReleaseEnv),
+      queryDeltaOperationsTask("head-replacement-batch", 10_000, 64),
+      queryDeltaOperationsTask("middle-replacement-batch", 10_000, 64),
+      queryDeltaOperationsTask("tail-replacement-batch", 10_000, 64),
       groupedWriteTask("incremental", 100_000, groupedWriteReleaseEnv),
       groupedWriteTask("incremental", 1_000_000, groupedWriteReleaseEnv),
       groupedWriteTask("incremental", 5_000_000, groupedWriteReleaseEnv),

@@ -177,6 +177,85 @@ const singleMoveDeltaOperations = <Row extends RowObject>(
   return operations;
 };
 
+const minimumReplacementDeltaFastPathOperations = 8;
+
+const replacementDeltaOperations = <Row extends RowObject>(
+  previous: QueryEvaluation<Row>,
+  next: QueryEvaluation<Row>,
+  nextKeys: ReadonlySet<string>,
+): ReadonlyArray<DeltaOperation<Row>> | undefined => {
+  const previousKeys = previous.keys;
+  const nextWindow = next.window;
+  let removedCount = 0;
+  for (const key of previousKeys) {
+    if (!nextKeys.has(key)) {
+      removedCount += 1;
+    }
+  }
+  if (removedCount === 0) {
+    return undefined;
+  }
+  const previousKeysSet = new Set(previousKeys);
+  let insertedCount = 0;
+  for (const { key } of nextWindow) {
+    if (!previousKeysSet.has(key)) {
+      insertedCount += 1;
+    }
+  }
+  if (
+    insertedCount === 0 ||
+    removedCount + insertedCount < minimumReplacementDeltaFastPathOperations
+  ) {
+    return undefined;
+  }
+
+  let previousSharedIndex = 0;
+  for (const { key, row } of nextWindow) {
+    if (!previousKeysSet.has(key)) {
+      continue;
+    }
+
+    while (previousSharedIndex < previousKeys.length) {
+      const previousKey = previousKeys[previousSharedIndex]!;
+      if (nextKeys.has(previousKey)) {
+        break;
+      }
+      previousSharedIndex += 1;
+    }
+
+    if (previousKeys[previousSharedIndex] !== key) {
+      return undefined;
+    }
+
+    const previousRow = previous.rows[previousSharedIndex];
+    if (previousRow === undefined || !rowsEqual(previousRow, row)) {
+      return undefined;
+    }
+    previousSharedIndex += 1;
+  }
+
+  const operations: Array<DeltaOperation<Row>> = [];
+  for (const key of previousKeys) {
+    if (!nextKeys.has(key)) {
+      operations.push({
+        type: "remove",
+        key,
+      });
+    }
+  }
+  for (const [index, { key, row }] of nextWindow.entries()) {
+    if (!previousKeysSet.has(key)) {
+      operations.push({
+        type: "insert",
+        key,
+        row,
+        index,
+      });
+    }
+  }
+  return operations;
+};
+
 export const deltaOperations = <Row extends RowObject>(
   previous: QueryEvaluation<Row>,
   next: QueryEvaluation<Row>,
@@ -188,6 +267,11 @@ export const deltaOperations = <Row extends RowObject>(
 
   const operations: Array<DeltaOperation<Row>> = [];
   const nextKeys = new Set(next.keys);
+  const replacementOperations = replacementDeltaOperations(previous, next, nextKeys);
+  if (replacementOperations !== undefined) {
+    return replacementOperations;
+  }
+
   const currentKeys = [...previous.keys];
   const currentRows = [...previous.rows];
   const currentKeyIndexes = new Map(currentKeys.map((key, index) => [key, index]));

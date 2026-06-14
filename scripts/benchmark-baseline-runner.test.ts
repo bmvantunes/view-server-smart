@@ -298,6 +298,68 @@ describe("benchmark baseline runner", () => {
     ]);
   });
 
+  it("defines query delta operation smoke and release tasks", () => {
+    const smokeDeltaTasks = (profiles.get("smoke") ?? []).filter((task) =>
+      task.label.startsWith("query delta operations "),
+    );
+    const releaseDeltaTasks = (profiles.get("release") ?? []).filter((task) =>
+      task.label.startsWith("query delta operations "),
+    );
+
+    expect(
+      smokeDeltaTasks.map((task) => ({
+        benchmarkScope: task.expectedBenchmarkScope,
+        caseName: task.env["VIEW_SERVER_ENGINE_BENCH_DELTA_OPERATION_CASE"],
+        operationCount: task.env["VIEW_SERVER_ENGINE_BENCH_DELTA_OPERATION_COUNT"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+      })),
+    ).toStrictEqual([
+      {
+        benchmarkScope: "engine-query-delta-operations",
+        caseName: "head-replacement-batch",
+        operationCount: "16",
+        outputJsonPath:
+          ".artifacts/query-delta-operations-head-replacement-batch-1000rows-32ops.json",
+        rowCount: "1000",
+      },
+    ]);
+    expect(
+      releaseDeltaTasks.map((task) => ({
+        benchmarkScope: task.expectedBenchmarkScope,
+        caseName: task.env["VIEW_SERVER_ENGINE_BENCH_DELTA_OPERATION_CASE"],
+        operationCount: task.env["VIEW_SERVER_ENGINE_BENCH_DELTA_OPERATION_COUNT"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+      })),
+    ).toStrictEqual([
+      {
+        benchmarkScope: "engine-query-delta-operations",
+        caseName: "head-replacement-batch",
+        operationCount: "64",
+        outputJsonPath:
+          ".artifacts/query-delta-operations-head-replacement-batch-10000rows-128ops.json",
+        rowCount: "10000",
+      },
+      {
+        benchmarkScope: "engine-query-delta-operations",
+        caseName: "middle-replacement-batch",
+        operationCount: "64",
+        outputJsonPath:
+          ".artifacts/query-delta-operations-middle-replacement-batch-10000rows-128ops.json",
+        rowCount: "10000",
+      },
+      {
+        benchmarkScope: "engine-query-delta-operations",
+        caseName: "tail-replacement-batch",
+        operationCount: "64",
+        outputJsonPath:
+          ".artifacts/query-delta-operations-tail-replacement-batch-10000rows-128ops.json",
+        rowCount: "10000",
+      },
+    ]);
+  });
+
   it("defines retained delta move cases for smoke and release baseline gates", () => {
     const smokeRetainedDeltaTasks = (profiles.get("smoke") ?? []).filter((task) =>
       task.label.startsWith("raw active retained delta "),
