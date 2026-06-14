@@ -111,10 +111,9 @@ type MatchMoveDownValidation = {
 type MatchReplacementBatchValidation = {
   readonly caseName: "match-replacement-batch";
   readonly events: ReadonlyArray<OrderEvent>;
-  readonly firstRow: OrderRow;
+  readonly rows: ReadonlyArray<OrderRow>;
   readonly fromIndex: number;
   readonly fromVersion: number;
-  readonly secondRow: OrderRow;
   readonly toVersion: number;
   readonly totalRows: number;
 };
@@ -171,6 +170,7 @@ type BenchmarkProfile = {
   nextMatchMoveUpScore: number;
   nextMatchReplacementBatchIndex: number;
   nextMatchReplacementBatchScore: number;
+  replacementBatchSize: number;
   nextMatchUpdateScore: number;
   nextNoopIndex: number;
   nextPredicateEnterIndex: number;
@@ -183,7 +183,9 @@ type BenchmarkProfile = {
 const defaultBenchmarkTimeMs = 0;
 const defaultBatchSize = 10_000;
 const defaultIterations = 5;
+const defaultReplacementBatchSize = 2;
 const defaultRetainedCaseName: RetainedDeltaCaseName = "visible-delete";
+const defaultRetainedWindowLimit = 50;
 const defaultRowCount = 100_000;
 const defaultWarmupIterations = 0;
 const defaultWarmupTimeMs = 0;
@@ -263,8 +265,20 @@ const retainedCaseNameFromEnv = (): RetainedDeltaCaseName => {
 const benchmarkRowCount = rowCountFromEnv();
 const retainedCaseName = retainedCaseNameFromEnv();
 const batchSize = positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE", defaultBatchSize);
+const retainedWindowLimit = positiveIntegerFromEnv(
+  "VIEW_SERVER_ENGINE_BENCH_RETAINED_WINDOW_LIMIT",
+  defaultRetainedWindowLimit,
+);
+const replacementBatchSize = positiveIntegerFromEnv(
+  "VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE",
+  defaultReplacementBatchSize,
+);
 const outputJsonPath = benchmarkOutputJsonPath(
-  `raw-active-retained-delta-${retainedCaseName}-${benchmarkRowCount}rows.json`,
+  retainedCaseName === "match-replacement-batch" &&
+    (retainedWindowLimit !== defaultRetainedWindowLimit ||
+      replacementBatchSize !== defaultReplacementBatchSize)
+    ? `raw-active-retained-delta-${retainedCaseName}-${benchmarkRowCount}rows-${retainedWindowLimit}limit-${replacementBatchSize}batch.json`
+    : `raw-active-retained-delta-${retainedCaseName}-${benchmarkRowCount}rows.json`,
 );
 const memoryBefore = memorySnapshot();
 const benchOptions = {
@@ -300,9 +314,41 @@ if (retainedCaseName === "match-move-down" && benchOptions.iterations > 49) {
 if (retainedCaseName === "match-move-up" && benchOptions.iterations > 50) {
   throw new Error("VIEW_SERVER_ENGINE_BENCH_ITERATIONS must be at most 50 for match-move-up.");
 }
-if (retainedCaseName === "match-replacement-batch" && benchOptions.iterations > 24) {
+if (retainedCaseName === "match-replacement-batch" && replacementBatchSize >= retainedWindowLimit) {
   throw new Error(
-    "VIEW_SERVER_ENGINE_BENCH_ITERATIONS must be at most 24 for match-replacement-batch.",
+    "VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE must be smaller than VIEW_SERVER_ENGINE_BENCH_RETAINED_WINDOW_LIMIT.",
+  );
+}
+if (
+  retainedCaseName === "match-replacement-batch" &&
+  replacementBatchSize * benchOptions.iterations > retainedWindowLimit - 1
+) {
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE multiplied by VIEW_SERVER_ENGINE_BENCH_ITERATIONS must fit inside the retained window after the head row.",
+  );
+}
+if (
+  retainedCaseName === "match-replacement-batch" &&
+  replacementBatchSize * benchOptions.iterations > benchmarkRowCount - 1
+) {
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE multiplied by VIEW_SERVER_ENGINE_BENCH_ITERATIONS must fit inside VIEW_SERVER_ENGINE_BENCH_ROWS after the head row.",
+  );
+}
+if (
+  retainedCaseName !== "match-replacement-batch" &&
+  replacementBatchSize !== defaultReplacementBatchSize
+) {
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE is only supported for match-replacement-batch.",
+  );
+}
+if (
+  retainedCaseName !== "match-replacement-batch" &&
+  retainedWindowLimit !== defaultRetainedWindowLimit
+) {
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_RETAINED_WINDOW_LIMIT is only supported for match-replacement-batch.",
   );
 }
 if (
@@ -331,6 +377,7 @@ const profile: BenchmarkProfile = {
   nextMatchMoveUpScore: 5_000_000_000,
   nextMatchReplacementBatchIndex: benchmarkRowCount - 2,
   nextMatchReplacementBatchScore: 6_000_000_000,
+  replacementBatchSize,
   nextMatchUpdateScore: 5_000_000_000,
   nextNoopIndex: 0,
   nextPredicateEnterIndex: 0,
@@ -341,12 +388,12 @@ const profile: BenchmarkProfile = {
 };
 
 const topKQuery = {
-  select: ["id", "score", "status", "updatedAt"],
+  select: ["id", "score", "status", "updatedAt"] as const,
   where: {
     status: { eq: "open" },
   },
-  orderBy: [{ field: "score", direction: "desc" }],
-  limit: 50,
+  orderBy: [{ field: "score", direction: "desc" }] as const,
+  limit: retainedWindowLimit,
 } as const;
 
 const countOnlyQuery = {
@@ -624,45 +671,33 @@ const validateMatchMoveDown = (validation: MatchMoveDownValidation): void => {
 };
 
 const validateMatchReplacementBatch = (validation: MatchReplacementBatchValidation): void => {
+  const expectedOperations: Array<OrderDeltaOperations[number]> = [];
+  for (let index = 0; index < validation.rows.length; index += 1) {
+    const row = validation.rows[validation.rows.length - index - 1]!;
+    expectedOperations.push(
+      {
+        type: "move",
+        key: row.id,
+        fromIndex: validation.fromIndex,
+        toIndex: index,
+      },
+      {
+        type: "update",
+        key: row.id,
+        row: {
+          id: row.id,
+          score: row.score,
+          status: "open",
+          updatedAt: row.updatedAt,
+        },
+        index,
+      },
+    );
+  }
   expectSingleDelta(validation.events, {
     fromVersion: validation.fromVersion,
     toVersion: validation.toVersion,
-    operations: [
-      {
-        type: "move",
-        key: validation.secondRow.id,
-        fromIndex: validation.fromIndex,
-        toIndex: 0,
-      },
-      {
-        type: "update",
-        key: validation.secondRow.id,
-        row: {
-          id: validation.secondRow.id,
-          score: validation.secondRow.score,
-          status: "open",
-          updatedAt: validation.secondRow.updatedAt,
-        },
-        index: 0,
-      },
-      {
-        type: "move",
-        key: validation.firstRow.id,
-        fromIndex: validation.fromIndex,
-        toIndex: 1,
-      },
-      {
-        type: "update",
-        key: validation.firstRow.id,
-        row: {
-          id: validation.firstRow.id,
-          score: validation.firstRow.score,
-          status: "open",
-          updatedAt: validation.firstRow.updatedAt,
-        },
-        index: 1,
-      },
-    ],
+    operations: expectedOperations,
     totalRows: validation.totalRows,
   });
 };
@@ -896,35 +931,36 @@ const retainedCases: Record<RetainedDeltaCaseName, RetainedDeltaCaseDefinition> 
       function* (benchmarkProfile) {
         const engine = profileEngine(benchmarkProfile);
         const readEvent = profileEventReader(benchmarkProfile);
-        const firstRowIndex = benchmarkProfile.nextMatchReplacementBatchIndex;
-        const secondRowIndex = firstRowIndex - 1;
-        const firstScore = benchmarkProfile.nextMatchReplacementBatchScore;
-        const secondScore = firstScore + 1;
-        const fromIndex = benchmarkProfile.rowCount - secondRowIndex - 1;
-        benchmarkProfile.nextMatchReplacementBatchIndex -= 2;
-        benchmarkProfile.nextMatchReplacementBatchScore += 2;
-        const firstRow = {
-          ...seedOrder(firstRowIndex),
-          score: firstScore,
-          updatedAt: firstScore,
-        };
-        const secondRow = {
-          ...seedOrder(secondRowIndex),
-          score: secondScore,
-          updatedAt: secondScore,
-        };
+        const rows = Array.from(
+          { length: benchmarkProfile.replacementBatchSize },
+          (_item, offset) => {
+            const rowIndex = benchmarkProfile.nextMatchReplacementBatchIndex - offset;
+            const score = benchmarkProfile.nextMatchReplacementBatchScore + offset;
+            return {
+              ...seedOrder(rowIndex),
+              score,
+              updatedAt: score,
+            };
+          },
+        );
+        const lastRowIndex =
+          benchmarkProfile.nextMatchReplacementBatchIndex -
+          benchmarkProfile.replacementBatchSize +
+          1;
+        const fromIndex = benchmarkProfile.rowCount - lastRowIndex - 1;
+        benchmarkProfile.nextMatchReplacementBatchIndex -= benchmarkProfile.replacementBatchSize;
+        benchmarkProfile.nextMatchReplacementBatchScore += benchmarkProfile.replacementBatchSize;
         const fromVersion = benchmarkProfile.lastDeliveredVersion;
         const toVersion = fromVersion + 1;
-        yield* engine.publishMany("orders", [firstRow, secondRow]);
-        benchmarkProfile.measuredMutationCount += 2;
+        yield* engine.publishMany("orders", rows);
+        benchmarkProfile.measuredMutationCount += benchmarkProfile.replacementBatchSize;
         const events = yield* readEvent(1);
         benchmarkProfile.validations.push({
           caseName: "match-replacement-batch",
           events,
-          firstRow,
           fromIndex,
           fromVersion,
-          secondRow,
+          rows,
           toVersion,
           totalRows: benchmarkProfile.rowCount,
         });

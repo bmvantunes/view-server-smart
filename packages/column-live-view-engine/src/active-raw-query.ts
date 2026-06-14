@@ -44,10 +44,6 @@ type RetainedWindowEntry<Row extends RowObject = RowObject> = TopicRowEntry<Row>
   readonly slot?: number;
 };
 
-type RetainedReplacementResult<Row extends RowObject> = {
-  readonly window: ReadonlyArray<RetainedWindowEntry<Row>>;
-};
-
 const retainedWindowFilled = (
   window: ReadonlyArray<{ readonly key: string; readonly row: RowObject }>,
   totalRows: number,
@@ -117,14 +113,14 @@ const evaluateBaseQuery = <Row extends RowObject, ResultRow extends RowObject>(
   };
 };
 
-const replaceRetainedMatchingEntry = <Row extends RowObject>(
-  windowEntries: ReadonlyArray<RetainedWindowEntry<Row>>,
+const replaceRetainedMatchingEntryInPlace = <Row extends RowObject>(
+  windowEntries: Array<RetainedWindowEntry<Row>>,
   key: string,
   row: Row,
   comparePrevious: (left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number,
   compareInsertion: (left: RetainedWindowEntry<Row>, right: RetainedWindowEntry<Row>) => number,
   retainedLimit: number | undefined,
-): RetainedReplacementResult<Row> | undefined => {
+): boolean | undefined => {
   let previousIndex = -1;
   let previousEntry: RetainedWindowEntry<Row> | undefined;
   for (const [index, entry] of windowEntries.entries()) {
@@ -141,23 +137,14 @@ const replaceRetainedMatchingEntry = <Row extends RowObject>(
   if (retainedLimit !== undefined && comparePrevious(nextEntry, previousEntry) > 0) {
     return undefined;
   }
-  const withoutPrevious = [
-    ...windowEntries.slice(0, previousIndex),
-    ...windowEntries.slice(previousIndex + 1),
-  ];
+  windowEntries.splice(previousIndex, 1);
   const insertionIndex = insertionIndexForSortedRetainedEntries(
-    withoutPrevious,
+    windowEntries,
     nextEntry,
     compareInsertion,
   );
-  const replaced = [
-    ...withoutPrevious.slice(0, insertionIndex),
-    nextEntry,
-    ...withoutPrevious.slice(insertionIndex),
-  ];
-  return {
-    window: replaced,
-  };
+  windowEntries.splice(insertionIndex, 0, nextEntry);
+  return true;
 };
 
 const retainedEntrySortComparator = <Row extends RowObject, ResultRow extends RowObject>(
@@ -193,6 +180,7 @@ const updateBaseEvaluationFromRetainedChanges = (
 
   let totalRows = evaluation.totalRows;
   let windowEntries = evaluation.window;
+  let mutableWindowEntries: Array<RetainedWindowEntry> | undefined;
   let removedRetainedEntry = false;
   let replacedRetainedEntry = false;
   const insertedWindowEntries = new Map<string, RetainedWindowEntry>();
@@ -222,18 +210,21 @@ const updateBaseEvaluationFromRetainedChanges = (
             });
             continue;
           }
-          const replacedWindow = replaceRetainedMatchingEntry(
-            windowEntries,
+          if (mutableWindowEntries === undefined) {
+            mutableWindowEntries = [...windowEntries];
+            windowEntries = mutableWindowEntries;
+          }
+          const replaced = replaceRetainedMatchingEntryInPlace(
+            mutableWindowEntries,
             change.key,
             change.next,
             compiled.plan.compare,
             compareRetainedEntries,
             queryWindow.limit,
           );
-          if (replacedWindow === undefined) {
+          if (replaced === undefined) {
             return undefined;
           }
-          windowEntries = replacedWindow.window;
           replacedRetainedEntry = true;
           continue;
         }
@@ -245,6 +236,7 @@ const updateBaseEvaluationFromRetainedChanges = (
           );
           if (removedWindowEntries.length !== windowEntries.length) {
             windowEntries = removedWindowEntries;
+            mutableWindowEntries = undefined;
             removedRetainedEntry = true;
           }
           continue;

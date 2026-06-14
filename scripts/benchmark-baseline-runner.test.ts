@@ -366,60 +366,87 @@ describe("benchmark baseline runner", () => {
     ]);
     expect(
       releaseRetainedDeltaTasks.map((task) => ({
+        batchSize: task.env["VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE"],
         caseName: task.env["VIEW_SERVER_ENGINE_BENCH_RETAINED_CASE"],
         iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
         outputJsonPath: task.packageOutputJsonPath,
         rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+        windowLimit: task.env["VIEW_SERVER_ENGINE_BENCH_RETAINED_WINDOW_LIMIT"],
       })),
     ).toStrictEqual([
       {
+        batchSize: undefined,
         caseName: "noop",
         iterations: "100",
         outputJsonPath: ".artifacts/raw-active-retained-delta-noop-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
       {
+        batchSize: undefined,
         caseName: "match-update",
         iterations: "100",
         outputJsonPath: ".artifacts/raw-active-retained-delta-match-update-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
       {
+        batchSize: undefined,
         caseName: "match-move-down",
         iterations: "49",
         outputJsonPath: ".artifacts/raw-active-retained-delta-match-move-down-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
       {
+        batchSize: undefined,
         caseName: "match-replacement-batch",
         iterations: "24",
         outputJsonPath:
           ".artifacts/raw-active-retained-delta-match-replacement-batch-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
       {
+        batchSize: "64",
+        caseName: "match-replacement-batch",
+        iterations: "5",
+        outputJsonPath:
+          ".artifacts/raw-active-retained-delta-match-replacement-batch-100000rows-1000limit-64batch.json",
+        rowCount: "100000",
+        windowLimit: "1000",
+      },
+      {
+        batchSize: undefined,
         caseName: "predicate-enter",
         iterations: "100",
         outputJsonPath: ".artifacts/raw-active-retained-delta-predicate-enter-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
       {
+        batchSize: undefined,
         caseName: "visible-delete",
         iterations: "100",
         outputJsonPath: ".artifacts/raw-active-retained-delta-visible-delete-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
       {
+        batchSize: undefined,
         caseName: "exhausted-lookahead",
         iterations: "100",
         outputJsonPath: ".artifacts/raw-active-retained-delta-exhausted-lookahead-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
       {
+        batchSize: undefined,
         caseName: "count-only",
         iterations: "100",
         outputJsonPath: ".artifacts/raw-active-retained-delta-count-only-100000rows.json",
         rowCount: "100000",
+        windowLimit: undefined,
       },
     ]);
   });

@@ -61,6 +61,13 @@ const retainedDeltaReplacementBatchReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "24",
 };
 
+const retainedDeltaReplacementBatchWideReleaseEnv = {
+  ...retainedDeltaReleaseEnv,
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "5",
+  VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE: "64",
+  VIEW_SERVER_ENGINE_BENCH_RETAINED_WINDOW_LIMIT: "1000",
+};
+
 const groupedReadReleaseEnv = {
   VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "3",
   VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
@@ -275,8 +282,16 @@ const groupedWriteTask = (mode, rowCount, env) => {
 };
 
 const rawActiveRetainedDeltaTask = (retainedCase, rowCount, env) => {
+  const retainedWindowLimit = env["VIEW_SERVER_ENGINE_BENCH_RETAINED_WINDOW_LIMIT"];
+  const replacementBatchSize = env["VIEW_SERVER_ENGINE_BENCH_REPLACEMENT_BATCH_SIZE"];
+  const artifactSegment =
+    retainedCase === "match-replacement-batch" &&
+    retainedWindowLimit !== undefined &&
+    replacementBatchSize !== undefined
+      ? `${retainedCase}-${rowCount}rows-${retainedWindowLimit}limit-${replacementBatchSize}batch`
+      : `${retainedCase}-${rowCount}rows`;
   const outputJsonPath = engineArtifactName(
-    `raw-active-retained-delta-${retainedCase}-${rowCount}rows.json`,
+    `raw-active-retained-delta-${artifactSegment}.json`,
   );
   return task({
     artifactKind: "engine-benchmark-summary",
@@ -287,7 +302,10 @@ const rawActiveRetainedDeltaTask = (retainedCase, rowCount, env) => {
       VIEW_SERVER_ENGINE_BENCH_ROWS: String(rowCount),
       ...env,
     },
-    label: `raw active retained delta ${retainedCase} ${rowCount} rows`,
+    label:
+      retainedWindowLimit === undefined || replacementBatchSize === undefined
+        ? `raw active retained delta ${retainedCase} ${rowCount} rows`
+        : `raw active retained delta ${retainedCase} ${rowCount} rows ${retainedWindowLimit} limit ${replacementBatchSize} batch`,
     minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_ENGINE_BENCH_ITERATIONS"),
     outputJsonPath,
     packageDirectory: enginePackageDirectory,
@@ -444,6 +462,11 @@ export const profiles = new Map([
         "match-replacement-batch",
         100_000,
         retainedDeltaReplacementBatchReleaseEnv,
+      ),
+      rawActiveRetainedDeltaTask(
+        "match-replacement-batch",
+        100_000,
+        retainedDeltaReplacementBatchWideReleaseEnv,
       ),
       rawActiveRetainedDeltaTask("predicate-enter", 100_000, retainedDeltaReleaseEnv),
       rawActiveRetainedDeltaTask("visible-delete", 100_000, retainedDeltaReleaseEnv),
