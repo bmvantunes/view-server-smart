@@ -152,6 +152,30 @@ const retainedEntrySortComparator = <Row extends RowObject, ResultRow extends Ro
   };
 };
 
+const retainedLimitAfterInsertedChanges = (
+  compareRetainedEntries: (
+    left: RetainedWindowEntry<RowObject>,
+    right: RetainedWindowEntry<RowObject>,
+  ) => number,
+  insertedWindowEntries: ReadonlyMap<string, RetainedWindowEntry>,
+  queryWindow: RawQueryPlanWindow,
+  requiredWindowEntries: number | undefined,
+  removedRetainedEntry: boolean,
+  windowEntries: ReadonlyArray<RetainedWindowEntry>,
+): number | undefined => {
+  if (!removedRetainedEntry || requiredWindowEntries === undefined) {
+    return queryWindow.limit;
+  }
+  const retainedTail = windowEntries[windowEntries.length - 1]!;
+  let safeInsertedEntries = 0;
+  for (const insertedEntry of insertedWindowEntries.values()) {
+    if (compareRetainedEntries(insertedEntry, retainedTail) <= 0) {
+      safeInsertedEntries += 1;
+    }
+  }
+  return Math.min(queryWindow.limit!, windowEntries.length + safeInsertedEntries);
+};
+
 const updateBaseEvaluationFromRetainedChanges = (
   store: ActiveQueryStoreState,
   compiled: CompiledRawQuery<object, object>,
@@ -301,10 +325,14 @@ const updateBaseEvaluationFromRetainedChanges = (
   }
 
   const window = [...windowEntries, ...insertedWindowEntries.values()].sort(compareRetainedEntries);
-  const retainedLimit =
-    removedRetainedEntry && requiredWindowEntries !== undefined
-      ? requiredWindowEntries
-      : queryWindow.limit;
+  const retainedLimit = retainedLimitAfterInsertedChanges(
+    compareRetainedEntries,
+    insertedWindowEntries,
+    queryWindow,
+    requiredWindowEntries,
+    removedRetainedEntry,
+    windowEntries,
+  );
   const limitedWindow = retainedLimit === undefined ? window : window.slice(0, retainedLimit);
   return {
     keyIndex: retainedWindowKeyIndex(limitedWindow),

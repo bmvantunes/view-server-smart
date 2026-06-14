@@ -2578,6 +2578,182 @@ describe("column-live-view-engine active query execution", () => {
     }),
   );
 
+  it.effect(
+    "preserves large retained lookahead when matching inserts safely refill a removal batch",
+    () =>
+      Effect.gen(function* () {
+        const store = new TopicStore(
+          "raw-visible-delete-insert-preserves-lookahead",
+          Schema.Struct({
+            id: Schema.String,
+            status: Schema.String,
+            score: Schema.Number,
+          }),
+          "id",
+          () => {},
+        );
+        yield* publishTopicStoreRows(
+          store,
+          Array.from({ length: 220 }, (_value, index) => ({
+            id: `row-${index}`,
+            status: "open",
+            score: index,
+          })),
+          invalidRow,
+        );
+
+        const scanLimits: Array<number | undefined> = [];
+        const readModel = topicStoreReadModel(store);
+        const observedReadModel = {
+          ...readModel,
+          scanRawWindow: (plan: Parameters<typeof readModel.scanRawWindow>[0]) => {
+            scanLimits.push(plan.limit);
+            return readModel.scanRawWindow(plan);
+          },
+        };
+
+        const wideCompiled = yield* prepareRawQuery(
+          "raw-visible-delete-insert-preserves-lookahead",
+          topicStoreRawQueryMetadata(store),
+          {
+            select: ["id", "score"],
+            where: {
+              status: "open",
+            },
+            orderBy: [{ field: "score", direction: "desc" }],
+            limit: 128,
+          },
+        );
+        const narrowCompiled = yield* prepareRawQuery(
+          "raw-visible-delete-insert-preserves-lookahead",
+          topicStoreRawQueryMetadata(store),
+          {
+            select: ["id", "score"],
+            where: {
+              status: "open",
+            },
+            orderBy: [{ field: "score", direction: "desc" }],
+            limit: 2,
+          },
+        );
+
+        const wideExecution = yield* acquireRawQueryExecution(observedReadModel, wideCompiled);
+        const narrowExecution = yield* acquireRawQueryExecution(observedReadModel, narrowCompiled);
+        expect(wideExecution.initial("wide-query").keys.slice(0, 3)).toStrictEqual([
+          "row-219",
+          "row-218",
+          "row-217",
+        ]);
+        expect(narrowExecution.initial("query").keys).toStrictEqual(["row-219", "row-218"]);
+        const cursor = narrowExecution.createCursor();
+
+        yield* publishTopicStoreRows(
+          store,
+          [
+            ...Array.from({ length: 16 }, (_value, offset) => ({
+              id: `row-${219 - offset}`,
+              status: "closed",
+              score: 219 - offset,
+            })),
+            ...Array.from({ length: 16 }, (_value, offset) => ({
+              id: `new-${offset}`,
+              status: "open",
+              score: 1_000 + offset,
+            })),
+          ],
+          invalidRow,
+        );
+        const firstDelta = yield* narrowExecution.next("query", cursor);
+        expect(Option.getOrThrow(firstDelta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-visible-delete-insert-preserves-lookahead",
+          queryId: "query",
+          fromVersion: 1,
+          toVersion: 2,
+          operations: [
+            {
+              type: "remove",
+              key: "row-219",
+            },
+            {
+              type: "remove",
+              key: "row-218",
+            },
+            {
+              type: "insert",
+              key: "new-15",
+              row: {
+                id: "new-15",
+                score: 1015,
+              },
+              index: 0,
+            },
+            {
+              type: "insert",
+              key: "new-14",
+              row: {
+                id: "new-14",
+                score: 1014,
+              },
+              index: 1,
+            },
+          ],
+          totalRows: 220,
+        });
+
+        yield* publishTopicStoreRows(
+          store,
+          Array.from({ length: 16 }, (_value, offset) => ({
+            id: `new-${offset}`,
+            status: "closed",
+            score: 1_000 + offset,
+          })),
+          invalidRow,
+        );
+        const secondDelta = yield* narrowExecution.next("query", cursor);
+        expect(Option.getOrThrow(secondDelta)).toStrictEqual({
+          type: "delta",
+          topic: "raw-visible-delete-insert-preserves-lookahead",
+          queryId: "query",
+          fromVersion: 2,
+          toVersion: 3,
+          operations: [
+            {
+              type: "remove",
+              key: "new-15",
+            },
+            {
+              type: "remove",
+              key: "new-14",
+            },
+            {
+              type: "insert",
+              key: "row-203",
+              row: {
+                id: "row-203",
+                score: 203,
+              },
+              index: 0,
+            },
+            {
+              type: "insert",
+              key: "row-202",
+              row: {
+                id: "row-202",
+                score: 202,
+              },
+              index: 1,
+            },
+          ],
+          totalRows: 204,
+        });
+        expect(scanLimits).toStrictEqual([192]);
+
+        yield* releaseRawQueryExecution(observedReadModel, narrowCompiled);
+        yield* releaseRawQueryExecution(observedReadModel, wideCompiled);
+      }),
+  );
+
   it.effect("shrinks shared base windows immediately when larger windows release", () =>
     Effect.gen(function* () {
       const store = new TopicStore(
