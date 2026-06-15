@@ -20,6 +20,7 @@ import {
   Cause,
   Deferred,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Logger,
@@ -27,15 +28,18 @@ import {
   References,
   Schema,
   SchemaGetter,
+  Scope,
   Stream,
 } from "effect";
 import { fromStringUnsafe } from "effect/BigDecimal";
 import { AtomRef } from "effect/unstable/reactivity";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
+import * as Socket from "effect/unstable/socket/Socket";
 import * as Net from "node:net";
 import { makeViewServerWebSocketServer } from "./index";
 import { makeViewServerRpcHandlers } from "./rpc-handlers";
+import { closeTrackedSockets, makeTrackedSocket } from "./websocket-tracking";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -63,6 +67,10 @@ const HealthJson = Schema.Struct({
   }),
 });
 
+const TcpAddress = Schema.Struct({
+  port: Schema.Number,
+});
+
 class ServerTestJsonParseError extends Schema.TaggedErrorClass<ServerTestJsonParseError>()(
   "ServerTestJsonParseError",
   {
@@ -72,6 +80,13 @@ class ServerTestJsonParseError extends Schema.TaggedErrorClass<ServerTestJsonPar
 
 class ServerTestMalformedUpgradeError extends Schema.TaggedErrorClass<ServerTestMalformedUpgradeError>()(
   "ServerTestMalformedUpgradeError",
+  {
+    cause: Schema.Unknown,
+  },
+) {}
+
+class ServerTestTcpError extends Schema.TaggedErrorClass<ServerTestTcpError>()(
+  "ServerTestTcpError",
   {
     cause: Schema.Unknown,
   },
@@ -148,6 +163,23 @@ const quote = (id: string, price: string): QuoteRow => ({
   price: fromStringUnsafe(price),
 });
 
+const serverHealthWithOrdersRowCount = (
+  health: ViewServerHealth<typeof viewServer.topics>,
+  rowCount: number,
+): ViewServerHealth<typeof viewServer.topics> => ({
+  ...health,
+  engine: {
+    ...health.engine,
+    topics: {
+      ...health.engine.topics,
+      orders: {
+        ...health.engine.topics.orders,
+        rowCount,
+      },
+    },
+  },
+});
+
 class RawViewServerRpcClient extends Context.Service<
   RawViewServerRpcClient,
   RpcClient.FromGroup<typeof ViewServerRpcs, RpcClientError>
@@ -178,6 +210,33 @@ const fetchJson = Effect.fn("ViewServerServer.test.fetchJson")(function* (url: s
     catch: (cause) => new ServerTestJsonParseError({ cause }),
   });
   return { response, value };
+});
+
+const reserveTcpPort = Effect.fn("ViewServerServer.test.tcp.reservePort")(function* () {
+  const server = yield* Effect.acquireRelease(
+    Effect.callback<Net.Server, ServerTestTcpError>((resume) => {
+      const blocker = Net.createServer();
+      const cleanup = () => {
+        blocker.removeAllListeners();
+      };
+      blocker.once("error", (cause) => {
+        cleanup();
+        resume(Effect.fail(new ServerTestTcpError({ cause })));
+      });
+      blocker.listen(0, "127.0.0.1", () => {
+        cleanup();
+        resume(Effect.succeed(blocker));
+      });
+    }),
+    (server) =>
+      Effect.callback<void>((resume) => {
+        server.close(() => {
+          resume(Effect.void);
+        });
+      }),
+  );
+  const address = yield* Schema.decodeUnknownEffect(TcpAddress)(server.address());
+  return address.port;
 });
 
 const sendMalformedWebSocketUpgrade = Effect.fn("ViewServerServer.test.websocket.malformedUpgrade")(
@@ -422,6 +481,27 @@ describe("@view-server/server", () => {
     }),
   );
 
+  it.live("fails when the websocket server port is unavailable", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const inMemory = createServerTestRuntime(viewServer);
+        const reservedPort = yield* reserveTcpPort();
+
+        const startupExit = yield* makeViewServerWebSocketServer(
+          viewServer,
+          {
+            liveClient: inMemory.liveClient,
+            runtime: inMemory.client,
+          },
+          { host: "127.0.0.1", port: reservedPort },
+        ).pipe(Effect.exit);
+
+        expect(Exit.isFailure(startupExit)).toBe(true);
+        yield* inMemory.close;
+      }),
+    ),
+  );
+
   it.live("closes tracked websocket clients when interrupted during the open hook", () =>
     Effect.gen(function* () {
       const inMemory = createServerTestRuntime(viewServer);
@@ -455,6 +535,90 @@ describe("@view-server/server", () => {
       expect(openedClients).toBe(1);
       expect(closedClients).toBe(1);
       yield* inMemory.close;
+    }),
+  );
+
+  it.live("tracks active websocket close frames and logs shutdown close failures", () => {
+    const logs: Array<{
+      readonly cause: Cause.Cause<unknown>;
+      readonly logLevel: unknown;
+      readonly message: unknown;
+    }> = [];
+    const logger = Logger.make<unknown, void>((options) => {
+      logs.push({
+        cause: options.cause,
+        logLevel: options.logLevel,
+        message: options.message,
+      });
+    });
+
+    return Effect.gen(function* () {
+      const activeSocketClosers = new Set<Effect.Effect<void, unknown>>();
+      const socketOpened = yield* Deferred.make<void>();
+      const socketClosed = yield* Deferred.make<void>();
+      const writtenChunks: Array<Uint8Array | string | Socket.CloseEvent> = [];
+      const writeFailure = new Socket.SocketError({
+        reason: new Socket.SocketWriteError({ cause: "write failed" }),
+      });
+      const successfulSocket = Socket.make({
+        writer: Effect.succeed((chunk) =>
+          Effect.sync(() => {
+            writtenChunks.push(chunk);
+          }),
+        ),
+        runRaw: (_handler, options) =>
+          Effect.gen(function* () {
+            const onOpen = options?.onOpen ?? Effect.void;
+            yield* onOpen;
+            yield* Deferred.succeed(socketOpened, undefined);
+            return yield* Effect.never;
+          }),
+      });
+      const trackedSocket = makeTrackedSocket(
+        successfulSocket,
+        Effect.void,
+        Deferred.succeed(socketClosed, undefined),
+        activeSocketClosers,
+      );
+
+      const socketFiber = yield* trackedSocket
+        .runRaw(() => Effect.void)
+        .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(socketOpened);
+      expect(activeSocketClosers.size).toBe(1);
+
+      yield* closeTrackedSockets(activeSocketClosers);
+      expect(writtenChunks).toStrictEqual([
+        new Socket.CloseEvent(1001, "View Server shutting down"),
+      ]);
+
+      const failingCloser = Effect.fail(writeFailure);
+      activeSocketClosers.add(failingCloser);
+      yield* closeTrackedSockets(activeSocketClosers);
+      activeSocketClosers.delete(failingCloser);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]?.message).toStrictEqual(["WebSocket shutdown failed."]);
+      expect(logs[0]?.logLevel).toBe("Warn");
+      expect(Cause.hasFails(logs[0]?.cause ?? Cause.empty)).toBe(true);
+
+      yield* Fiber.interrupt(socketFiber);
+      yield* Deferred.await(socketClosed);
+      expect(activeSocketClosers.size).toBe(0);
+    }).pipe(
+      Effect.provide(Logger.layer([logger])),
+      Effect.provideService(References.MinimumLogLevel, "Trace"),
+    );
+  });
+
+  it.live("does not let a stuck websocket close frame block other tracked sockets", () =>
+    Effect.gen(function* () {
+      const activeSocketClosers = new Set<Effect.Effect<void, unknown>>();
+      const fastCloseRan = yield* Deferred.make<void>();
+      activeSocketClosers.add(Effect.never);
+      activeSocketClosers.add(Deferred.succeed(fastCloseRan, undefined));
+
+      yield* closeTrackedSockets(activeSocketClosers).pipe(Effect.timeout("1 second"));
+      yield* Deferred.await(fastCloseRan).pipe(Effect.timeout("1 second"));
     }),
   );
 
@@ -1043,10 +1207,15 @@ describe("@view-server/server", () => {
               }),
           }),
       };
-      const handlers = makeViewServerRpcHandlers(viewServer, {
-        liveClient,
-        runtime: inMemory.client,
-      });
+      const handlerScope = yield* Scope.make("parallel");
+      const handlers = makeViewServerRpcHandlers(
+        viewServer,
+        {
+          liveClient,
+          runtime: inMemory.client,
+        },
+        handlerScope,
+      );
 
       const stream = handlers["ViewServer.Subscribe"]({
         topic: "orders",
@@ -1072,6 +1241,7 @@ describe("@view-server/server", () => {
       expect(Cause.hasFails(logs[0]?.cause ?? Cause.empty)).toBe(true);
       expect(Cause.hasDies(logs[0]?.cause ?? Cause.empty)).toBe(false);
       expect(Cause.hasInterrupts(logs[0]?.cause ?? Cause.empty)).toBe(false);
+      yield* Scope.close(handlerScope, Exit.void);
       yield* inMemory.close;
     }).pipe(
       Effect.provide(Logger.layer([logger])),
@@ -1131,10 +1301,15 @@ describe("@view-server/server", () => {
                 }),
             }),
         };
-        const handlers = makeViewServerRpcHandlers(viewServer, {
-          liveClient,
-          runtime: inMemory.client,
-        });
+        const handlerScope = yield* Scope.make("parallel");
+        const handlers = makeViewServerRpcHandlers(
+          viewServer,
+          {
+            liveClient,
+            runtime: inMemory.client,
+          },
+          handlerScope,
+        );
 
         const stream = handlers["ViewServer.Subscribe"]({
           topic: "orders",
@@ -1157,6 +1332,7 @@ describe("@view-server/server", () => {
         expect(Cause.hasFails(logs[0]?.cause ?? Cause.empty)).toBe(true);
         expect(Cause.hasDies(logs[0]?.cause ?? Cause.empty)).toBe(false);
         expect(Cause.hasInterrupts(logs[0]?.cause ?? Cause.empty)).toBe(false);
+        yield* Scope.close(handlerScope, Exit.void);
         yield* inMemory.close;
       }).pipe(
         Effect.provide(Logger.layer([logger])),
@@ -1552,6 +1728,335 @@ describe("@view-server/server", () => {
 
       yield* raw.close;
       yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("closes in-flight remote RPC health reads when the websocket server closes", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const readStarted = yield* Deferred.make<void>();
+      const readInterrupted = yield* Deferred.make<void>();
+      let readCount = 0;
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: {
+          health: () =>
+            Effect.sync(() => {
+              readCount += 1;
+            }).pipe(
+              Effect.andThen(Deferred.succeed(readStarted, undefined)),
+              Effect.andThen(Effect.never),
+              Effect.ensuring(Deferred.succeed(readInterrupted, undefined)),
+            ),
+        },
+      });
+      const raw = yield* makeRawRpcClient(server.url);
+
+      const first = yield* raw.rpc["ViewServer.Health"]().pipe(
+        Effect.exit,
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(readStarted);
+      const second = yield* raw.rpc["ViewServer.Health"]().pipe(
+        Effect.exit,
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Effect.yieldNow;
+      yield* server.close.pipe(Effect.timeout("1 second"));
+      yield* Deferred.await(readInterrupted).pipe(Effect.timeout("1 second"));
+      const [firstExit, secondExit] = yield* Effect.all([Fiber.join(first), Fiber.join(second)], {
+        concurrency: 2,
+      }).pipe(Effect.timeout("1 second"));
+
+      expect(readCount).toBe(1);
+      expect(Exit.isFailure(firstExit)).toBe(true);
+      expect(Exit.isFailure(secondExit)).toBe(true);
+      yield* raw.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("coalesces concurrent RPC health reads while an active read is running", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const baseHealth = yield* inMemory.client.health();
+      const firstHealth = serverHealthWithOrdersRowCount(baseHealth, 1);
+      const secondHealth = serverHealthWithOrdersRowCount(baseHealth, 2);
+      const readStarted = yield* Deferred.make<void>();
+      const releaseRead = yield* Deferred.make<void>();
+      let readCount = 0;
+      const healthReads = new Map<
+        number,
+        Effect.Effect<ViewServerHealth<typeof viewServer.topics>>
+      >([
+        [
+          0,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(readStarted, undefined);
+            yield* Deferred.await(releaseRead);
+            return firstHealth;
+          }),
+        ],
+        [1, Effect.succeed(secondHealth)],
+      ]);
+      const handlerScope = yield* Scope.make("parallel");
+      const handlers = makeViewServerRpcHandlers(
+        viewServer,
+        {
+          liveClient: inMemory.liveClient,
+          runtime: {
+            health: () =>
+              Effect.suspend(() => {
+                const nextRead =
+                  healthReads.get(readCount) ??
+                  Effect.die(new Error(`Unexpected health read: ${readCount}`));
+                readCount += 1;
+                return nextRead;
+              }),
+          },
+        },
+        handlerScope,
+      );
+
+      const first = yield* handlers["ViewServer.Health"]().pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(readStarted);
+      const second = yield* handlers["ViewServer.Health"]().pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseRead, undefined);
+
+      const [firstResult, secondResult] = yield* Effect.all(
+        [Fiber.join(first), Fiber.join(second)],
+        { concurrency: 2 },
+      ).pipe(Effect.timeout("1 second"));
+      const thirdResult = yield* handlers["ViewServer.Health"]();
+
+      expect(readCount).toBe(2);
+      expect(firstResult).toStrictEqual(firstHealth);
+      expect(secondResult).toStrictEqual(firstHealth);
+      expect(thirdResult).toStrictEqual(secondHealth);
+      yield* Scope.close(handlerScope, Exit.void);
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("clears failed RPC health reads so later callers retry", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const baseHealth = yield* inMemory.client.health();
+      const recoveredHealth = serverHealthWithOrdersRowCount(baseHealth, 3);
+      const healthError: ViewServerRuntimeError = {
+        _tag: "ViewServerRuntimeError",
+        code: "RuntimeUnavailable",
+        message: "health unavailable",
+      };
+      let readCount = 0;
+      const healthReads = new Map<
+        number,
+        Effect.Effect<ViewServerHealth<typeof viewServer.topics>, ViewServerRuntimeError>
+      >([
+        [0, Effect.fail(healthError)],
+        [1, Effect.succeed(recoveredHealth)],
+      ]);
+      const handlerScope = yield* Scope.make("parallel");
+      const handlers = makeViewServerRpcHandlers(
+        viewServer,
+        {
+          liveClient: inMemory.liveClient,
+          runtime: {
+            health: () =>
+              Effect.suspend(() => {
+                const nextRead =
+                  healthReads.get(readCount) ??
+                  Effect.die(new Error(`Unexpected health read: ${readCount}`));
+                readCount += 1;
+                return nextRead;
+              }),
+          },
+        },
+        handlerScope,
+      );
+
+      const failedHealth = yield* Effect.flip(handlers["ViewServer.Health"]());
+      const retriedHealth = yield* handlers["ViewServer.Health"]();
+
+      expect(readCount).toBe(2);
+      expect(failedHealth).toStrictEqual(healthError);
+      expect(retriedHealth).toStrictEqual(recoveredHealth);
+      yield* Scope.close(handlerScope, Exit.void);
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("keeps shared RPC health reads alive when the leader caller is interrupted", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const baseHealth = yield* inMemory.client.health();
+      const firstHealth = serverHealthWithOrdersRowCount(baseHealth, 3);
+      const recoveredHealth = serverHealthWithOrdersRowCount(baseHealth, 4);
+      const readStarted = yield* Deferred.make<void>();
+      const releaseRead = yield* Deferred.make<void>();
+      let readCount = 0;
+      const healthReads = new Map<
+        number,
+        Effect.Effect<ViewServerHealth<typeof viewServer.topics>, ViewServerRuntimeError>
+      >([
+        [
+          0,
+          Effect.gen(function* () {
+            readCount += 1;
+            yield* Deferred.succeed(readStarted, undefined);
+            yield* Deferred.await(releaseRead);
+            return firstHealth;
+          }),
+        ],
+        [
+          1,
+          Effect.sync(() => {
+            readCount += 1;
+            return recoveredHealth;
+          }),
+        ],
+      ]);
+      const handlerScope = yield* Scope.make("parallel");
+      const handlers = makeViewServerRpcHandlers(
+        viewServer,
+        {
+          liveClient: inMemory.liveClient,
+          runtime: {
+            health: () =>
+              Effect.suspend(
+                () =>
+                  healthReads.get(readCount) ??
+                  Effect.die(new Error(`Unexpected health read: ${readCount}`)),
+              ),
+          },
+        },
+        handlerScope,
+      );
+
+      const leader = yield* handlers["ViewServer.Health"]().pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(readStarted);
+      const follower = yield* handlers["ViewServer.Health"]().pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Fiber.interrupt(leader).pipe(
+        Effect.timeout("1 second"),
+        Effect.onError(() => Deferred.succeed(releaseRead, undefined).pipe(Effect.asVoid)),
+      );
+      const leaderExit = yield* Fiber.await(leader).pipe(Effect.timeout("1 second"));
+      yield* Deferred.succeed(releaseRead, undefined);
+      const followerHealth = yield* Fiber.join(follower).pipe(Effect.timeout("1 second"));
+      const retriedHealth = yield* handlers["ViewServer.Health"]();
+
+      expect(followerHealth).toStrictEqual(firstHealth);
+      expect(Exit.hasInterrupts(leaderExit)).toBe(true);
+      expect(readCount).toBe(2);
+      expect(retriedHealth).toStrictEqual(recoveredHealth);
+      yield* Scope.close(handlerScope, Exit.void);
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("interrupts active RPC health reads when the handler scope closes", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const readStarted = yield* Deferred.make<void>();
+      const readInterrupted = yield* Deferred.make<void>();
+      const handlerScope = yield* Scope.make("parallel");
+      const handlers = makeViewServerRpcHandlers(
+        viewServer,
+        {
+          liveClient: inMemory.liveClient,
+          runtime: {
+            health: () =>
+              Deferred.succeed(readStarted, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(Deferred.succeed(readInterrupted, undefined)),
+              ),
+          },
+        },
+        handlerScope,
+      );
+
+      const healthFiber = yield* handlers["ViewServer.Health"]().pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(readStarted);
+      yield* Scope.close(handlerScope, Exit.void).pipe(Effect.timeout("1 second"));
+      yield* Deferred.await(readInterrupted).pipe(Effect.timeout("1 second"));
+      const healthExit = yield* Fiber.await(healthFiber).pipe(Effect.timeout("1 second"));
+
+      expect(Exit.hasInterrupts(healthExit)).toBe(true);
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live(
+    "does not wait forever when closing handler scope with a non-cancellable active RPC health worker",
+    () =>
+      Effect.gen(function* () {
+        const inMemory = createServerTestRuntime(viewServer);
+        const baseHealth = yield* inMemory.client.health();
+        const readStarted = yield* Deferred.make<void>();
+        const releaseRead = yield* Deferred.make<void>();
+        const workerReadFinished = yield* Deferred.make<void>();
+        const handlerScope = yield* Scope.make("parallel");
+        const handlers = makeViewServerRpcHandlers(
+          viewServer,
+          {
+            liveClient: inMemory.liveClient,
+            runtime: {
+              health: () =>
+                Effect.uninterruptible(
+                  Deferred.succeed(readStarted, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseRead)),
+                    Effect.as(baseHealth),
+                    Effect.ensuring(Deferred.succeed(workerReadFinished, undefined)),
+                  ),
+                ),
+            },
+          },
+          handlerScope,
+        );
+
+        const healthFiber = yield* handlers["ViewServer.Health"]().pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(readStarted);
+        yield* Scope.close(handlerScope, Exit.void).pipe(Effect.timeout("1 second"));
+        const healthExit = yield* Fiber.await(healthFiber).pipe(Effect.timeout("1 second"));
+        yield* Deferred.succeed(releaseRead, undefined);
+        yield* Deferred.await(workerReadFinished).pipe(Effect.timeout("1 second"));
+        yield* Effect.yieldNow;
+
+        expect(Exit.hasInterrupts(healthExit)).toBe(true);
+        yield* inMemory.close;
+      }),
+  );
+
+  it.live("interrupts RPC health reads started after the handler scope closes", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const handlerScope = yield* Scope.make("parallel");
+      const handlers = makeViewServerRpcHandlers(
+        viewServer,
+        {
+          liveClient: inMemory.liveClient,
+          runtime: inMemory.client,
+        },
+        handlerScope,
+      );
+
+      yield* Scope.close(handlerScope, Exit.void);
+      const healthExit = yield* handlers["ViewServer.Health"]().pipe(Effect.exit);
+
+      expect(Exit.hasInterrupts(healthExit)).toBe(true);
       yield* inMemory.close;
     }),
   );
