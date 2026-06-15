@@ -10,6 +10,7 @@ import {
 
 const enginePackageDirectory = "packages/column-live-view-engine";
 const reactPackageDirectory = "packages/react";
+const runtimePackageDirectory = "packages/runtime";
 
 export const baselinePath = (profile) => `benchmarks/baselines/${profile}.json`;
 
@@ -37,6 +38,14 @@ const commonReactSmokeEnv = {
   VIEW_SERVER_REACT_BENCH_TIME_MS: "1",
   VIEW_SERVER_REACT_BENCH_WARMUP_ITERATIONS: "0",
   VIEW_SERVER_REACT_BENCH_WARMUP_TIME_MS: "0",
+};
+
+const commonRuntimeKafkaSmokeEnv = {
+  VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS: "localhost:9092",
+  VIEW_SERVER_RUNTIME_BENCH_ITERATIONS: "3",
+  VIEW_SERVER_RUNTIME_BENCH_TIME_MS: "1",
+  VIEW_SERVER_RUNTIME_BENCH_WARMUP_ITERATIONS: "0",
+  VIEW_SERVER_RUNTIME_BENCH_WARMUP_TIME_MS: "0",
 };
 
 const retainedDeltaSmokeEnv = {
@@ -380,6 +389,25 @@ const reactInMemoryTask = (browser, rowCount, env = {}) => {
   });
 };
 
+const runtimeKafkaIngestTask = (rowCount, env) => {
+  const outputJsonPath = `.artifacts/kafka-ingest-${rowCount}rows.json`;
+  return task({
+    artifactKind: "runtime-benchmark-summary",
+    benchmarkScope: "runtime-kafka-ingest",
+    env: {
+      VIEW_SERVER_RUNTIME_BENCH_KAFKA_BATCH_SIZE: String(rowCount),
+      VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON: outputJsonPath,
+      ...env,
+    },
+    label: `Kafka ingest ${rowCount} rows`,
+    minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"),
+    outputJsonPath,
+    packageDirectory: runtimePackageDirectory,
+    rowCount,
+    vpTask: "runtime#bench:kafka-ingest",
+  });
+};
+
 export const profiles = new Map([
   [
     "smoke",
@@ -430,6 +458,15 @@ export const profiles = new Map([
       reactInMemoryTask("chromium", 20, {
         VIEW_SERVER_REACT_BENCH_BATCH_SIZE: "10",
         ...commonReactSmokeEnv,
+      }),
+    ],
+  ],
+  [
+    "kafka-ingest",
+    [
+      runtimeKafkaIngestTask(250, {
+        VIEW_SERVER_RUNTIME_BENCH_KAFKA_BURST_MULTIPLIER: "4",
+        ...commonRuntimeKafkaSmokeEnv,
       }),
     ],
   ],
@@ -537,8 +574,10 @@ export const profiles = new Map([
 
 export const isBenchmarkEnvironmentKey = (key) =>
   key === "VIEW_SERVER_BENCH_BASELINE_PROFILE" ||
+  key === "VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS" ||
   key.startsWith("VIEW_SERVER_ENGINE_BENCH_") ||
   key.startsWith("VIEW_SERVER_REACT_BENCH_") ||
+  key.startsWith("VIEW_SERVER_RUNTIME_BENCH_") ||
   key.startsWith("VITE_VIEW_SERVER_REACT_BENCH_");
 
 export const cleanBenchmarkEnvironment = (environment) =>

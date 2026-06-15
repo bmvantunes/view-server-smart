@@ -85,6 +85,7 @@ const observation = {
   browser: undefined,
   cleanupLeakCount: 0,
   groupedWriteAdmission: undefined,
+  kafkaIngestLanes: undefined,
   latencySource: "vitest-output-json",
   memoryRssTotalDeltaBytes: 1024,
   minimumSampleCount: 5,
@@ -162,7 +163,9 @@ describe("benchmark baseline runner", () => {
         KEEP_ME: "yes",
         VIEW_SERVER_BENCH_BASELINE_PROFILE: "smoke",
         VIEW_SERVER_ENGINE_BENCH_ROWS: "100",
+        VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS: "localhost:19092",
         VIEW_SERVER_REACT_BENCH_ROWS: "100",
+        VIEW_SERVER_RUNTIME_BENCH_KAFKA_BATCH_SIZE: "100",
         VITE_VIEW_SERVER_REACT_BENCH_ROWS: "100",
       }),
       knownSignalExitCode: exitCodeForSignal("SIGTERM"),
@@ -189,6 +192,8 @@ describe("benchmark baseline runner", () => {
       groupedAdmissionUpdate: scripts["bench:baseline:grouped-admission:update"],
       groupedOrderNeutral: scripts["bench:baseline:grouped-order-neutral"],
       groupedOrderNeutralUpdate: scripts["bench:baseline:grouped-order-neutral:update"],
+      kafkaIngest: scripts["bench:baseline:kafka-ingest"],
+      kafkaIngestUpdate: scripts["bench:baseline:kafka-ingest:update"],
       release: scripts["bench:baseline:release"],
     }).toStrictEqual({
       groupedAdmission: "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission",
@@ -197,8 +202,35 @@ describe("benchmark baseline runner", () => {
       groupedOrderNeutral: "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral",
       groupedOrderNeutralUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral --update-baseline",
+      kafkaIngest: "node scripts/run-benchmark-baseline.mjs --profile=kafka-ingest",
+      kafkaIngestUpdate:
+        "node scripts/run-benchmark-baseline.mjs --profile=kafka-ingest --update-baseline",
       release: "node scripts/run-benchmark-baseline.mjs --profile=release --no-compare",
     });
+  });
+
+  it("defines the Kafka ingest runtime benchmark task", () => {
+    const kafkaIngestTasks = profiles.get("kafka-ingest") ?? [];
+
+    expect(
+      kafkaIngestTasks.map((task) => ({
+        artifactKind: task.expectedArtifactKind,
+        benchmarkScope: task.expectedBenchmarkScope,
+        broker: task.env["VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_RUNTIME_BENCH_KAFKA_BATCH_SIZE"],
+        task: task.args,
+      })),
+    ).toStrictEqual([
+      {
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        broker: "localhost:9092",
+        outputJsonPath: ".artifacts/kafka-ingest-250rows.json",
+        rowCount: "250",
+        task: ["run", "--no-cache", "runtime#bench:kafka-ingest"],
+      },
+    ]);
   });
 
   it("defines isolated grouped order-neutral tasks without changing dual grouped-write artifacts", () => {
@@ -1052,7 +1084,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       message:
-        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, grouped-admission, grouped-order-neutral, release",
+        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, grouped-admission, grouped-order-neutral, release",
     });
   });
 

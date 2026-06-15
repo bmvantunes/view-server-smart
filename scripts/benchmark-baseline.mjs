@@ -28,9 +28,23 @@ export const groupedOrderNeutralBenchmarkThresholds = {
   memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
 };
 
+export const kafkaIngestBenchmarkThresholds = {
+  latencyMean: {
+    maxAbsoluteDeltaMs: 2_000,
+    maxRatio: 1.5,
+  },
+  latencyP99: {
+    maxAbsoluteDeltaMs: 2_500,
+    maxRatio: 1.5,
+  },
+  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+};
+
 export const benchmarkThresholdsForProfile = (profile) =>
   profile === "grouped-order-neutral"
     ? groupedOrderNeutralBenchmarkThresholds
+    : profile === "kafka-ingest"
+      ? kafkaIngestBenchmarkThresholds
     : defaultBenchmarkThresholds;
 
 const readJsonFile = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -71,6 +85,9 @@ const arrayValue = (value, path) => {
 const optionalObjectValue = (value, path) =>
   value === undefined ? undefined : objectValue(value, path);
 
+const optionalArrayValue = (value, path) =>
+  value === undefined ? undefined : arrayValue(value, path);
+
 const optionalFiniteNumber = (value, path) =>
   value === undefined ? undefined : finiteNumber(value, path);
 
@@ -97,10 +114,11 @@ const summaryArtifactKind = (value, path) => {
   const artifactKind = stringValue(value, path);
   if (
     artifactKind !== "engine-benchmark-summary" &&
-    artifactKind !== "react-browser-benchmark-summary"
+    artifactKind !== "react-browser-benchmark-summary" &&
+    artifactKind !== "runtime-benchmark-summary"
   ) {
     throw new Error(
-      `Benchmark artifact field ${path} must be engine-benchmark-summary or react-browser-benchmark-summary.`,
+      `Benchmark artifact field ${path} must be engine-benchmark-summary, react-browser-benchmark-summary, or runtime-benchmark-summary.`,
     );
   }
   return artifactKind;
@@ -131,6 +149,125 @@ const comparableBenchmark = (groupName, benchmark) => ({
   p99Ms: finiteNumber(benchmark.p99, `${benchmark.name}.p99`),
   sampleCount: positiveInteger(benchmark.sampleCount, `${benchmark.name}.sampleCount`),
 });
+
+const nonNegativeIntegerString = (value, path) => {
+  const text = stringValue(value, path);
+  if (!/^(0|[1-9]\d*)$/u.test(text)) {
+    throw new Error(`Benchmark artifact field ${path} must be a non-negative integer string.`);
+  }
+  return Number.parseInt(text, 10);
+};
+
+const kafkaIngestLaneValue = (value, path) => {
+  const lane = objectValue(value, path);
+  return {
+    internalTopic: stringValue(lane.internalTopic, `${path}.internalTopic`),
+    lane: stringValue(lane.lane, `${path}.lane`),
+    producedRows: nonNegativeInteger(lane.producedRows, `${path}.producedRows`),
+    region: stringValue(lane.region, `${path}.region`),
+    sourceTopic: stringValue(lane.sourceTopic, `${path}.sourceTopic`),
+    sourceTopicAlias: stringValue(lane.sourceTopicAlias, `${path}.sourceTopicAlias`),
+  };
+};
+
+const comparableKafkaIngestLane = (lane) => ({
+  internalTopic: lane.internalTopic,
+  lane: lane.lane,
+  producedRows: lane.producedRows,
+  region: lane.region,
+  sourceTopicAlias: lane.sourceTopicAlias,
+});
+
+const comparableKafkaIngestLaneValue = (value, path) => {
+  const lane = objectValue(value, path);
+  return {
+    internalTopic: stringValue(lane.internalTopic, `${path}.internalTopic`),
+    lane: stringValue(lane.lane, `${path}.lane`),
+    producedRows: nonNegativeInteger(lane.producedRows, `${path}.producedRows`),
+    region: stringValue(lane.region, `${path}.region`),
+    sourceTopicAlias: stringValue(lane.sourceTopicAlias, `${path}.sourceTopicAlias`),
+  };
+};
+
+const validateRuntimeSummaryIngestCompleteness = (summary, path, mutationCount) => {
+  const health = objectValue(summary.health, `${path}.health`);
+  const engine = objectValue(health.engine, `${path}.health.engine`);
+  const engineTopics = objectValue(engine.topics, `${path}.health.engine.topics`);
+  const kafka = objectValue(health.kafka, `${path}.health.kafka`);
+  const kafkaTopics = objectValue(kafka.topics, `${path}.health.kafka.topics`);
+  const lanes = nonEmptyArrayValue(
+    objectValue(summary.kafka, `${path}.kafka`).ingestLanes,
+    `${path}.kafka.ingestLanes`,
+  ).map((lane, index) => kafkaIngestLaneValue(lane, `${path}.kafka.ingestLanes[${index}]`));
+  const uniqueKeys = new Map();
+  const requireUniqueLaneKey = (key, label, lane) => {
+    const previousLane = uniqueKeys.get(`${label}:${key}`);
+    if (previousLane !== undefined) {
+      throw new Error(
+        `Benchmark artifact field ${path}.kafka.ingestLanes contains duplicate ${label} ${key} in lanes ${previousLane} and ${lane}.`,
+      );
+    }
+    uniqueKeys.set(`${label}:${key}`, lane);
+  };
+
+  let totalProducedRows = 0;
+  for (const lane of lanes) {
+    requireUniqueLaneKey(lane.lane, "lane", lane.lane);
+    requireUniqueLaneKey(lane.internalTopic, "internalTopic", lane.lane);
+    requireUniqueLaneKey(lane.sourceTopicAlias, "sourceTopicAlias", lane.lane);
+    requireUniqueLaneKey(`${lane.sourceTopic}:${lane.region}`, "sourceTopic+region", lane.lane);
+    totalProducedRows += lane.producedRows;
+    const topicHealth = objectValue(
+      engineTopics[lane.internalTopic],
+      `${path}.health.engine.topics.${lane.internalTopic}`,
+    );
+    const rowCount = nonNegativeInteger(
+      topicHealth.rowCount,
+      `${path}.health.engine.topics.${lane.internalTopic}.rowCount`,
+    );
+    if (rowCount !== lane.producedRows) {
+      throw new Error(
+        `Benchmark artifact field ${path}.health.engine.topics.${lane.internalTopic}.rowCount must equal producedRows ${lane.producedRows} for Kafka ingest lane ${lane.lane} but was ${rowCount}.`,
+      );
+    }
+
+    const kafkaTopicHealth = objectValue(
+      kafkaTopics[lane.sourceTopic],
+      `${path}.health.kafka.topics.${lane.sourceTopic}`,
+    );
+    const viewServerTopic = stringValue(
+      kafkaTopicHealth.viewServerTopic,
+      `${path}.health.kafka.topics.${lane.sourceTopic}.viewServerTopic`,
+    );
+    if (viewServerTopic !== lane.internalTopic) {
+      throw new Error(
+        `Benchmark artifact field ${path}.health.kafka.topics.${lane.sourceTopic}.viewServerTopic must equal internalTopic ${lane.internalTopic} for Kafka ingest lane ${lane.lane} but was ${viewServerTopic}.`,
+      );
+    }
+    const committedOffset = nonNegativeIntegerString(
+      objectValue(
+        objectValue(
+          kafkaTopicHealth.regions,
+          `${path}.health.kafka.topics.${lane.sourceTopic}.regions`,
+        )[lane.region],
+        `${path}.health.kafka.topics.${lane.sourceTopic}.regions.${lane.region}`,
+      ).committedOffset,
+      `${path}.health.kafka.topics.${lane.sourceTopic}.regions.${lane.region}.committedOffset`,
+    );
+    if (committedOffset !== lane.producedRows) {
+      throw new Error(
+        `Benchmark artifact field ${path}.health.kafka.topics.${lane.sourceTopic}.regions.${lane.region}.committedOffset must equal producedRows ${lane.producedRows} for Kafka ingest lane ${lane.lane} but was ${committedOffset}.`,
+      );
+    }
+  }
+  if (totalProducedRows !== mutationCount) {
+    throw new Error(
+      `Benchmark artifact field ${path}.kafka.ingestLanes producedRows total must equal mutationCount ${mutationCount} but was ${totalProducedRows}.`,
+    );
+  }
+
+  return lanes.map(comparableKafkaIngestLane);
+};
 
 export const comparableBenchmarksFromVitestOutput = (vitestOutput) =>
   arrayValue(objectValue(vitestOutput, "vitestOutput").files, "vitestOutput.files").flatMap(
@@ -173,7 +310,11 @@ export const readBenchmarkObservation = (task) => {
     totalDelta === undefined
       ? undefined
       : optionalFiniteNumber(totalDelta.rssBytes, `${task.summaryPath}.memory.totalDelta.rssBytes`);
-  if (artifactKind === "engine-benchmark-summary" && rssBytes === undefined) {
+  if (
+    (artifactKind === "engine-benchmark-summary" ||
+      artifactKind === "runtime-benchmark-summary") &&
+    rssBytes === undefined
+  ) {
     throw new Error(
       `Benchmark artifact field ${task.summaryPath}.memory.totalDelta.rssBytes is required for ${artifactKind}.`,
     );
@@ -206,6 +347,14 @@ export const readBenchmarkObservation = (task) => {
     }
   }
 
+  const benchmarkCases = stringArrayValue(summary.benchmarkCases, `${task.summaryPath}.benchmarkCases`);
+  const mutationCount = nonNegativeInteger(summary.mutationCount, `${task.summaryPath}.mutationCount`);
+  const topics = stringArrayValue(summary.topics, `${task.summaryPath}.topics`);
+  const kafkaIngestLanes =
+    artifactKind === "runtime-benchmark-summary"
+      ? validateRuntimeSummaryIngestCompleteness(summary, task.summaryPath, mutationCount)
+      : undefined;
+
   return {
     artifactKind,
     backpressureCount: finiteNumber(
@@ -213,7 +362,7 @@ export const readBenchmarkObservation = (task) => {
       `${task.summaryPath}.backpressureCount`,
     ),
     benchmarks,
-    benchmarkCases: stringArrayValue(summary.benchmarkCases, `${task.summaryPath}.benchmarkCases`),
+    benchmarkCases,
     benchmarkName: stringValue(summary.benchmarkName, `${task.summaryPath}.benchmarkName`),
     benchmarkScope,
     browser: optionalObjectValue(summary.browser, `${task.summaryPath}.browser`),
@@ -226,10 +375,11 @@ export const readBenchmarkObservation = (task) => {
       summary.groupedWriteAdmission,
       `${task.summaryPath}.groupedWriteAdmission`,
     ),
+    kafkaIngestLanes,
     latencySource,
     memoryRssTotalDeltaBytes: rssBytes,
     minimumSampleCount,
-    mutationCount: nonNegativeInteger(summary.mutationCount, `${task.summaryPath}.mutationCount`),
+    mutationCount,
     outputJsonPath: task.outputJsonPath,
     queuedEventCount: finiteNumber(summary.queuedEventCount, `${task.summaryPath}.queuedEventCount`),
     rowCount,
@@ -237,7 +387,7 @@ export const readBenchmarkObservation = (task) => {
     subscriberCount: finiteNumber(summary.subscriberCount, `${task.summaryPath}.subscriberCount`),
     summaryPath: task.summaryPath,
     taskLabel: task.label,
-    topics: stringArrayValue(summary.topics, `${task.summaryPath}.topics`),
+    topics,
   };
 };
 
@@ -324,7 +474,11 @@ const validateTask = (task, path) => {
     task.memoryRssTotalDeltaBytes,
     `${path}.memoryRssTotalDeltaBytes`,
   );
-  if (artifactKind === "engine-benchmark-summary" && memoryRssTotalDeltaBytes === undefined) {
+  if (
+    (artifactKind === "engine-benchmark-summary" ||
+      artifactKind === "runtime-benchmark-summary") &&
+    memoryRssTotalDeltaBytes === undefined
+  ) {
     throw new Error(
       `Benchmark artifact field ${path}.memoryRssTotalDeltaBytes is required for ${artifactKind}.`,
     );
@@ -347,6 +501,9 @@ const validateTask = (task, path) => {
     groupedWriteAdmission: optionalObjectValue(
       task.groupedWriteAdmission,
       `${path}.groupedWriteAdmission`,
+    ),
+    kafkaIngestLanes: optionalArrayValue(task.kafkaIngestLanes, `${path}.kafkaIngestLanes`)?.map(
+      (lane, index) => comparableKafkaIngestLaneValue(lane, `${path}.kafkaIngestLanes[${index}]`),
     ),
     latencySource: stringValue(task.latencySource, `${path}.latencySource`),
     memoryRssTotalDeltaBytes,
@@ -524,13 +681,23 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
       actualTask.benchmarkCases,
     );
     compareExact(regressions, taskLabel, "rowCount", baselineTask.rowCount, actualTask.rowCount);
-    compareMinimumCount(
-      regressions,
-      taskLabel,
-      "mutationCount",
-      baselineTask.mutationCount,
-      actualTask.mutationCount,
-    );
+    if (baselineTask.benchmarkScope === "runtime-kafka-ingest") {
+      compareExact(
+        regressions,
+        taskLabel,
+        "mutationCount",
+        baselineTask.mutationCount,
+        actualTask.mutationCount,
+      );
+    } else {
+      compareMinimumCount(
+        regressions,
+        taskLabel,
+        "mutationCount",
+        baselineTask.mutationCount,
+        actualTask.mutationCount,
+      );
+    }
     compareExact(
       regressions,
       taskLabel,
@@ -547,6 +714,13 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
       actualTask.latencySource,
     );
     compareExactJson(regressions, taskLabel, "browser", baselineTask.browser, actualTask.browser);
+    compareExactJson(
+      regressions,
+      taskLabel,
+      "kafkaIngestLanes",
+      baselineTask.kafkaIngestLanes,
+      actualTask.kafkaIngestLanes,
+    );
     compareExact(
       regressions,
       taskLabel,
