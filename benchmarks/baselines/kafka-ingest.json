@@ -1,0 +1,88 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "kafka-ingest",
+  "tasks": [
+    {
+      "artifactKind": "runtime-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/kafka-ingest.bench.ts > Kafka ingest runtime benchmark: 250 rows per batch",
+          "maxMs": 3406.2726249999996,
+          "meanMs": 1944.4125413333331,
+          "minMs": 71.838708,
+          "name": "json source batch ingest",
+          "p99Ms": 3406.2726249999996,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/kafka-ingest.bench.ts > Kafka ingest runtime benchmark: 250 rows per batch",
+          "maxMs": 2982.8575,
+          "meanMs": 1721.2695416666668,
+          "minMs": 287.6083749999998,
+          "name": "protobuf source batch ingest",
+          "p99Ms": 2982.8575,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/kafka-ingest.bench.ts > Kafka ingest runtime benchmark: 250 rows per batch",
+          "maxMs": 18343.525208,
+          "meanMs": 16875.485707999997,
+          "minMs": 16103.604999999996,
+          "name": "mixed source burst ingest",
+          "p99Ms": 18343.525208,
+          "sampleCount": 3
+        }
+      ],
+      "benchmarkCases": [
+        "json source batch ingest",
+        "protobuf source batch ingest",
+        "mixed source burst ingest"
+      ],
+      "benchmarkName": "Kafka ingest runtime benchmark",
+      "benchmarkScope": "runtime-kafka-ingest",
+      "cleanupLeakCount": 0,
+      "kafkaIngestLanes": [
+        {
+          "internalTopic": "jsonOrders",
+          "lane": "jsonOrders",
+          "producedRows": 3750,
+          "region": "local",
+          "sourceTopicAlias": "unique-topic-per-run:jsonOrders"
+        },
+        {
+          "internalTopic": "protobufOrders",
+          "lane": "protobufOrders",
+          "producedRows": 3750,
+          "region": "local",
+          "sourceTopicAlias": "unique-topic-per-run:protobufOrders"
+        }
+      ],
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 54165504,
+      "minimumSampleCount": 3,
+      "mutationCount": 7500,
+      "outputJsonPath": "packages/runtime/.artifacts/kafka-ingest-250rows.json",
+      "queuedEventCount": 0,
+      "rowCount": 250,
+      "subscriberCount": 0,
+      "summaryPath": "packages/runtime/.artifacts/kafka-ingest-250rows.summary.json",
+      "taskLabel": "Kafka ingest 250 rows",
+      "topics": ["jsonOrders", "protobufOrders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 2000,
+      "maxRatio": 1.5
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 2500,
+      "maxRatio": 1.5
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    }
+  }
+}

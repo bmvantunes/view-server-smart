@@ -9,6 +9,8 @@
     "bench:baseline:grouped-admission:update": "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission --update-baseline",
     "bench:baseline:grouped-order-neutral": "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral",
     "bench:baseline:grouped-order-neutral:update": "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral --update-baseline",
+    "bench:baseline:kafka-ingest": "node scripts/run-benchmark-baseline.mjs --profile=kafka-ingest",
+    "bench:baseline:kafka-ingest:update": "node scripts/run-benchmark-baseline.mjs --profile=kafka-ingest --update-baseline",
     "bench:baseline:release": "node scripts/run-benchmark-baseline.mjs --profile=release --no-compare",
     "bench:baseline:release:update": "node scripts/run-benchmark-baseline.mjs --profile=release --update-baseline",
     "bench:baseline:smoke": "node scripts/run-benchmark-baseline.mjs --profile=smoke",

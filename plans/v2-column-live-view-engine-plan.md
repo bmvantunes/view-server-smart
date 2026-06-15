@@ -1290,6 +1290,7 @@ pnpm run bench:baseline:smoke
 pnpm run bench:baseline
 pnpm run bench:baseline:grouped-admission
 pnpm run bench:baseline:grouped-order-neutral
+pnpm run bench:baseline:kafka-ingest
 pnpm run bench:baseline:release
 ```
 
@@ -1305,19 +1306,66 @@ accepted.
 `bench:baseline:release` is the release-quality serial profile and runs the documented row
 counts/browser profiles in separate processes. It intentionally executes one benchmark process at a
 time so GC, RSS, browser state, and artifact files are not polluted by competing benchmark suites.
-The grouped-admission and grouped-order-neutral profiles are committed comparison profiles. Release
-remains report-only/no-compare by default because it is heavy; use
-`bench:baseline:release:update` only when accepting a release baseline manifest.
+The grouped-admission, grouped-order-neutral, and Kafka-ingest profiles are committed comparison
+profiles. The Kafka-ingest profile starts Apache Kafka from `compose.yaml`, uses
+`@platformatic/kafka`, creates unique source topics per run, and measures JSON/protobuf
+produce-to-health-observed runtime ingest convergence. Release remains report-only/no-compare by default
+because it is heavy; use `bench:baseline:release:update` only when accepting a release baseline
+manifest.
 
 The serial runner is `scripts/run-benchmark-baseline.mjs`. It supports
-`VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|release|grouped-admission|grouped-order-neutral` or
-`--profile=smoke|release|grouped-admission|grouped-order-neutral`; an explicit
+`VIEW_SERVER_BENCH_BASELINE_PROFILE=smoke|kafka-ingest|release|grouped-admission|grouped-order-neutral`
+or `--profile=smoke|kafka-ingest|release|grouped-admission|grouped-order-neutral`; an explicit
 `--profile` argument wins over the environment variable, so the root package scripts always run the
 profile they name. Use the environment variable only when invoking the Node script directly. The
 runner scrubs benchmark-specific environment variables before each child process so stale local
 tuning cannot pollute baseline runs. Pass `--update-baseline` to write
 `benchmarks/baselines/<profile>.json` from the fresh artifacts, or `--no-compare` to run a profile as
 serial benchmarks only.
+
+Current Kafka ingest benchmark harness:
+
+```bash
+pnpm run bench:baseline:kafka-ingest
+pnpm run bench:baseline:kafka-ingest:update
+```
+
+The profile runs `runtime#bench:kafka-ingest` through the serial benchmark runner. It starts the
+Apache Kafka service from `compose.yaml`, which uses tmpfs storage, auto-topic creation, and
+`KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0`. The benchmark still creates unique source topics per run
+so Kafka state cannot bleed across samples.
+
+Kafka ingest benchmark cases:
+
+- JSON source batch ingest: publish one JSON batch, wait until the runtime consumes it and health sees
+  the new rows.
+- Protobuf source batch ingest: publish one protobuf key/value batch generated from Buf schemas, wait
+  until the runtime consumes it and health sees the new rows.
+- Mixed source burst ingest: publish JSON and protobuf bursts concurrently. The committed baseline
+  uses `250` rows per source and a burst multiplier of `4`, which is `2,000` Kafka messages per timed
+  sample. The larger 10k+/sec Kafka firehose profile remains a manual/future benchmark until runtime
+  ingest throughput is optimized enough for a stable baseline gate.
+
+Kafka ingest knobs:
+
+- `VIEW_SERVER_RUNTIME_BENCH_KAFKA_BATCH_SIZE`: per-source sustained batch size.
+- `VIEW_SERVER_RUNTIME_BENCH_KAFKA_BURST_MULTIPLIER`: multiplier for the mixed burst case.
+- `VIEW_SERVER_RUNTIME_BENCH_ITERATIONS`: benchmark iterations per case.
+- `VIEW_SERVER_RUNTIME_BENCH_TIME_MS`: benchmark time budget per case.
+- `VIEW_SERVER_RUNTIME_BENCH_WARMUP_ITERATIONS`: warmup iterations per case.
+- `VIEW_SERVER_RUNTIME_BENCH_WARMUP_TIME_MS`: warmup time budget per case.
+- `VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON`: Vitest timing artifact path.
+
+Kafka ingest artifacts:
+
+- `packages/runtime/.artifacts/kafka-ingest-250rows.json`
+- `packages/runtime/.artifacts/kafka-ingest-250rows.summary.json`
+- `benchmarks/baselines/kafka-ingest.json`
+
+The sidecar summary records runtime health, per-lane Kafka committed offsets, RSS deltas, cleanup
+leaks, queued events, and backpressure counters. It intentionally keeps
+`topics` stable as internal View Server topic names while source Kafka topic names remain unique per
+run.
 
 Current engine raw benchmark harness:
 

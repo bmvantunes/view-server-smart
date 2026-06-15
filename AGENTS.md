@@ -116,6 +116,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Health counters should update cheaply and publish at a bounded cadence.
 - Benchmarks must state whether they are localhost CPU/GC stress, browser stress, network-shaped, or production-like.
 - `pnpm run bench:baseline:smoke` is the smoke performance-regression gate. It must compare fresh Vitest benchmark artifacts against `benchmarks/baselines/smoke.json`; use `pnpm run bench:baseline:smoke:update` only when an accepted performance change intentionally moves the baseline.
+- `pnpm run bench:baseline:kafka-ingest` is the real Kafka ingest smoke gate. It starts Apache Kafka via `compose.yaml`, uses `@platformatic/kafka`, and compares JSON/protobuf ingest plus a 2k-message mixed burst against `benchmarks/baselines/kafka-ingest.json`.
 - Do not run competing benchmark suites in parallel when comparing results.
 
 ## Package And Architecture Rules

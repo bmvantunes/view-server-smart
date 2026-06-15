@@ -9,6 +9,7 @@ import {
   compareBenchmarkBaseline,
   defaultBenchmarkThresholds,
   groupedOrderNeutralBenchmarkThresholds,
+  kafkaIngestBenchmarkThresholds,
   readBenchmarkBaseline,
   readBenchmarkObservation,
   validateBenchmarkBaseline,
@@ -66,6 +67,49 @@ const summary = {
   topics: ["orders"],
 };
 
+const runtimeHealth = {
+  engine: {
+    topics: {
+      orders: {
+        rowCount: 100,
+      },
+    },
+  },
+  kafka: {
+    topics: {
+      sourceOrders: {
+        regions: {
+          local: {
+            committedOffset: "100",
+          },
+        },
+        viewServerTopic: "orders",
+      },
+    },
+  },
+};
+
+const runtimeKafkaIngestLanes = [
+  {
+    internalTopic: "orders",
+    lane: "orders",
+    producedRows: 100,
+    region: "local",
+    sourceTopic: "sourceOrders",
+    sourceTopicAlias: "unique-topic-per-run:orders",
+  },
+];
+
+const comparableRuntimeKafkaIngestLanes = [
+  {
+    internalTopic: "orders",
+    lane: "orders",
+    producedRows: 100,
+    region: "local",
+    sourceTopicAlias: "unique-topic-per-run:orders",
+  },
+];
+
 const observation = {
   artifactKind: "engine-benchmark-summary",
   backpressureCount: 0,
@@ -90,6 +134,7 @@ const observation = {
     configuredMode: "incremental",
     expectedAdmission: "incremental",
   },
+  kafkaIngestLanes: undefined,
   latencySource: "vitest-output-json",
   memoryRssTotalDeltaBytes: 1024,
   minimumSampleCount: 5,
@@ -126,6 +171,17 @@ const browserTaskPaths = (summaryPath: string, outputJsonPath: string) => ({
   summaryPath,
 });
 
+const runtimeTaskPaths = (summaryPath: string, outputJsonPath: string) => ({
+  expectedArtifactKind: "runtime-benchmark-summary",
+  expectedBenchmarkScope: "runtime-kafka-ingest",
+  expectedRowCount: 100,
+  label: "task a",
+  minimumSampleCount: 5,
+  outputJsonPath,
+  packageOutputJsonPath: "actual.json",
+  summaryPath,
+});
+
 describe("benchmark baseline comparison", () => {
   it("extracts comparable benchmark metrics from Vitest output", () => {
     expect(comparableBenchmarksFromVitestOutput(vitestOutput)).toStrictEqual([
@@ -144,13 +200,17 @@ describe("benchmark baseline comparison", () => {
   it("uses profile-specific baseline thresholds", () => {
     expect({
       groupedOrderNeutral: benchmarkThresholdsForProfile("grouped-order-neutral"),
+      kafkaIngest: benchmarkThresholdsForProfile("kafka-ingest"),
       smoke: benchmarkThresholdsForProfile("smoke"),
+      kafkaIngestBaseline: buildBenchmarkBaseline("kafka-ingest", [observation]).thresholds,
       smokeBaseline: buildBenchmarkBaseline("smoke", [observation]).thresholds,
       orderNeutralBaseline: buildBenchmarkBaseline("grouped-order-neutral", [observation])
         .thresholds,
     }).toStrictEqual({
       groupedOrderNeutral: groupedOrderNeutralBenchmarkThresholds,
+      kafkaIngest: kafkaIngestBenchmarkThresholds,
       smoke: defaultBenchmarkThresholds,
+      kafkaIngestBaseline: kafkaIngestBenchmarkThresholds,
       smokeBaseline: defaultBenchmarkThresholds,
       orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
     });
@@ -211,6 +271,440 @@ describe("benchmark baseline comparison", () => {
     });
   });
 
+  it("reads runtime benchmark observations with process memory data", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
+    const summaryPath = join(directory, "actual.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    writeFileSync(
+      summaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
+
+    expect(
+      readBenchmarkObservation(runtimeTaskPaths(summaryPath, outputJsonPath)),
+    ).toStrictEqual({
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeKafkaIngestLanes,
+      outputJsonPath,
+      summaryPath,
+    });
+  });
+
+  it("rejects incomplete runtime benchmark health", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-runtime-health-"));
+    const duplicateLaneSummaryPath = join(directory, "duplicate-lane.summary.json");
+    const malformedOffsetSummaryPath = join(directory, "malformed-offset.summary.json");
+    const mismatchedProducedRowsSummaryPath = join(directory, "mismatched-produced-rows.summary.json");
+    const extraRowsSummaryPath = join(directory, "extra-rows.summary.json");
+    const extraOffsetsSummaryPath = join(directory, "extra-offsets.summary.json");
+    const missingViewServerTopicSummaryPath = join(
+      directory,
+      "missing-view-server-topic.summary.json",
+    );
+    const staleRowsSummaryPath = join(directory, "stale-rows.summary.json");
+    const staleSecondLaneRowsSummaryPath = join(directory, "stale-second-lane-rows.summary.json");
+    const staleOffsetsSummaryPath = join(directory, "stale-offsets.summary.json");
+    const wrongViewServerTopicSummaryPath = join(directory, "wrong-view-server-topic.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    writeFileSync(
+      duplicateLaneSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          engine: {
+            topics: {
+              orders: {
+                rowCount: 100,
+              },
+              trades: {
+                rowCount: 100,
+              },
+            },
+          },
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "100",
+                  },
+                },
+                viewServerTopic: "orders",
+              },
+              sourceTrades: {
+                regions: {
+                  local: {
+                    committedOffset: "100",
+                  },
+                },
+                viewServerTopic: "trades",
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: [
+            {
+              internalTopic: "orders",
+              lane: "orders",
+              producedRows: 100,
+              region: "local",
+              sourceTopic: "sourceOrders",
+              sourceTopicAlias: "unique-topic-per-run:orders",
+            },
+            {
+              internalTopic: "trades",
+              lane: "orders",
+              producedRows: 100,
+              region: "local",
+              sourceTopic: "sourceTrades",
+              sourceTopicAlias: "unique-topic-per-run:trades",
+            },
+          ],
+        },
+        mutationCount: 200,
+        topics: ["orders", "trades"],
+      })}\n`,
+    );
+    writeFileSync(
+      malformedOffsetSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          ...runtimeHealth,
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "not-an-offset",
+                  },
+                },
+                viewServerTopic: "orders",
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      missingViewServerTopicSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          ...runtimeHealth,
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "100",
+                  },
+                },
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      mismatchedProducedRowsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          engine: {
+            topics: {
+              orders: {
+                rowCount: 99,
+              },
+            },
+          },
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "99",
+                  },
+                },
+                viewServerTopic: "orders",
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: [
+            {
+              ...runtimeKafkaIngestLanes[0],
+              producedRows: 99,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      extraRowsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          ...runtimeHealth,
+          engine: {
+            topics: {
+              orders: {
+                rowCount: 101,
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      extraOffsetsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          ...runtimeHealth,
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "101",
+                  },
+                },
+                viewServerTopic: "orders",
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      staleRowsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          ...runtimeHealth,
+          engine: {
+            topics: {
+              orders: {
+                rowCount: 99,
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      staleSecondLaneRowsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          engine: {
+            topics: {
+              orders: {
+                rowCount: 100,
+              },
+              trades: {
+                rowCount: 0,
+              },
+            },
+          },
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "100",
+                  },
+                },
+                viewServerTopic: "orders",
+              },
+              sourceTrades: {
+                regions: {
+                  local: {
+                    committedOffset: "100",
+                  },
+                },
+                viewServerTopic: "trades",
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: [
+            {
+              internalTopic: "orders",
+              lane: "orders",
+              producedRows: 100,
+              region: "local",
+              sourceTopic: "sourceOrders",
+              sourceTopicAlias: "unique-topic-per-run:orders",
+            },
+            {
+              internalTopic: "trades",
+              lane: "trades",
+              producedRows: 100,
+              region: "local",
+              sourceTopic: "sourceTrades",
+              sourceTopicAlias: "unique-topic-per-run:trades",
+            },
+          ],
+        },
+        mutationCount: 200,
+        topics: ["orders", "trades"],
+      })}\n`,
+    );
+    writeFileSync(
+      staleOffsetsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          ...runtimeHealth,
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "99",
+                  },
+                },
+                viewServerTopic: "orders",
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      wrongViewServerTopicSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        health: {
+          ...runtimeHealth,
+          kafka: {
+            topics: {
+              sourceOrders: {
+                regions: {
+                  local: {
+                    committedOffset: "100",
+                  },
+                },
+                viewServerTopic: "trades",
+              },
+            },
+          },
+        },
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
+
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(duplicateLaneSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${duplicateLaneSummaryPath}.kafka.ingestLanes contains duplicate lane orders in lanes orders and orders.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(malformedOffsetSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${malformedOffsetSummaryPath}.health.kafka.topics.sourceOrders.regions.local.committedOffset must be a non-negative integer string.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(missingViewServerTopicSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${missingViewServerTopicSummaryPath}.health.kafka.topics.sourceOrders.viewServerTopic must be a non-empty string.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(mismatchedProducedRowsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${mismatchedProducedRowsSummaryPath}.kafka.ingestLanes producedRows total must equal mutationCount 100 but was 99.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(staleRowsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${staleRowsSummaryPath}.health.engine.topics.orders.rowCount must equal producedRows 100 for Kafka ingest lane orders but was 99.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(extraRowsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${extraRowsSummaryPath}.health.engine.topics.orders.rowCount must equal producedRows 100 for Kafka ingest lane orders but was 101.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(staleSecondLaneRowsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${staleSecondLaneRowsSummaryPath}.health.engine.topics.trades.rowCount must equal producedRows 100 for Kafka ingest lane trades but was 0.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(staleOffsetsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${staleOffsetsSummaryPath}.health.kafka.topics.sourceOrders.regions.local.committedOffset must equal producedRows 100 for Kafka ingest lane orders but was 99.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(wrongViewServerTopicSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${wrongViewServerTopicSummaryPath}.health.kafka.topics.sourceOrders.viewServerTopic must equal internalTopic orders for Kafka ingest lane orders but was trades.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(extraOffsetsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${extraOffsetsSummaryPath}.health.kafka.topics.sourceOrders.regions.local.committedOffset must equal producedRows 100 for Kafka ingest lane orders but was 101.`,
+    );
+  });
+
   it("rejects engine benchmark observations with missing RSS memory data", () => {
     const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
     const summaryPath = join(directory, "actual.summary.json");
@@ -241,7 +735,7 @@ describe("benchmark baseline comparison", () => {
     expect(() =>
       readBenchmarkObservation(taskPaths(summaryPath, outputJsonPath)),
     ).toThrow(
-      `Benchmark artifact field ${summaryPath}.artifactKind must be engine-benchmark-summary or react-browser-benchmark-summary.`,
+      `Benchmark artifact field ${summaryPath}.artifactKind must be engine-benchmark-summary, react-browser-benchmark-summary, or runtime-benchmark-summary.`,
     );
   });
 
@@ -502,6 +996,28 @@ describe("benchmark baseline comparison", () => {
         "task a: unexpected benchmark case src/example.bench.ts > example benchmark group / case b.",
         "task a: missing benchmark case src/example.bench.ts > example benchmark group / case a.",
       ],
+    });
+  });
+
+  it("requires exact Kafka ingest mutation counts", () => {
+    const kafkaObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeKafkaIngestLanes,
+    };
+    const baseline = buildBenchmarkBaseline("kafka-ingest", [kafkaObservation]);
+    const changedMutationCount = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        mutationCount: 99,
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, changedMutationCount)).toStrictEqual({
+      ok: false,
+      regressions: ["task a: mutationCount changed from 100 to 99."],
     });
   });
 
