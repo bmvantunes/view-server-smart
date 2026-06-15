@@ -51,6 +51,7 @@ import {
   recordKafkaAssignments,
   recordKafkaLag,
   recordKafkaStreamError,
+  registerStartedKafkaConsumerResourcesFinalizer,
   registerKafkaConsumerHealthListeners,
   runKafkaMessageStream,
   sourceTopicsForRegion,
@@ -697,6 +698,73 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect("registers started Kafka resource cleanup on scope close", () =>
+    Effect.gen(function* () {
+      let closeForce: boolean | undefined = undefined;
+      let streamCloseCount = 0;
+      const scope = yield* Scope.make();
+      const resources: StartedKafkaConsumerResources = {
+        consumer: {
+          close: (force) => {
+            closeForce = force;
+          },
+        },
+        stream: {
+          close: () => {
+            streamCloseCount += 1;
+          },
+        },
+        healthListeners: () => null,
+      };
+      const closeResources = yield* makeStartedKafkaConsumerResourcesFinalizer(resources);
+
+      yield* registerStartedKafkaConsumerResourcesFinalizer(scope, closeResources);
+      yield* Scope.close(scope, Exit.void);
+
+      expect({
+        closeForce,
+        streamCloseCount,
+      }).toStrictEqual({
+        closeForce: true,
+        streamCloseCount: 1,
+      });
+    }),
+  );
+
+  it.effect("keeps scoped started Kafka resource cleanup idempotent after explicit close", () =>
+    Effect.gen(function* () {
+      let closeForce: boolean | undefined = undefined;
+      let streamCloseCount = 0;
+      const scope = yield* Scope.make();
+      const resources: StartedKafkaConsumerResources = {
+        consumer: {
+          close: (force) => {
+            closeForce = force;
+          },
+        },
+        stream: {
+          close: () => {
+            streamCloseCount += 1;
+          },
+        },
+        healthListeners: () => null,
+      };
+      const closeResources = yield* makeStartedKafkaConsumerResourcesFinalizer(resources);
+
+      yield* registerStartedKafkaConsumerResourcesFinalizer(scope, closeResources);
+      yield* closeResources;
+      yield* Scope.close(scope, Exit.void);
+
+      expect({
+        closeForce,
+        streamCloseCount,
+      }).toStrictEqual({
+        closeForce: true,
+        streamCloseCount: 1,
+      });
+    }),
+  );
+
   it.effect("requests Kafka stream interruption before closing resources", () =>
     Effect.gen(function* () {
       let closeResourcesCount = 0;
@@ -962,13 +1030,17 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         }),
       };
 
+      const successCloseResources =
+        yield* makeStartedKafkaConsumerResourcesFinalizer(successResources);
+      const failedCloseResources =
+        yield* makeStartedKafkaConsumerResourcesFinalizer(failedResources);
       const success = yield* closeKafkaConsumerOnPostConsumeStartupFailure(
-        successResources,
+        successCloseResources,
         Effect.succeed("started"),
       );
       const failedExit = yield* Effect.exit(
         closeKafkaConsumerOnPostConsumeStartupFailure(
-          failedResources,
+          failedCloseResources,
           Effect.fail(kafkaConsumerStartError("local", "post-consume-down")),
         ),
       );
@@ -980,6 +1052,56 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       expect(failedStreamCloseCount).toBe(1);
       expect(failedListenerCloseCount).toBe(1);
       expect(failedCloseForce).toBe(true);
+    }),
+  );
+
+  it.effect("keeps post-consume startup failure cleanup idempotent with scoped cleanup", () =>
+    Effect.gen(function* () {
+      let closeForce: boolean | undefined = undefined;
+      let listenerCloseCount = 0;
+      let streamCloseCount = 0;
+      const scope = yield* Scope.make();
+      const resources: StartedKafkaConsumerResources = {
+        consumer: {
+          close: (force) => {
+            closeForce = force;
+          },
+        },
+        stream: {
+          close: () => {
+            streamCloseCount += 1;
+          },
+        },
+        healthListeners: () => ({
+          close: Effect.sync(() => {
+            listenerCloseCount += 1;
+          }),
+          processed: Effect.succeed(0),
+          waitForProcessed: () => Effect.void,
+        }),
+      };
+      const closeResources = yield* makeStartedKafkaConsumerResourcesFinalizer(resources);
+
+      yield* registerStartedKafkaConsumerResourcesFinalizer(scope, closeResources);
+      const failedExit = yield* Effect.exit(
+        closeKafkaConsumerOnPostConsumeStartupFailure(
+          closeResources,
+          Effect.fail(kafkaConsumerStartError("local", "post-consume-down")),
+        ),
+      );
+      yield* Scope.close(scope, Exit.void);
+
+      expect({
+        closeForce,
+        failed: Exit.isFailure(failedExit),
+        listenerCloseCount,
+        streamCloseCount,
+      }).toStrictEqual({
+        closeForce: true,
+        failed: true,
+        listenerCloseCount: 1,
+        streamCloseCount: 1,
+      });
     }),
   );
 
@@ -3708,6 +3830,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         emptyKafkaOptions,
         ledger,
       );
+      yield* ingress.close;
       yield* ingress.close;
       const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 

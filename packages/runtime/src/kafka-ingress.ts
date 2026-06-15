@@ -496,6 +496,12 @@ export const makeStartedKafkaConsumerResourcesFinalizer = Effect.fn(
   ),
 );
 
+export const registerStartedKafkaConsumerResourcesFinalizer = Effect.fn(
+  "ViewServerRuntime.kafka.consumer.registerStartedResourcesFinalizer",
+)(function* (scope: Scope.Scope, closeResources: Effect.Effect<void, ViewServerKafkaIngressError>) {
+  yield* Scope.addFinalizer(scope, closeResources.pipe(ignoreKafkaStartedResourceCloseFailure));
+});
+
 export const closeStartedKafkaRegionConsumers = Effect.fn(
   "ViewServerRuntime.kafka.regions.closeStartedConsumers",
 )(function* (consumers: ReadonlyArray<StartedKafkaRegionConsumer>) {
@@ -504,11 +510,12 @@ export const closeStartedKafkaRegionConsumers = Effect.fn(
 
 export const closeKafkaConsumerOnPostConsumeStartupFailure = Effect.fn(
   "ViewServerRuntime.kafka.consumer.closeOnPostConsumeStartupFailure",
-)(function* <A, E>(resources: StartedKafkaConsumerResources, startup: Effect.Effect<A, E>) {
+)(function* <A, E>(
+  closeResources: Effect.Effect<void, ViewServerKafkaIngressError>,
+  startup: Effect.Effect<A, E>,
+) {
   return yield* startup.pipe(
-    Effect.onExit((exit) =>
-      Exit.isFailure(exit) ? closeStartedKafkaConsumerResources(resources) : Effect.void,
-    ),
+    Effect.onExit((exit) => (Exit.isFailure(exit) ? closeResources : Effect.void)),
   );
 });
 
@@ -1096,8 +1103,9 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
     stream,
   };
   const closeResources = yield* makeStartedKafkaConsumerResourcesFinalizer(resources);
+  yield* registerStartedKafkaConsumerResourcesFinalizer(scope, closeResources);
   return yield* closeKafkaConsumerOnPostConsumeStartupFailure(
-    resources,
+    closeResources,
     Effect.gen(function* () {
       healthListeners = yield* registerKafkaConsumerHealthListeners(
         consumer,
@@ -1158,6 +1166,37 @@ export const startKafkaRegionConsumers = Effect.fn("ViewServerRuntime.kafka.regi
   },
 );
 
+const makeKafkaIngressClose = (
+  consumers: ReadonlyArray<StartedKafkaRegionConsumer>,
+  scope: Scope.Scope,
+) =>
+  Ref.make(false).pipe(
+    Effect.map((closed) => makeIdempotentKafkaIngressClose(consumers, scope, closed)),
+  );
+
+const makeIdempotentKafkaIngressClose = (
+  consumers: ReadonlyArray<StartedKafkaRegionConsumer>,
+  scope: Scope.Scope,
+  closed: Ref.Ref<boolean>,
+): Effect.Effect<void> => {
+  const closeLock = Semaphore.makeUnsafe(1);
+  return Effect.uninterruptible(
+    closeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const alreadyClosed = yield* Ref.get(closed);
+        if (alreadyClosed) {
+          return;
+        }
+        yield* closeStartedKafkaRegionConsumers(consumers).pipe(
+          ignoreKafkaStartedResourceCloseFailure,
+          Effect.ensuring(Scope.close(scope, Exit.void)),
+        );
+        yield* Ref.set(closed, true);
+      }),
+    ),
+  );
+};
+
 export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntimeTopicDefinitions>(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
@@ -1196,10 +1235,8 @@ export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntime
       );
     },
   ).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)));
+  const close = yield* makeKafkaIngressClose(consumers, scope);
   return {
-    close: closeStartedKafkaRegionConsumers(consumers).pipe(
-      ignoreKafkaStartedResourceCloseFailure,
-      Effect.ensuring(Scope.close(scope, Exit.void)),
-    ),
+    close,
   };
 });
