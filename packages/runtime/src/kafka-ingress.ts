@@ -139,14 +139,10 @@ const ignoreKafkaAsyncIteratorCloseFailure = ignoreLoggedTypedFailuresPreserveNo
 );
 const logKafkaHealthListenerDispatchFailure = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<void, E, R> =>
+): Effect.Effect<void, never, R> =>
   effect.pipe(
     Effect.asVoid,
-    Effect.catchCause((cause) =>
-      Cause.hasInterruptsOnly(cause)
-        ? Effect.failCause(cause)
-        : Effect.logError("Kafka health listener dispatch failed.", cause),
-    ),
+    Effect.catchCause((cause) => Effect.logError("Kafka health listener dispatch failed.", cause)),
   );
 
 const kafkaHeaderIsRepeated = (
@@ -212,6 +208,14 @@ export const assignedPartitionsForSourceTopic = (
   const assignment = assignments?.find((candidate) => candidate.topic === sourceTopic);
   return assignment?.partitions.length ?? 0;
 };
+
+const snapshotKafkaAssignments = (
+  assignments: ReadonlyArray<GroupAssignment> | null | undefined,
+): ReadonlyArray<GroupAssignment> | null | undefined =>
+  assignments?.map((assignment) => ({
+    topic: assignment.topic,
+    partitions: [...assignment.partitions],
+  }));
 
 const consumerLagMessagesFromLag = (lags: ReadonlyArray<bigint>): bigint =>
   lags.reduce((total, lag) => (lag >= 0n ? total + lag : total), 0n);
@@ -908,9 +912,8 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
   topics: ReadonlyArray<string>,
   scope: Scope.Scope,
 ) {
-  const services = yield* Effect.context<never>();
-  const runFork = Effect.runForkWith(services);
   const listenersOpen = MutableRef.make(true);
+  const healthEventQueue = yield* Queue.unbounded<Effect.Effect<void>>();
   const processed = yield* Ref.make<KafkaConsumerHealthListenerProcessedState>({
     count: 0,
     waiters: [],
@@ -967,20 +970,34 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
       yield* Deferred.await(deferred);
     },
   );
-  const runScoped = (effect: Effect.Effect<void>) => {
-    if (listenersOpen.current) {
-      runFork(
+  yield* Effect.forever(
+    Queue.take(healthEventQueue).pipe(
+      Effect.flatMap((effect) =>
         effect.pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.failCause(cause),
+          ),
           logKafkaHealthListenerDispatchFailure,
           Effect.ensuring(markProcessed()),
-          Effect.forkIn(scope, { startImmediately: true }),
-          Effect.asVoid,
         ),
-      );
+      ),
+    ),
+  ).pipe(Effect.forkIn(scope, { startImmediately: true }));
+  yield* Scope.addFinalizer(
+    scope,
+    Effect.gen(function* () {
+      listenersOpen.current = false;
+      yield* Queue.shutdown(healthEventQueue);
+    }),
+  );
+  const enqueueHealthEvent = (effect: Effect.Effect<void>) => {
+    if (listenersOpen.current) {
+      Queue.offerUnsafe(healthEventQueue, effect);
     }
   };
   const groupJoinListener = (payload: ConsumerGroupJoinPayload) => {
-    runScoped(
+    const assignments = snapshotKafkaAssignments(payload.assignments ?? consumer.assignments);
+    enqueueHealthEvent(
       Effect.gen(function* () {
         const nowMillis = yield* Clock.currentTimeMillis;
         yield* recordKafkaAssignments(
@@ -988,14 +1005,14 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
           requestHealthRefresh,
           region,
           topics,
-          payload.assignments ?? consumer.assignments,
+          assignments,
           nowMillis,
         );
       }),
     );
   };
   const lagListener = (lag: Offsets) => {
-    runScoped(
+    enqueueHealthEvent(
       Effect.gen(function* () {
         const nowMillis = yield* Clock.currentTimeMillis;
         yield* recordKafkaLag(health, requestHealthRefresh, region, lag, nowMillis);
@@ -1003,14 +1020,23 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
     );
   };
   const groupLeaveListener = () => {
-    runScoped(
+    enqueueHealthEvent(
       health
         .regionDisconnected(region, "Kafka consumer left group")
         .pipe(Effect.andThen(requestKafkaHealthRefresh(requestHealthRefresh))),
     );
   };
+  const groupRebalanceListener = () => {
+    enqueueHealthEvent(
+      health
+        .regionDisconnected(region, "Kafka consumer group rebalance in progress", {
+          preserveTopicErrors: true,
+        })
+        .pipe(Effect.andThen(requestKafkaHealthRefresh(requestHealthRefresh))),
+    );
+  };
   const lagErrorListener = (error: unknown) => {
-    runScoped(
+    enqueueHealthEvent(
       health
         .regionDegraded(region, messageFromUnknown(error))
         .pipe(Effect.andThen(requestKafkaHealthRefresh(requestHealthRefresh))),
@@ -1018,16 +1044,21 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
   };
   consumer.on("consumer:group:join", groupJoinListener);
   consumer.on("consumer:group:leave", groupLeaveListener);
+  consumer.on("consumer:group:rebalance", groupRebalanceListener);
   consumer.on("consumer:lag", lagListener);
   consumer.on("consumer:lag:error", lagErrorListener);
   const registration: KafkaConsumerHealthListenerRegistration = {
-    close: Effect.sync(() => {
-      listenersOpen.current = false;
-      consumer.off("consumer:group:join", groupJoinListener);
-      consumer.off("consumer:group:leave", groupLeaveListener);
-      consumer.off("consumer:lag", lagListener);
-      consumer.off("consumer:lag:error", lagErrorListener);
-      consumer.stopLagMonitoring();
+    close: Effect.gen(function* () {
+      yield* Effect.sync(() => {
+        listenersOpen.current = false;
+        consumer.off("consumer:group:join", groupJoinListener);
+        consumer.off("consumer:group:leave", groupLeaveListener);
+        consumer.off("consumer:group:rebalance", groupRebalanceListener);
+        consumer.off("consumer:lag", lagListener);
+        consumer.off("consumer:lag:error", lagErrorListener);
+        consumer.stopLagMonitoring();
+      });
+      yield* Queue.shutdown(healthEventQueue);
     }),
     processed: Ref.get(processed).pipe(Effect.map((state) => state.count)),
     waitForProcessed,

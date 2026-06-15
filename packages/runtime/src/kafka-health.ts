@@ -445,7 +445,6 @@ export const makeViewServerKafkaHealthLedger = <
         if (ledger !== undefined && topic !== undefined) {
           ledger.connected = true;
           ledger.assignedPartitions = assignedPartitions;
-          ledger.lastError = null;
           ledger.regionLastError = null;
           refreshTopicStatus(topic);
         }

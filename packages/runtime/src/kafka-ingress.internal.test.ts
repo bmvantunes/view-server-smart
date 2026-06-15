@@ -1463,6 +1463,349 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect(
+    "marks Kafka health disconnected during consumer group rebalance and recovers on join",
+    () =>
+      Effect.gen(function* () {
+        const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+          },
+        });
+        let healthRefreshRequestCount = 0;
+        const requestHealthRefresh = Effect.sync(() => {
+          healthRefreshRequestCount += 1;
+        });
+        const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
+          bootstrapBrokers: ["127.0.0.1:1"],
+          clientId: "view-server-listener-rebalance-test",
+          groupId: "view-server-listener-rebalance-test",
+        });
+        const scope = yield* Scope.make("parallel");
+        yield* ledger.regionConnected("local", 1_000);
+        const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
+          consumer,
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          scope,
+        );
+
+        const connectedWait = yield* listenerRegistration
+          .waitForProcessed(1)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        consumer.emit("consumer:group:join", {
+          groupId: "view-server-listener-rebalance-test",
+          memberId: "member-1",
+          assignments: [{ topic: ordersSourceTopic, partitions: [0, 1] }],
+        });
+        yield* Fiber.join(connectedWait);
+        const connectedHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+        expect(healthRefreshRequestCount).toBe(1);
+        expect({
+          region: connectedHealth.kafka?.regions["local"],
+          topicRegion: connectedHealth.kafka?.topics[ordersSourceTopic]?.regions["local"],
+        }).toStrictEqual({
+          region: {
+            status: "connected",
+            brokers: regions.local,
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+          },
+          topicRegion: {
+            connected: true,
+            assignedPartitions: 2,
+            messagesPerSecond: 0,
+            bytesPerSecond: 0,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 0,
+            mappingFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: null,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: null,
+          },
+        });
+
+        const rebalanceWait = yield* listenerRegistration
+          .waitForProcessed(2)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        consumer.emit("consumer:group:rebalance", {
+          groupId: "view-server-listener-rebalance-test",
+        });
+        yield* Fiber.join(rebalanceWait);
+        const rebalanceHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+        expect(healthRefreshRequestCount).toBe(2);
+        expect({
+          region: rebalanceHealth.kafka?.regions["local"],
+          topicStatus: rebalanceHealth.kafka?.topics[ordersSourceTopic]?.status,
+          topicRegion: rebalanceHealth.kafka?.topics[ordersSourceTopic]?.regions["local"],
+        }).toStrictEqual({
+          region: {
+            status: "disconnected",
+            brokers: regions.local,
+            lastConnectedAt: expect.any(Number),
+            lastError: "Kafka consumer group rebalance in progress",
+          },
+          topicStatus: "degraded",
+          topicRegion: {
+            connected: false,
+            assignedPartitions: 0,
+            messagesPerSecond: 0,
+            bytesPerSecond: 0,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 0,
+            mappingFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: null,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "Kafka consumer group rebalance in progress",
+          },
+        });
+
+        const recoveredWait = yield* listenerRegistration
+          .waitForProcessed(3)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        consumer.emit("consumer:group:join", {
+          groupId: "view-server-listener-rebalance-test",
+          memberId: "member-1",
+          assignments: [{ topic: ordersSourceTopic, partitions: [0] }],
+        });
+        yield* Fiber.join(recoveredWait);
+        const recoveredHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+        expect(healthRefreshRequestCount).toBe(3);
+        expect({
+          region: recoveredHealth.kafka?.regions["local"],
+          topicStatus: recoveredHealth.kafka?.topics[ordersSourceTopic]?.status,
+          topicRegion: recoveredHealth.kafka?.topics[ordersSourceTopic]?.regions["local"],
+        }).toStrictEqual({
+          region: {
+            status: "connected",
+            brokers: regions.local,
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+          },
+          topicStatus: "ready",
+          topicRegion: {
+            connected: true,
+            assignedPartitions: 1,
+            messagesPerSecond: 0,
+            bytesPerSecond: 0,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 0,
+            mappingFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: null,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: null,
+          },
+        });
+
+        yield* listenerRegistration.close;
+        yield* Scope.close(scope, Exit.void);
+        yield* Effect.promise(() => Promise.resolve(consumer.close(true)));
+        yield* runtimeCore.close;
+      }),
+  );
+
+  it.effect("applies back-to-back Kafka rebalance and join health events in emit order", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const delayedDisconnectLedger: ViewServerKafkaHealthLedger<Topics> = {
+        ...ledger,
+        regionDisconnected: (region, message, options) =>
+          Effect.promise(() => Promise.resolve()).pipe(
+            Effect.andThen(ledger.regionDisconnected(region, message, options)),
+          ),
+      };
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+      const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
+        bootstrapBrokers: ["127.0.0.1:1"],
+        clientId: "view-server-listener-rebalance-order-test",
+        groupId: "view-server-listener-rebalance-order-test",
+      });
+      const scope = yield* Scope.make("parallel");
+      yield* ledger.regionConnected("local", 1_000);
+      const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
+        consumer,
+        delayedDisconnectLedger,
+        requestHealthRefresh,
+        "local",
+        [ordersSourceTopic],
+        scope,
+      );
+
+      const connectedWait = yield* listenerRegistration
+        .waitForProcessed(1)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      consumer.emit("consumer:group:join", {
+        groupId: "view-server-listener-rebalance-order-test",
+        memberId: "member-1",
+        assignments: [{ topic: ordersSourceTopic, partitions: [0, 1] }],
+      });
+      yield* Fiber.join(connectedWait);
+
+      const recoveredWait = yield* listenerRegistration
+        .waitForProcessed(3)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      consumer.emit("consumer:group:rebalance", {
+        groupId: "view-server-listener-rebalance-order-test",
+      });
+      consumer.emit("consumer:group:join", {
+        groupId: "view-server-listener-rebalance-order-test",
+        memberId: "member-1",
+        assignments: [{ topic: ordersSourceTopic, partitions: [0] }],
+      });
+      yield* Fiber.join(recoveredWait);
+      const recoveredHealth = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(healthRefreshRequestCount).toBe(3);
+      expect({
+        region: recoveredHealth.kafka?.regions["local"],
+        topicStatus: recoveredHealth.kafka?.topics[ordersSourceTopic]?.status,
+        topicRegion: recoveredHealth.kafka?.topics[ordersSourceTopic]?.regions["local"],
+      }).toStrictEqual({
+        region: {
+          status: "connected",
+          brokers: regions.local,
+          lastConnectedAt: expect.any(Number),
+          lastError: null,
+        },
+        topicStatus: "ready",
+        topicRegion: {
+          connected: true,
+          assignedPartitions: 1,
+          messagesPerSecond: 0,
+          bytesPerSecond: 0,
+          decodedMessagesPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          processingFailuresPerSecond: 0,
+          lastMessageAt: null,
+          lastCommitAt: null,
+          consumerLagMessages: null,
+          lagSampledAt: null,
+          committedOffset: null,
+          lastError: null,
+        },
+      });
+
+      yield* listenerRegistration.close;
+      yield* Scope.close(scope, Exit.void);
+      yield* Effect.promise(() => Promise.resolve(consumer.close(true)));
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("snapshots fallback Kafka assignments when the join event is emitted", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const releaseLagError = yield* Deferred.make<void>();
+      const blockingLedger: ViewServerKafkaHealthLedger<Topics> = {
+        ...ledger,
+        regionDegraded: (region, message) =>
+          Deferred.await(releaseLagError).pipe(
+            Effect.andThen(ledger.regionDegraded(region, message)),
+          ),
+      };
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+      const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
+        bootstrapBrokers: ["127.0.0.1:1"],
+        clientId: "view-server-listener-assignment-snapshot-test",
+        groupId: "view-server-listener-assignment-snapshot-test",
+      });
+      const scope = yield* Scope.make("parallel");
+      yield* ledger.regionConnected("local", 1_000);
+      const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
+        consumer,
+        blockingLedger,
+        requestHealthRefresh,
+        "local",
+        [ordersSourceTopic],
+        scope,
+      );
+
+      consumer.emit("consumer:lag:error", new Error("block join processing"));
+      const processedWait = yield* listenerRegistration
+        .waitForProcessed(2)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      consumer.assignments = [{ topic: ordersSourceTopic, partitions: [0, 1] }];
+      consumer.emit("consumer:group:join", {
+        groupId: "view-server-listener-assignment-snapshot-test",
+        memberId: "member-1",
+      });
+      consumer.assignments = [{ topic: ordersSourceTopic, partitions: [0] }];
+      yield* Deferred.succeed(releaseLagError, undefined);
+      yield* Fiber.join(processedWait);
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(healthRefreshRequestCount).toBe(2);
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]).toStrictEqual({
+        connected: true,
+        assignedPartitions: 2,
+        messagesPerSecond: 0,
+        bytesPerSecond: 0,
+        decodedMessagesPerSecond: 0,
+        decodeFailuresPerSecond: 0,
+        mappingFailuresPerSecond: 0,
+        processingFailuresPerSecond: 0,
+        lastMessageAt: null,
+        lastCommitAt: null,
+        consumerLagMessages: null,
+        lagSampledAt: null,
+        committedOffset: null,
+        lastError: null,
+      });
+
+      yield* listenerRegistration.close;
+      yield* Scope.close(scope, Exit.void);
+      yield* Effect.promise(() => Promise.resolve(consumer.close(true)));
+      yield* runtimeCore.close;
+    }),
+  );
+
   it.effect("logs Kafka listener callback failures after applying ledger updates", () => {
     const { logger, logs } = makeCapturedLogs();
 
@@ -1574,7 +1917,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       });
       const interruptingLedger: ViewServerKafkaHealthLedger<Topics> = {
         ...ledger,
-        topicConnected: () => Effect.interrupt,
+        regionDegraded: () => Effect.interrupt,
       };
       const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
         bootstrapBrokers: ["127.0.0.1:1"],
@@ -1591,9 +1934,10 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         scope,
       );
       const processedWait = yield* listenerRegistration
-        .waitForProcessed(1)
+        .waitForProcessed(2)
         .pipe(Effect.forkChild({ startImmediately: true }));
 
+      consumer.emit("consumer:lag:error", new Error("interrupted lag failure"));
       consumer.emit("consumer:group:join", {
         groupId: "view-server-listener-interrupt-test",
         memberId: "member-1",
@@ -1601,13 +1945,38 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       });
       yield* Fiber.join(processedWait);
       const processed = yield* listenerRegistration.processed;
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
 
       expect({
         logCount: logs.length,
         processed,
+        region: health.kafka?.regions["local"],
+        topicRegion: health.kafka?.topics[ordersSourceTopic]?.regions["local"],
       }).toStrictEqual({
         logCount: 0,
-        processed: 1,
+        processed: 2,
+        region: {
+          status: "connected",
+          brokers: regions.local,
+          lastConnectedAt: expect.any(Number),
+          lastError: null,
+        },
+        topicRegion: {
+          connected: true,
+          assignedPartitions: 1,
+          messagesPerSecond: 0,
+          bytesPerSecond: 0,
+          decodedMessagesPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          processingFailuresPerSecond: 0,
+          lastMessageAt: null,
+          lastCommitAt: null,
+          consumerLagMessages: null,
+          lagSampledAt: null,
+          committedOffset: null,
+          lastError: null,
+        },
       });
 
       yield* listenerRegistration.close;
@@ -1619,6 +1988,54 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       Effect.provideService(References.MinimumLogLevel, "Trace"),
     );
   });
+
+  it.effect("closes Kafka listener scope while a health event is in flight", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const eventStarted = yield* Deferred.make<void>();
+      const blockingLedger: ViewServerKafkaHealthLedger<Topics> = {
+        ...ledger,
+        regionDegraded: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(eventStarted, undefined);
+            return yield* Effect.never;
+          }),
+      };
+      const consumer = new Consumer<Buffer, Buffer, Buffer, Buffer>({
+        bootstrapBrokers: ["127.0.0.1:1"],
+        clientId: "view-server-listener-scope-close-test",
+        groupId: "view-server-listener-scope-close-test",
+      });
+      const scope = yield* Scope.make("parallel");
+      const listenerRegistration = yield* registerKafkaConsumerHealthListeners(
+        consumer,
+        blockingLedger,
+        runtimeCore.requestHealthRefresh,
+        "local",
+        [ordersSourceTopic],
+        scope,
+      );
+
+      consumer.emit("consumer:lag:error", new Error("in-flight scope close"));
+      yield* Deferred.await(eventStarted).pipe(Effect.timeout("1 second"));
+      yield* Scope.close(scope, Exit.void).pipe(Effect.timeout("1 second"));
+      const processed = yield* listenerRegistration.processed;
+
+      expect(processed).toBe(1);
+
+      yield* Effect.promise(() => Promise.resolve(consumer.close(true)));
+      yield* runtimeCore.close;
+    }),
+  );
 
   it.effect("reports Kafka overlay ready and starting runtime statuses", () =>
     Effect.gen(function* () {
@@ -1843,6 +2260,58 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         lagSampledAt: null,
         committedOffset: "1",
         lastError: null,
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("keeps Kafka topic errors across assignment refresh until decoding succeeds", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* ledger.decodeFailed(ordersSourceTopic, "local", {
+        bytes: 5,
+        message: "bad-json",
+        nowMillis: 1_000,
+      });
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 2, 2_000);
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
+
+      expect(health.status).toBe("degraded");
+      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+        status: "degraded",
+        sourceTopic: ordersSourceTopic,
+        viewServerTopic: "orders",
+        regions: nullRecord({
+          local: {
+            connected: true,
+            assignedPartitions: 2,
+            messagesPerSecond: 1,
+            bytesPerSecond: 5,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: 1_000,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "bad-json",
+          },
+        }),
       });
 
       yield* runtimeCore.close;
@@ -3359,6 +3828,9 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         groupId: "view-server-scoped-listener-test",
         memberId: "member-1",
         assignments: [{ topic: ordersSourceTopic, partitions: [0] }],
+      });
+      consumer.emit("consumer:group:rebalance", {
+        groupId: "view-server-scoped-listener-test",
       });
       consumer.emit("consumer:lag:error", new Error("late lag failure"));
       const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
