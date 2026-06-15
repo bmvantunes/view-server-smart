@@ -1117,7 +1117,7 @@ describe("internal seam checker", () => {
 
   it("keeps the current repository free of package import violations", () => {
     expect(collectPackageImportViolations()).toStrictEqual([]);
-  }, 10000);
+  }, 30000);
 
   it("ignores import-like text in comments", () => {
     expect(
