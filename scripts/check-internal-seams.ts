@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1513,6 +1513,235 @@ const approvedPublicViewServerSpecifiers = new Set([
   "@view-server/runtime-core",
   "@view-server/server",
 ]);
+
+type PackageManifestExportTarget = {
+  readonly import?: unknown;
+  readonly types?: unknown;
+};
+
+type PackageManifest = {
+  readonly name?: unknown;
+  readonly exports?: unknown;
+};
+
+const packageManifestPath = (packageName: string): string =>
+  join(repoRoot, "packages", packageName, "package.json");
+
+const parsePackageManifest = (contents: string): PackageManifest => JSON.parse(contents);
+
+const manifestExportObject = (manifest: PackageManifest): object | undefined => {
+  if (typeof manifest.exports !== "object" || manifest.exports === null || Array.isArray(manifest.exports)) {
+    return undefined;
+  }
+  return manifest.exports;
+};
+
+const manifestExportKeys = (manifest: PackageManifest): ReadonlyArray<string> =>
+  Object.keys(manifestExportObject(manifest) ?? {});
+
+const importTargetForExportTarget = (
+  target: unknown,
+):
+  | {
+      readonly _tag: "ExportTarget";
+      readonly importTarget: string | undefined;
+      readonly typesTarget: string | undefined;
+    }
+  | { readonly _tag: "Unsupported" } => {
+  if (typeof target === "string") {
+    return {
+      _tag: "ExportTarget",
+      importTarget: target,
+      typesTarget: undefined,
+    };
+  }
+  if (typeof target !== "object" || target === null || Array.isArray(target)) {
+    return {
+      _tag: "Unsupported",
+    };
+  }
+  const exportTarget: PackageManifestExportTarget = target;
+  return {
+    _tag: "ExportTarget",
+    importTarget: typeof exportTarget.import === "string" ? exportTarget.import : undefined,
+    typesTarget: typeof exportTarget.types === "string" ? exportTarget.types : undefined,
+  };
+};
+
+const exportSpecifierFor = (packageSpecifier: string, exportKey: string): string =>
+  exportKey === "." ? packageSpecifier : `${packageSpecifier}/${exportKey.slice("./".length)}`;
+
+export const packageExportSpecifiersForManifest = (
+  manifestContents: string,
+): ReadonlyArray<string> => {
+  const manifest = parsePackageManifest(manifestContents);
+  const packageSpecifier = manifest.name;
+  if (typeof packageSpecifier !== "string") {
+    return [];
+  }
+  return manifestExportKeys(manifest).map((exportKey) => exportSpecifierFor(packageSpecifier, exportKey));
+};
+
+const distTargetEntrypoint = (target: string, suffix: ".d.ts" | ".js"): string | undefined => {
+  const prefix = "./dist/";
+  if (!target.startsWith(prefix) || !target.endsWith(suffix)) {
+    return undefined;
+  }
+  return target.slice(prefix.length, -suffix.length);
+};
+
+const sourceEntrypointForRelativeDistEntrypoint = (
+  packageName: string,
+  relativeEntrypoint: string,
+): string | undefined => {
+  const sourceBase = join(repoRoot, "packages", packageName, "src", relativeEntrypoint);
+  const tsEntrypoint = `${sourceBase}.ts`;
+  if (existsSync(tsEntrypoint)) {
+    return tsEntrypoint;
+  }
+  const tsxEntrypoint = `${sourceBase}.tsx`;
+  return existsSync(tsxEntrypoint) ? tsxEntrypoint : undefined;
+};
+
+export const packageExportViolationsForManifest = ({
+  manifestContents,
+  packageDirectoryName,
+}: {
+  readonly manifestContents: string;
+  readonly packageDirectoryName: string;
+}): ReadonlyArray<string> => {
+  const manifest = parsePackageManifest(manifestContents);
+  const packageSpecifier =
+    typeof manifest.name === "string" ? manifest.name : `packages/${packageDirectoryName}`;
+  const violations: Array<string> = [];
+
+  for (const [exportKey, target] of Object.entries(manifestExportObject(manifest) ?? {})) {
+    const specifier = exportSpecifierFor(packageSpecifier, exportKey);
+    if (!approvedPublicViewServerSpecifiers.has(specifier)) {
+      violations.push(
+        `packages/${packageDirectoryName}/package.json exports ${specifier}: add intentional public specifier approval or remove the export.`,
+      );
+    }
+    const importTarget = importTargetForExportTarget(target);
+    if (importTarget._tag === "Unsupported") {
+      violations.push(
+        `packages/${packageDirectoryName}/package.json export ${exportKey} has no import target.`,
+      );
+      continue;
+    }
+    if (importTarget.importTarget === undefined) {
+      violations.push(
+        `packages/${packageDirectoryName}/package.json export ${exportKey} has no import target.`,
+      );
+      continue;
+    }
+    if (importTarget.typesTarget === undefined) {
+      violations.push(
+        `packages/${packageDirectoryName}/package.json export ${exportKey} has no types target.`,
+      );
+    }
+    const importEntrypoint = distTargetEntrypoint(importTarget.importTarget, ".js");
+    if (
+      importEntrypoint === undefined ||
+      sourceEntrypointForRelativeDistEntrypoint(packageDirectoryName, importEntrypoint) === undefined
+    ) {
+      violations.push(
+        `packages/${packageDirectoryName}/package.json export ${exportKey} points at ${importTarget.importTarget} without a matching src entrypoint.`,
+      );
+    }
+    if (importTarget.typesTarget !== undefined) {
+      const typesEntrypoint = distTargetEntrypoint(importTarget.typesTarget, ".d.ts");
+      if (
+        typesEntrypoint === undefined ||
+        sourceEntrypointForRelativeDistEntrypoint(packageDirectoryName, typesEntrypoint) === undefined
+      ) {
+        violations.push(
+          `packages/${packageDirectoryName}/package.json export ${exportKey} points at ${importTarget.typesTarget} without a matching src entrypoint.`,
+        );
+      }
+      if (importEntrypoint !== undefined && typesEntrypoint !== undefined && importEntrypoint !== typesEntrypoint) {
+        violations.push(
+          `packages/${packageDirectoryName}/package.json export ${exportKey} types target ${importTarget.typesTarget} does not match import target ${importTarget.importTarget}.`,
+        );
+      }
+    }
+  }
+
+  return violations;
+};
+
+const viewServerPackageDirectories = [
+  "client",
+  "column-live-view-engine",
+  "config",
+  "effect-utils",
+  "in-memory",
+  "protocol",
+  "react",
+  "runtime",
+  "runtime-core",
+  "server",
+] as const;
+
+export const staleApprovedPackageExportViolations = ({
+  approvedSpecifiers,
+  exportedSpecifiers,
+}: {
+  readonly approvedSpecifiers: ReadonlySet<string>;
+  readonly exportedSpecifiers: ReadonlySet<string>;
+}): ReadonlyArray<string> => {
+  const violations: Array<string> = [];
+  for (const approvedSpecifier of approvedSpecifiers) {
+    if (!exportedSpecifiers.has(approvedSpecifier)) {
+      violations.push(
+        `${approvedSpecifier} is approved as public but is not exported by any package.json.`,
+      );
+    }
+  }
+  return violations;
+};
+
+export const collectPackageExportViolations = (): ReadonlyArray<string> => {
+  const violations: Array<string> = [];
+  const exportedSpecifiers = new Set<string>();
+
+  for (const packageDirectoryName of viewServerPackageDirectories) {
+    const manifestContents = readFileSync(packageManifestPath(packageDirectoryName), "utf8");
+    for (const specifier of packageExportSpecifiersForManifest(manifestContents)) {
+      exportedSpecifiers.add(specifier);
+    }
+    violations.push(
+      ...packageExportViolationsForManifest({
+        manifestContents,
+        packageDirectoryName,
+      }),
+    );
+  }
+
+  violations.push(
+    ...staleApprovedPackageExportViolations({
+      approvedSpecifiers: approvedPublicViewServerSpecifiers,
+      exportedSpecifiers,
+    }),
+  );
+
+  return violations;
+};
+
+export const packageExportViolationMessage = (violations: ReadonlyArray<string>): string =>
+  [
+    "Package public export violations found.",
+    ...violations.map((violation) => `- ${violation}`),
+  ].join("\n");
+
+export const assertNoPackageExportViolations = (violations: ReadonlyArray<string>) => {
+  if (violations.length === 0) {
+    return;
+  }
+  throw new Error(packageExportViolationMessage(violations));
+};
+
+assertNoPackageExportViolations(collectPackageExportViolations());
 
 const isInsideDirectory = (parentDirectory: string, childPath: string): boolean => {
   const relativeChildPath = relative(parentDirectory, childPath);

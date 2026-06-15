@@ -11,6 +11,8 @@ declare module "node:fs" {
   ): Array<Dirent>;
 
   export function readFileSync(path: string, encoding: "utf8"): string;
+
+  export function existsSync(path: string): boolean;
 }
 
 declare module "node:path" {

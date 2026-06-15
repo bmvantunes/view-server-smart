@@ -4,16 +4,22 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
   assertNoPackageImportViolations,
+  assertNoPackageExportViolations,
   assertNoEngineSeamViolations,
   collectEngineSeamViolations,
+  collectPackageExportViolations,
   collectPackageImportViolations,
   importSpecifiersFromSource,
+  packageExportSpecifiersForManifest,
+  packageExportViolationMessage,
+  packageExportViolationsForManifest,
   packageImportViolationsFor,
   packageImportViolationsForFile,
   packageImportViolationMessage,
   packageRelativeImportViolationsFor,
   sourceFiles,
   sourceWithoutComments,
+  staleApprovedPackageExportViolations,
   topicStoreHelperViolationMessage,
   topicStoreHelperViolationsForFile,
   topicStoreStateExportViolationMessage,
@@ -1118,6 +1124,280 @@ describe("internal seam checker", () => {
   it("keeps the current repository free of package import violations", () => {
     expect(collectPackageImportViolations()).toStrictEqual([]);
   }, 30000);
+
+  it("collects package export specifiers from package manifests", () => {
+    expect(
+      packageExportSpecifiersForManifest(
+        JSON.stringify({
+          name: "@view-server/example",
+          exports: {
+            ".": {
+              import: "./dist/index.js",
+              types: "./dist/index.d.ts",
+            },
+            "./testing": {
+              import: "./dist/testing.js",
+              types: "./dist/testing.d.ts",
+            },
+          },
+        }),
+      ),
+    ).toStrictEqual(["@view-server/example", "@view-server/example/testing"]);
+  });
+
+  it("ignores manifests without object export maps", () => {
+    expect(
+      packageExportSpecifiersForManifest(
+        JSON.stringify({
+          exports: "./dist/index.js",
+          name: "@view-server/example",
+        }),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("ignores package export specifiers when the manifest has no package name", () => {
+    expect(
+      packageExportSpecifiersForManifest(
+        JSON.stringify({
+          exports: {
+            ".": {
+              import: "./dist/index.js",
+              types: "./dist/index.d.ts",
+            },
+          },
+        }),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("collects package export specifiers from string targets", () => {
+    expect(
+      packageExportSpecifiersForManifest(
+        JSON.stringify({
+          name: "@view-server/example",
+          exports: {
+            ".": "./dist/index.js",
+            "./array": ["./dist/array.js"],
+            "./null": null,
+          },
+        }),
+      ),
+    ).toStrictEqual(["@view-server/example", "@view-server/example/array", "@view-server/example/null"]);
+  });
+
+  it("reports unsupported package export map targets", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./array": ["./dist/array.js"],
+            "./null": null,
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([
+      "packages/react/package.json exports @view-server/react/array: add intentional public specifier approval or remove the export.",
+      "packages/react/package.json export ./array has no import target.",
+      "packages/react/package.json exports @view-server/react/null: add intentional public specifier approval or remove the export.",
+      "packages/react/package.json export ./null has no import target.",
+    ]);
+  });
+
+  it("reports package string exports through the same approval and source checks", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./internal": "./dist/internal.js",
+            "./missing": "./dist/missing.js",
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([
+      "packages/react/package.json exports @view-server/react/internal: add intentional public specifier approval or remove the export.",
+      "packages/react/package.json export ./internal has no types target.",
+      "packages/react/package.json exports @view-server/react/missing: add intentional public specifier approval or remove the export.",
+      "packages/react/package.json export ./missing has no types target.",
+      "packages/react/package.json export ./missing points at ./dist/missing.js without a matching src entrypoint.",
+    ]);
+  });
+
+  it("ignores manifests without supported export maps when checking violations", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: "./dist/index.js",
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("reports package exports that are not approved public specifiers", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./internal": {
+              import: "./dist/internal.js",
+              types: "./dist/internal.d.ts",
+            },
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([
+      "packages/react/package.json exports @view-server/react/internal: add intentional public specifier approval or remove the export.",
+    ]);
+  });
+
+  it("reports package exports from nameless manifests using the package directory label", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          exports: {
+            ".": {
+              import: "./dist/index.js",
+              types: "./dist/index.d.ts",
+            },
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([
+      "packages/react/package.json exports packages/react: add intentional public specifier approval or remove the export.",
+    ]);
+  });
+
+  it("reports package exports without import targets", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./testing": {
+              types: "./dist/testing.d.ts",
+            },
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual(["packages/react/package.json export ./testing has no import target."]);
+  });
+
+  it("reports package exports without types targets", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./testing": {
+              import: "./dist/testing.js",
+            },
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual(["packages/react/package.json export ./testing has no types target."]);
+  });
+
+  it("reports package exports without matching source entrypoints", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./testing": {
+              import: "./dist/missing.js",
+              types: "./dist/missing.d.ts",
+            },
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([
+      "packages/react/package.json export ./testing points at ./dist/missing.js without a matching src entrypoint.",
+      "packages/react/package.json export ./testing points at ./dist/missing.d.ts without a matching src entrypoint.",
+    ]);
+  });
+
+  it("reports package exports with import targets outside dist entrypoints", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./testing": {
+              import: "./generated/testing.js",
+              types: "./generated/testing.d.ts",
+            },
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([
+      "packages/react/package.json export ./testing points at ./generated/testing.js without a matching src entrypoint.",
+      "packages/react/package.json export ./testing points at ./generated/testing.d.ts without a matching src entrypoint.",
+    ]);
+  });
+
+  it("reports package exports with declaration targets that do not match import targets", () => {
+    expect(
+      packageExportViolationsForManifest({
+        manifestContents: JSON.stringify({
+          name: "@view-server/react",
+          exports: {
+            "./testing": {
+              import: "./dist/testing.js",
+              types: "./dist/index.d.ts",
+            },
+          },
+        }),
+        packageDirectoryName: "react",
+      }),
+    ).toStrictEqual([
+      "packages/react/package.json export ./testing types target ./dist/index.d.ts does not match import target ./dist/testing.js.",
+    ]);
+  });
+
+  it("reports stale approved public package export specifiers", () => {
+    expect(
+      staleApprovedPackageExportViolations({
+        approvedSpecifiers: new Set(["@view-server/client", "@view-server/client/missing"]),
+        exportedSpecifiers: new Set(["@view-server/client"]),
+      }),
+    ).toStrictEqual([
+      "@view-server/client/missing is approved as public but is not exported by any package.json.",
+    ]);
+  });
+
+  it("formats and throws package export violation summaries", () => {
+    const violations = [
+      "packages/react/package.json exports @view-server/react/internal: remove it.",
+    ];
+
+    expect(packageExportViolationMessage(violations)).toStrictEqual(
+      [
+        "Package public export violations found.",
+        "- packages/react/package.json exports @view-server/react/internal: remove it.",
+      ].join("\n"),
+    );
+    expect(() => assertNoPackageExportViolations(violations)).toThrowError(
+      "Package public export violations found.",
+    );
+    expect(assertNoPackageExportViolations([])).toStrictEqual(undefined);
+  });
+
+  it("keeps the current repository free of package export violations", () => {
+    expect(collectPackageExportViolations()).toStrictEqual([]);
+  });
 
   it("ignores import-like text in comments", () => {
     expect(
