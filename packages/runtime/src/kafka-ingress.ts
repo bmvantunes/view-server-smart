@@ -76,7 +76,7 @@ export type StartedKafkaConsumerResources = {
 };
 type KafkaMessageBytes = Buffer | null | undefined;
 type KafkaConsumerMessage = Message<KafkaMessageBytes, KafkaMessageBytes, Buffer, Buffer>;
-type KafkaStreamQueueEvent =
+export type KafkaStreamQueueEvent =
   | {
       readonly _tag: "Message";
       readonly message: KafkaConsumerMessage;
@@ -794,6 +794,26 @@ const closeKafkaAsyncIterator = Effect.fn("ViewServerRuntime.kafka.stream.closeI
   },
 );
 
+export const offerKafkaStreamProducerFailure = Effect.fn(
+  "ViewServerRuntime.kafka.stream.offerProducerFailure",
+)(function* (
+  region: string,
+  queue: Queue.Enqueue<KafkaStreamQueueEvent>,
+  cause: Cause.Cause<unknown>,
+) {
+  if (Cause.hasInterruptsOnly(cause)) {
+    return yield* Effect.failCause(cause);
+  }
+  const error = Cause.findErrorOption(cause).pipe(
+    Option.filter((value) => value instanceof ViewServerKafkaIngressError),
+    Option.getOrElse(() => kafkaStreamError(region, Cause.squash(cause))),
+  );
+  yield* Queue.offer(queue, {
+    _tag: "Failed",
+    error,
+  });
+});
+
 const takeKafkaMessageBatch: (
   queue: Queue.Dequeue<KafkaStreamQueueEvent>,
 ) => Effect.Effect<KafkaMessageBatchTakeResult> = Effect.fn(
@@ -861,6 +881,7 @@ export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.r
     Effect.gen(function* () {
       const queue = yield* Queue.bounded<KafkaStreamQueueEvent>(kafkaMessageQueueCapacity);
       yield* produceKafkaStreamQueueEvents(region, stream, queue).pipe(
+        Effect.catchCause((cause) => offerKafkaStreamProducerFailure(region, queue, cause)),
         Effect.forkScoped({ startImmediately: true }),
       );
       while (true) {

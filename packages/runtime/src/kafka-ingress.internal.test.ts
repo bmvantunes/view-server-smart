@@ -18,6 +18,8 @@ import {
   Exit,
   Fiber,
   Logger,
+  Option,
+  Queue,
   References,
   Schema,
   Scope,
@@ -47,6 +49,7 @@ import {
   mapKafkaConsumerStartError,
   mapKafkaStreamError,
   messageFromUnknown,
+  offerKafkaStreamProducerFailure,
   processKafkaMessage,
   recordKafkaAssignments,
   recordKafkaLag,
@@ -60,6 +63,7 @@ import {
 import type {
   StartedKafkaConsumerResources,
   StartedKafkaRegionConsumer,
+  KafkaStreamQueueEvent,
   ViewServerKafkaIngressError,
 } from "./kafka-ingress";
 import type { ResolvedViewServerKafkaRuntimeOptions } from "./runtime-options";
@@ -3036,6 +3040,120 @@ describe("@view-server/runtime Kafka ingress internals", () => {
       });
 
       yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("offers typed Kafka stream producer failures without remapping", () =>
+    Effect.gen(function* () {
+      const queue = yield* Queue.unbounded<KafkaStreamQueueEvent>();
+      const streamError = kafkaStreamError("local", "typed producer failure");
+
+      yield* offerKafkaStreamProducerFailure("local", queue, Cause.fail(streamError));
+      const event = yield* Queue.take(queue);
+
+      expect(event).toStrictEqual({
+        _tag: "Failed",
+        error: streamError,
+      });
+    }),
+  );
+
+  it.effect("does not enqueue Kafka stream producer interrupts as failures", () =>
+    Effect.gen(function* () {
+      const queue = yield* Queue.unbounded<KafkaStreamQueueEvent>();
+
+      const producerExit = yield* Effect.exit(
+        offerKafkaStreamProducerFailure("local", queue, Cause.interrupt()),
+      );
+      const queueEvent = yield* Queue.poll(queue);
+
+      expect({
+        producerInterrupted: Exit.hasInterrupts(producerExit),
+        queueEmpty: Option.isNone(queueEvent),
+      }).toStrictEqual({
+        producerInterrupted: true,
+        queueEmpty: true,
+      });
+    }),
+  );
+
+  it.effect("records Kafka stream producer defects that happen before iterator creation", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      yield* Effect.gen(function* () {
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+          },
+        });
+        yield* ledger.regionConnected("local", 1_000);
+        yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+        const defectiveStream: AsyncIterable<KafkaMessage> = {
+          [Symbol.asyncIterator]: () => {
+            throw new Error("stream-iterator-defect");
+          },
+        };
+
+        const error = yield* Effect.flip(
+          runKafkaMessageStream(
+            viewServer,
+            runtimeCore.client,
+            runtimeCore.requestHealthRefresh,
+            kafkaOptions,
+            ledger,
+            "local",
+            defectiveStream,
+          ).pipe(
+            Effect.timeout("1 second"),
+            Effect.catchTag("TimeoutError", (error) =>
+              Effect.fail(kafkaStreamError("local", error)),
+            ),
+          ),
+        );
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+        expect({
+          error: {
+            message: error.message,
+            region: error.region,
+            sourceTopic: error.sourceTopic,
+          },
+          kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+        }).toStrictEqual({
+          error: {
+            message: "Kafka stream failed for region local",
+            region: "local",
+            sourceTopic: undefined,
+          },
+          kafkaTopic: {
+            status: "degraded",
+            sourceTopic: ordersSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              local: {
+                connected: false,
+                assignedPartitions: 0,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: null,
+                lagSampledAt: null,
+                committedOffset: null,
+                lastError: "Kafka stream failed for region local",
+              },
+            }),
+          },
+        });
+      }).pipe(Effect.ensuring(runtimeCore.close));
     }),
   );
 
