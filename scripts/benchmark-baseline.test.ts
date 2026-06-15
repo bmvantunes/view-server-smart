@@ -10,6 +10,7 @@ import {
   defaultBenchmarkThresholds,
   groupedOrderNeutralBenchmarkThresholds,
   kafkaIngestBenchmarkThresholds,
+  kafkaSustainedFirehoseBenchmarkThresholds,
   readBenchmarkBaseline,
   readBenchmarkObservation,
   validateBenchmarkBaseline,
@@ -201,16 +202,22 @@ describe("benchmark baseline comparison", () => {
     expect({
       groupedOrderNeutral: benchmarkThresholdsForProfile("grouped-order-neutral"),
       kafkaIngest: benchmarkThresholdsForProfile("kafka-ingest"),
+      kafkaSustainedFirehose: benchmarkThresholdsForProfile("kafka-sustained-firehose"),
       smoke: benchmarkThresholdsForProfile("smoke"),
       kafkaIngestBaseline: buildBenchmarkBaseline("kafka-ingest", [observation]).thresholds,
+      kafkaSustainedFirehoseBaseline: buildBenchmarkBaseline("kafka-sustained-firehose", [
+        observation,
+      ]).thresholds,
       smokeBaseline: buildBenchmarkBaseline("smoke", [observation]).thresholds,
       orderNeutralBaseline: buildBenchmarkBaseline("grouped-order-neutral", [observation])
         .thresholds,
     }).toStrictEqual({
       groupedOrderNeutral: groupedOrderNeutralBenchmarkThresholds,
       kafkaIngest: kafkaIngestBenchmarkThresholds,
+      kafkaSustainedFirehose: kafkaSustainedFirehoseBenchmarkThresholds,
       smoke: defaultBenchmarkThresholds,
       kafkaIngestBaseline: kafkaIngestBenchmarkThresholds,
+      kafkaSustainedFirehoseBaseline: kafkaSustainedFirehoseBenchmarkThresholds,
       smokeBaseline: defaultBenchmarkThresholds,
       orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
     });

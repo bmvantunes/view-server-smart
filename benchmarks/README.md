@@ -23,3 +23,16 @@ thresholds intentionally use the wider of the ratio and absolute windows because
 small and noisy; structural metadata, counters, sample counts, and RSS remain strict.
 
 Do not run benchmark profiles in parallel when comparing results.
+
+Kafka runtime profiles are separate from the default smoke gate because they start the Apache Kafka
+container and exercise real `@platformatic/kafka` producers/consumers:
+
+```bash
+pnpm run bench:baseline:kafka-ingest
+pnpm run bench:baseline:kafka-sustained-firehose
+```
+
+`kafka-ingest` measures single JSON/protobuf source batches plus a mixed burst. `kafka-sustained-firehose`
+uses the same Vitest benchmark file in `sustained-firehose` mode and sends repeated mixed producer
+batches before waiting for final View Server convergence. Both profiles require exact Kafka lane
+completeness in their summary artifacts: produced rows, engine rows, and committed offsets must agree.

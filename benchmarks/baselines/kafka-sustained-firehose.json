@@ -1,0 +1,66 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "kafka-sustained-firehose",
+  "tasks": [
+    {
+      "artifactKind": "runtime-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/kafka-ingest.bench.ts > Kafka sustained firehose runtime benchmark: 250 rows per producer batch",
+          "maxMs": 17703.534,
+          "meanMs": 16595.067319666665,
+          "minMs": 15888.604874999997,
+          "name": "sustained mixed firehose ingest",
+          "p99Ms": 17703.534,
+          "sampleCount": 3
+        }
+      ],
+      "benchmarkCases": ["sustained mixed firehose ingest"],
+      "benchmarkName": "Kafka sustained firehose runtime benchmark",
+      "benchmarkScope": "runtime-kafka-sustained-firehose",
+      "cleanupLeakCount": 0,
+      "kafkaIngestLanes": [
+        {
+          "internalTopic": "jsonOrders",
+          "lane": "jsonOrders",
+          "producedRows": 3000,
+          "region": "local",
+          "sourceTopicAlias": "unique-topic-per-run:jsonOrders"
+        },
+        {
+          "internalTopic": "protobufOrders",
+          "lane": "protobufOrders",
+          "producedRows": 3000,
+          "region": "local",
+          "sourceTopicAlias": "unique-topic-per-run:protobufOrders"
+        }
+      ],
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 10731520,
+      "minimumSampleCount": 3,
+      "mutationCount": 6000,
+      "outputJsonPath": "packages/runtime/.artifacts/kafka-sustained-firehose-250rows-4batches.json",
+      "queuedEventCount": 0,
+      "rowCount": 250,
+      "subscriberCount": 0,
+      "summaryPath": "packages/runtime/.artifacts/kafka-sustained-firehose-250rows-4batches.summary.json",
+      "taskLabel": "Kafka sustained firehose 250 rows x 4 batches",
+      "topics": ["jsonOrders", "protobufOrders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 5000,
+      "maxRatio": 1.75
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 6000,
+      "maxRatio": 1.75
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    }
+  }
+}
