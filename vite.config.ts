@@ -9,6 +9,7 @@ export default defineConfig({
         "scripts/benchmark-baseline.mjs",
         "scripts/benchmark-baseline-cli.mjs",
         "scripts/benchmark-baseline-runner.mjs",
+        "scripts/check-internal-seams.ts",
       ],
       reporter: ["text"],
       thresholds: {
