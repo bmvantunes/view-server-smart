@@ -194,6 +194,8 @@ describe("benchmark baseline runner", () => {
       groupedOrderNeutralUpdate: scripts["bench:baseline:grouped-order-neutral:update"],
       kafkaIngest: scripts["bench:baseline:kafka-ingest"],
       kafkaIngestUpdate: scripts["bench:baseline:kafka-ingest:update"],
+      kafkaSustainedFirehose: scripts["bench:baseline:kafka-sustained-firehose"],
+      kafkaSustainedFirehoseUpdate: scripts["bench:baseline:kafka-sustained-firehose:update"],
       release: scripts["bench:baseline:release"],
     }).toStrictEqual({
       groupedAdmission: "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission",
@@ -205,6 +207,10 @@ describe("benchmark baseline runner", () => {
       kafkaIngest: "node scripts/run-benchmark-baseline.mjs --profile=kafka-ingest",
       kafkaIngestUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=kafka-ingest --update-baseline",
+      kafkaSustainedFirehose:
+        "node scripts/run-benchmark-baseline.mjs --profile=kafka-sustained-firehose",
+      kafkaSustainedFirehoseUpdate:
+        "node scripts/run-benchmark-baseline.mjs --profile=kafka-sustained-firehose --update-baseline",
       release: "node scripts/run-benchmark-baseline.mjs --profile=release --no-compare",
     });
   });
@@ -228,6 +234,34 @@ describe("benchmark baseline runner", () => {
         broker: "localhost:9092",
         outputJsonPath: ".artifacts/kafka-ingest-250rows.json",
         rowCount: "250",
+        task: ["run", "--no-cache", "runtime#bench:kafka-ingest"],
+      },
+    ]);
+  });
+
+  it("defines the Kafka sustained firehose runtime benchmark task", () => {
+    const kafkaSustainedFirehoseTasks = profiles.get("kafka-sustained-firehose") ?? [];
+
+    expect(
+      kafkaSustainedFirehoseTasks.map((task) => ({
+        artifactKind: task.expectedArtifactKind,
+        benchmarkMode: task.env["VIEW_SERVER_RUNTIME_BENCH_KAFKA_MODE"],
+        benchmarkScope: task.expectedBenchmarkScope,
+        broker: task.env["VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_RUNTIME_BENCH_KAFKA_BATCH_SIZE"],
+        sustainedBatches: task.env["VIEW_SERVER_RUNTIME_BENCH_KAFKA_SUSTAINED_BATCHES"],
+        task: task.args,
+      })),
+    ).toStrictEqual([
+      {
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkMode: "sustained-firehose",
+        benchmarkScope: "runtime-kafka-sustained-firehose",
+        broker: "localhost:9092",
+        outputJsonPath: ".artifacts/kafka-sustained-firehose-250rows-4batches.json",
+        rowCount: "250",
+        sustainedBatches: "4",
         task: ["run", "--no-cache", "runtime#bench:kafka-ingest"],
       },
     ]);
@@ -1084,7 +1118,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       message:
-        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, grouped-admission, grouped-order-neutral, release",
+        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, grouped-admission, grouped-order-neutral, release",
     });
   });
 

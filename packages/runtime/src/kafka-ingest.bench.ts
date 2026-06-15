@@ -94,11 +94,11 @@ type Topics = typeof viewServer.topics;
 const defaultBatchSize = 1_000;
 const defaultBenchmarkTimeMs = 250;
 const defaultIterations = 3;
+const defaultSustainedBatchCount = 4;
 const defaultWarmupIterations = 0;
 const defaultWarmupTimeMs = 0;
 const kafkaBootstrapServers =
   process.env["VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS"] ?? "localhost:9092";
-const outputJsonPath = benchmarkOutputJsonPath("kafka-ingest-1000rows.json");
 const memoryBefore = memorySnapshot();
 const healthPollSchedule = Schedule.addDelay(Schedule.recurs(2_400), () =>
   Effect.succeed("25 millis"),
@@ -147,6 +147,31 @@ const burstMultiplier = positiveIntegerFromEnv(
   "VIEW_SERVER_RUNTIME_BENCH_KAFKA_BURST_MULTIPLIER",
   4,
 );
+const sustainedBatchCount = positiveIntegerFromEnv(
+  "VIEW_SERVER_RUNTIME_BENCH_KAFKA_SUSTAINED_BATCHES",
+  defaultSustainedBatchCount,
+);
+const benchmarkMode = process.env["VIEW_SERVER_RUNTIME_BENCH_KAFKA_MODE"] ?? "batch";
+if (benchmarkMode !== "batch" && benchmarkMode !== "sustained-firehose") {
+  throw new Error("VIEW_SERVER_RUNTIME_BENCH_KAFKA_MODE must be batch or sustained-firehose.");
+}
+const benchmarkScope =
+  benchmarkMode === "sustained-firehose"
+    ? "runtime-kafka-sustained-firehose"
+    : "runtime-kafka-ingest";
+const benchmarkName =
+  benchmarkMode === "sustained-firehose"
+    ? "Kafka sustained firehose runtime benchmark"
+    : "Kafka ingest runtime benchmark";
+const benchmarkCaseNames =
+  benchmarkMode === "sustained-firehose"
+    ? ["sustained mixed firehose ingest"]
+    : ["json source batch ingest", "protobuf source batch ingest", "mixed source burst ingest"];
+const defaultOutputJsonName =
+  benchmarkMode === "sustained-firehose"
+    ? `kafka-sustained-firehose-${batchSize}rows-${sustainedBatchCount}batches.json`
+    : `kafka-ingest-${batchSize}rows.json`;
+const outputJsonPath = benchmarkOutputJsonPath(defaultOutputJsonName);
 const benchOptions = {
   iterations: positiveIntegerFromEnv("VIEW_SERVER_RUNTIME_BENCH_ITERATIONS", defaultIterations),
   time: positiveIntegerFromEnv("VIEW_SERVER_RUNTIME_BENCH_TIME_MS", defaultBenchmarkTimeMs),
@@ -522,11 +547,36 @@ const backpressureCountFromHealth = (health: ViewServerHealth<Topics>): number =
   return backpressureCount;
 };
 
-const benchmarkCases = [
-  "json source batch ingest",
-  "protobuf source batch ingest",
-  "mixed source burst ingest",
-];
+const publishJsonBatchWithoutWaiting = async (count: number): Promise<void> => {
+  await stringProducer().send({
+    messages: jsonMessages(sourceTopics().jsonOrders, profile.jsonProducedRows, count),
+  });
+  profile.jsonProducedRows += count;
+};
+
+const publishProtobufBatchWithoutWaiting = async (count: number): Promise<void> => {
+  await binaryProducer().send({
+    messages: protobufMessages(sourceTopics().protobufOrders, profile.protobufProducedRows, count),
+  });
+  profile.protobufProducedRows += count;
+};
+
+const publishSustainedMixedFirehose = async (): Promise<void> => {
+  for (let batchIndex = 0; batchIndex < sustainedBatchCount; batchIndex += 1) {
+    const results = await Promise.allSettled([
+      publishJsonBatchWithoutWaiting(batchSize),
+      publishProtobufBatchWithoutWaiting(batchSize),
+    ]);
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        `Kafka ingest benchmark sustained firehose batch ${batchIndex} failed in ${failures.length} lane(s).`,
+      );
+    }
+  }
+  await Effect.runPromise(waitForFinalHealth());
+};
 
 beforeAll(async () => {
   const setup = await Effect.runPromise(setupBenchmark().pipe(Effect.provide(NodeCrypto.layer)));
@@ -566,14 +616,16 @@ afterAll(async () => {
   writeJsonFile(benchmarkSummaryPath(outputJsonPath), {
     artifactKind: "runtime-benchmark-summary",
     backpressureCount,
-    benchmarkCases,
-    benchmarkName: "Kafka ingest runtime benchmark",
-    benchmarkScope: "runtime-kafka-ingest",
+    benchmarkCases: benchmarkCaseNames,
+    benchmarkName,
+    benchmarkScope,
     cleanupLeakCount,
     health,
     kafka: {
       bootstrapServers: kafkaBootstrapServers,
       burstMultiplier,
+      mode: benchmarkMode,
+      sustainedBatchCount,
       ingestLanes: [
         {
           internalTopic: "jsonOrders",
@@ -612,6 +664,7 @@ afterAll(async () => {
     notes: [
       "Latency percentiles are emitted by Vitest in outputJsonPath.",
       "Timed path keeps Kafka producers and View Server runtime alive, then measures producer send through health-observed runtime ingestion convergence.",
+      "Sustained firehose mode sends multiple producer batches before waiting for final runtime convergence.",
       "Kafka source topics are unique per run; artifact topics stay stable as internal View Server topic names for baseline comparison.",
     ],
     queuedEventCount,
@@ -640,8 +693,13 @@ afterAll(async () => {
   }
 }, 0);
 
-describe(`Kafka ingest runtime benchmark: ${batchSize} rows per batch`, () => {
-  const benchmarkDefinitions: ReadonlyArray<BenchmarkCase> = [
+const benchmarkGroupName =
+  benchmarkMode === "sustained-firehose"
+    ? `${benchmarkName}: ${batchSize} rows per producer batch`
+    : `${benchmarkName}: ${batchSize} rows per batch`;
+
+describe(benchmarkGroupName, () => {
+  const batchBenchmarkDefinitions: ReadonlyArray<BenchmarkCase> = [
     {
       name: "json source batch ingest",
       run: async () => {
@@ -662,6 +720,16 @@ describe(`Kafka ingest runtime benchmark: ${batchSize} rows per batch`, () => {
       },
     },
   ];
+  const sustainedBenchmarkDefinitions: ReadonlyArray<BenchmarkCase> = [
+    {
+      name: "sustained mixed firehose ingest",
+      run: publishSustainedMixedFirehose,
+    },
+  ];
+  const benchmarkDefinitions =
+    benchmarkMode === "sustained-firehose"
+      ? sustainedBenchmarkDefinitions
+      : batchBenchmarkDefinitions;
 
   for (const benchmarkCase of benchmarkDefinitions) {
     bench(benchmarkCase.name, benchmarkCase.run, benchOptions);

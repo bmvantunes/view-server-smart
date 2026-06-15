@@ -40,11 +40,25 @@ export const kafkaIngestBenchmarkThresholds = {
   memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
 };
 
+export const kafkaSustainedFirehoseBenchmarkThresholds = {
+  latencyMean: {
+    maxAbsoluteDeltaMs: 5_000,
+    maxRatio: 1.75,
+  },
+  latencyP99: {
+    maxAbsoluteDeltaMs: 6_000,
+    maxRatio: 1.75,
+  },
+  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+};
+
 export const benchmarkThresholdsForProfile = (profile) =>
   profile === "grouped-order-neutral"
     ? groupedOrderNeutralBenchmarkThresholds
     : profile === "kafka-ingest"
       ? kafkaIngestBenchmarkThresholds
+    : profile === "kafka-sustained-firehose"
+      ? kafkaSustainedFirehoseBenchmarkThresholds
     : defaultBenchmarkThresholds;
 
 const readJsonFile = (path) => JSON.parse(readFileSync(path, "utf8"));

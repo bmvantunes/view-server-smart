@@ -408,6 +408,27 @@ const runtimeKafkaIngestTask = (rowCount, env) => {
   });
 };
 
+const runtimeKafkaSustainedFirehoseTask = (rowCount, sustainedBatchCount, env) => {
+  const outputJsonPath = `.artifacts/kafka-sustained-firehose-${rowCount}rows-${sustainedBatchCount}batches.json`;
+  return task({
+    artifactKind: "runtime-benchmark-summary",
+    benchmarkScope: "runtime-kafka-sustained-firehose",
+    env: {
+      VIEW_SERVER_RUNTIME_BENCH_KAFKA_BATCH_SIZE: String(rowCount),
+      VIEW_SERVER_RUNTIME_BENCH_KAFKA_MODE: "sustained-firehose",
+      VIEW_SERVER_RUNTIME_BENCH_KAFKA_SUSTAINED_BATCHES: String(sustainedBatchCount),
+      VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON: outputJsonPath,
+      ...env,
+    },
+    label: `Kafka sustained firehose ${rowCount} rows x ${sustainedBatchCount} batches`,
+    minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"),
+    outputJsonPath,
+    packageDirectory: runtimePackageDirectory,
+    rowCount,
+    vpTask: "runtime#bench:kafka-ingest",
+  });
+};
+
 export const profiles = new Map([
   [
     "smoke",
@@ -466,6 +487,14 @@ export const profiles = new Map([
     [
       runtimeKafkaIngestTask(250, {
         VIEW_SERVER_RUNTIME_BENCH_KAFKA_BURST_MULTIPLIER: "4",
+        ...commonRuntimeKafkaSmokeEnv,
+      }),
+    ],
+  ],
+  [
+    "kafka-sustained-firehose",
+    [
+      runtimeKafkaSustainedFirehoseTask(250, 4, {
         ...commonRuntimeKafkaSmokeEnv,
       }),
     ],
