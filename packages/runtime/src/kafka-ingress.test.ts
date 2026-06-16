@@ -1009,6 +1009,196 @@ describe("@view-server/runtime Kafka ingress", () => {
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
+  it.live("starts Kafka from latest without backfilling old rows", () =>
+    Effect.gen(function* () {
+      const ordersSourceTopic = yield* uniqueTopicName("latest-start-orders");
+      const consumerGroupId = yield* uniqueGroupId();
+      yield* createKafkaTopics(kafkaBootstrapServers, [ordersSourceTopic]);
+
+      const regions = {
+        local: kafkaBootstrapServers,
+      };
+      const localKafkaTopic = viewServer.kafkaTopic<typeof regions>();
+      const runtimeOptions = {
+        host: "127.0.0.1",
+        websocketPort: 0,
+        kafka: {
+          consumerGroupId,
+          regions,
+          startFrom: "latest" as const,
+          topics: {
+            [ordersSourceTopic]: localKafkaTopic({
+              regions: ["local"],
+              value: kafka.json(IncomingOrder),
+              key: kafka.stringKey(),
+              viewServerTopic: "orders",
+              mapping: ({ key, value }) => ({
+                id: key,
+                customerId: value.customerId,
+                price: value.price,
+              }),
+            }),
+          },
+        },
+      };
+
+      yield* sendKafkaMessages(kafkaBootstrapServers, "view-server-kafka-latest-start-test", [
+        {
+          topic: ordersSourceTopic,
+          key: "order-1",
+          value: JSON.stringify({
+            customerId: "customer-1-before-latest-start",
+            price: 10,
+          }),
+        },
+        {
+          topic: ordersSourceTopic,
+          key: "order-2",
+          value: JSON.stringify({
+            customerId: "customer-2-before-latest-start",
+            price: 20,
+          }),
+        },
+      ]);
+
+      const result = yield* Effect.acquireUseRelease(
+        makeViewServerRuntime(viewServer, runtimeOptions),
+        (runtime) =>
+          Effect.gen(function* () {
+            const startHealth = yield* runtime.client.health().pipe(
+              Effect.repeat({
+                schedule: kafkaRestartPollSchedule,
+                until: (currentHealth) =>
+                  currentHealth.engine.topics.orders.rowCount === 0 &&
+                  currentHealth.kafka?.startFrom.mode === "latest" &&
+                  currentHealth.kafka.topics[ordersSourceTopic]?.status === "ready" &&
+                  currentHealth.kafka.topics[ordersSourceTopic]?.regions["local"]
+                    ?.assignedPartitions === 1 &&
+                  currentHealth.kafka.topics[ordersSourceTopic]?.regions["local"]
+                    ?.consumerLagMessages === 0n,
+              }),
+            );
+
+            yield* sendKafkaMessages(kafkaBootstrapServers, "view-server-kafka-latest-start-test", [
+              {
+                topic: ordersSourceTopic,
+                key: "order-3",
+                value: JSON.stringify({
+                  customerId: "customer-3-after-latest-start",
+                  price: 30,
+                }),
+              },
+            ]);
+
+            const snapshot = yield* runtime.client
+              .snapshot("orders", {
+                select: ["id", "customerId", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: kafkaRestartPollSchedule,
+                  until: (currentSnapshot) =>
+                    currentSnapshot.totalRows === 1 &&
+                    currentSnapshot.rows[0]?.customerId === "customer-3-after-latest-start",
+                }),
+              );
+            const finalHealth = yield* runtime.client.health().pipe(
+              Effect.repeat({
+                schedule: kafkaRestartPollSchedule,
+                until: (currentHealth) =>
+                  currentHealth.engine.topics.orders.rowCount === 1 &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.committedOffset === "3" &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.consumerLagMessages === 0n,
+              }),
+            );
+            return {
+              finalHealth,
+              snapshot,
+              startHealth,
+            };
+          }),
+        (runtime) => runtime.close.pipe(Effect.ignore),
+      );
+
+      expect({
+        startHealth: {
+          status: result.startHealth.status,
+          startFrom: result.startHealth.kafka?.startFrom,
+          engineRows: result.startHealth.engine.topics.orders.rowCount,
+          kafkaTopic: result.startHealth.kafka?.topics[ordersSourceTopic],
+        },
+        snapshot: result.snapshot,
+        finalHealth: {
+          status: result.finalHealth.status,
+          startFrom: result.finalHealth.kafka?.startFrom,
+          engineRows: result.finalHealth.engine.topics.orders.rowCount,
+          committedOffset:
+            result.finalHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset,
+        },
+      }).toStrictEqual({
+        startHealth: {
+          status: "ready",
+          startFrom: {
+            consumerGroupId,
+            fallbackMode: "latest",
+            mode: "latest",
+          },
+          engineRows: 0,
+          kafkaTopic: {
+            status: "ready",
+            sourceTopic: ordersSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              local: {
+                connected: true,
+                assignedPartitions: 1,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: 0n,
+                lagSampledAt: expect.any(Number),
+                committedOffset: null,
+                lastError: null,
+              },
+            }),
+          },
+        },
+        snapshot: {
+          status: "ready",
+          statusCode: "Ready",
+          rows: [
+            {
+              id: "order-3",
+              customerId: "customer-3-after-latest-start",
+              price: 30,
+            },
+          ],
+          totalRows: 1,
+          version: expect.any(Number),
+        },
+        finalHealth: {
+          status: "ready",
+          startFrom: {
+            consumerGroupId,
+            fallbackMode: "latest",
+            mode: "latest",
+          },
+          engineRows: 1,
+          committedOffset: "3",
+        },
+      });
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
   it.live("resumes committed Kafka offsets after restart without rebuilding old rows", () =>
     Effect.gen(function* () {
       const ordersSourceTopic = yield* uniqueTopicName("committed-restart-orders");

@@ -83,7 +83,7 @@ export type ViewServerKafkaHealthLedger<Topics extends ViewServerRuntimeTopicDef
     sourceTopic: string,
     region: string,
     input: {
-      readonly consumerLagMessages: bigint;
+      readonly consumerLagMessages: bigint | null;
       readonly nowMillis: number;
     },
   ) => Effect.Effect<void>;

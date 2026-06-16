@@ -217,8 +217,13 @@ const snapshotKafkaAssignments = (
     partitions: [...assignment.partitions],
   }));
 
-const consumerLagMessagesFromLag = (lags: ReadonlyArray<bigint>): bigint =>
-  lags.reduce((total, lag) => (lag >= 0n ? total + lag : total), 0n);
+const consumerLagMessagesFromLag = (lags: ReadonlyArray<bigint>): bigint | null => {
+  const initializedLags = lags.filter((lag) => lag >= 0n);
+  if (initializedLags.length === 0) {
+    return null;
+  }
+  return initializedLags.reduce((total, lag) => total + lag, 0n);
+};
 
 export const kafkaConsumerStartError = (
   region: string,
@@ -360,11 +365,14 @@ export const recordKafkaLag = Effect.fn("ViewServerRuntime.kafka.consumer.record
   yield* health.regionRecovered(region, nowMillis);
   yield* Effect.forEach(
     topics,
-    (sourceTopic) =>
-      health.topicLagSampled(sourceTopic, region, {
-        consumerLagMessages: consumerLagMessagesFromLag(lag.get(sourceTopic) ?? []),
+    (sourceTopic) => {
+      const sourceTopicLag = lag.get(sourceTopic);
+      return health.topicLagSampled(sourceTopic, region, {
+        consumerLagMessages:
+          sourceTopicLag === undefined ? 0n : consumerLagMessagesFromLag(sourceTopicLag),
         nowMillis,
-      }),
+      });
+    },
     { discard: true },
   );
   yield* requestKafkaHealthRefresh(requestHealthRefresh);

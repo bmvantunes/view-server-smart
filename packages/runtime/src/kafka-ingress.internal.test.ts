@@ -1442,6 +1442,75 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect("keeps negative-only Kafka lag samples uninitialized", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      yield* Effect.gen(function* () {
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+          },
+        });
+        let healthRefreshRequestCount = 0;
+        const requestHealthRefresh = Effect.sync(() => {
+          healthRefreshRequestCount += 1;
+        });
+
+        yield* recordKafkaAssignments(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          [{ topic: ordersSourceTopic, partitions: [0] }],
+          1_000,
+        );
+        yield* recordKafkaLag(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          new Map([[ordersSourceTopic, [-1n]]]),
+          2_000,
+        );
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
+
+        expect({
+          healthRefreshRequestCount,
+          orders: health.kafka?.topics[ordersSourceTopic],
+        }).toStrictEqual({
+          healthRefreshRequestCount: 2,
+          orders: {
+            status: "ready",
+            sourceTopic: ordersSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              local: {
+                connected: true,
+                assignedPartitions: 1,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: null,
+                lagSampledAt: 2_000,
+                committedOffset: null,
+                lastError: null,
+              },
+            }),
+          },
+        });
+      }).pipe(Effect.ensuring(runtimeCore.close));
+    }),
+  );
+
   it.effect("resets omitted configured source topics from full Kafka lag snapshots", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
