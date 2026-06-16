@@ -353,15 +353,16 @@ export const recordKafkaLag = Effect.fn("ViewServerRuntime.kafka.consumer.record
   health: ViewServerKafkaHealthLedger<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   region: string,
+  topics: ReadonlyArray<string>,
   lag: Offsets,
   nowMillis: number,
 ) {
   yield* health.regionRecovered(region, nowMillis);
   yield* Effect.forEach(
-    lag,
-    ([sourceTopic, partitions]) =>
+    topics,
+    (sourceTopic) =>
       health.topicLagSampled(sourceTopic, region, {
-        consumerLagMessages: consumerLagMessagesFromLag(partitions),
+        consumerLagMessages: consumerLagMessagesFromLag(lag.get(sourceTopic) ?? []),
         nowMillis,
       }),
     { discard: true },
@@ -1044,7 +1045,7 @@ export const registerKafkaConsumerHealthListeners = Effect.fn(
     enqueueHealthEvent(
       Effect.gen(function* () {
         const nowMillis = yield* Clock.currentTimeMillis;
-        yield* recordKafkaLag(health, requestHealthRefresh, region, lag, nowMillis);
+        yield* recordKafkaLag(health, requestHealthRefresh, region, topics, lag, nowMillis);
       }),
     );
   };
