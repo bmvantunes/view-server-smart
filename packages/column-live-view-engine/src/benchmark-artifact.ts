@@ -91,6 +91,7 @@ export type BenchmarkGroupedKeyWidthParameters = {
 };
 
 export type BenchmarkArtifactInput = {
+  readonly activeViewCountBeforeCleanup?: number;
   readonly artifactKind: "engine-benchmark-summary";
   readonly benchmarkName: string;
   readonly benchmarkScope:
@@ -331,6 +332,7 @@ export const writeBenchmarkArtifact = (input: BenchmarkArtifactInput): void => {
     `${JSON.stringify(
       {
         artifactKind: input.artifactKind,
+        activeViewCountBeforeCleanup: input.activeViewCountBeforeCleanup,
         backpressureCount: input.backpressureCount,
         benchmarkCases: input.benchmarkCases,
         benchmarkName: input.benchmarkName,

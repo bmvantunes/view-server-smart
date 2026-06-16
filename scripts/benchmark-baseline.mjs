@@ -583,6 +583,14 @@ export const readBenchmarkObservation = (task) => {
   }
 
   return {
+    ...(summary.activeViewCountBeforeCleanup === undefined
+      ? {}
+      : {
+          activeViewCountBeforeCleanup: nonNegativeInteger(
+            summary.activeViewCountBeforeCleanup,
+            `${task.summaryPath}.activeViewCountBeforeCleanup`,
+          ),
+        }),
     artifactKind,
     backpressureCount: finiteNumber(
       summary.backpressureCount,
@@ -778,6 +786,14 @@ const validateTask = (task, path) => {
     }
   }
   return {
+    ...(task.activeViewCountBeforeCleanup === undefined
+      ? {}
+      : {
+          activeViewCountBeforeCleanup: nonNegativeInteger(
+            task.activeViewCountBeforeCleanup,
+            `${path}.activeViewCountBeforeCleanup`,
+          ),
+        }),
     artifactKind,
     backpressureCount: finiteNumber(task.backpressureCount, `${path}.backpressureCount`),
     benchmarks,
@@ -1111,6 +1127,15 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
       actualTask.latencySource,
     );
     compareExactJson(regressions, taskLabel, "browser", baselineTask.browser, actualTask.browser);
+    if (baselineTask.activeViewCountBeforeCleanup !== undefined) {
+      compareExact(
+        regressions,
+        taskLabel,
+        "activeViewCountBeforeCleanup",
+        baselineTask.activeViewCountBeforeCleanup,
+        actualTask.activeViewCountBeforeCleanup,
+      );
+    }
     compareExactJson(
       regressions,
       taskLabel,

@@ -1,0 +1,147 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "active-query-sharing",
+  "tasks": [
+    {
+      "activeViewCountBeforeCleanup": 1,
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 10000 rows, 50 subscribers, same-window",
+          "maxMs": 5.539041999999995,
+          "meanMs": 3.458608600000025,
+          "minMs": 2.8460000000000036,
+          "name": "same-window subscribers publish + delta fanout",
+          "p99Ms": 5.539041999999995,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["same-window subscribers publish + delta fanout"],
+      "benchmarkName": "raw live fanout benchmark",
+      "benchmarkScope": "engine-raw-live-fanout",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 58671104,
+      "minimumSampleCount": 5,
+      "mutationCount": 10005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-same-window-10000rows-50subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 10000,
+      "subscriberCount": 50,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-same-window-10000rows-50subs.summary.json",
+      "taskLabel": "raw live fanout same-window 10000 rows 50 subscribers",
+      "topics": ["orders"]
+    },
+    {
+      "activeViewCountBeforeCleanup": 1,
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 10000 rows, 50 subscribers, ten-window",
+          "maxMs": 5.15583300000003,
+          "meanMs": 3.3253333999999994,
+          "minMs": 2.749750000000006,
+          "name": "ten-window subscribers publish + delta fanout",
+          "p99Ms": 5.15583300000003,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["ten-window subscribers publish + delta fanout"],
+      "benchmarkName": "raw live fanout benchmark",
+      "benchmarkScope": "engine-raw-live-fanout",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 63356928,
+      "minimumSampleCount": 5,
+      "mutationCount": 10005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-ten-window-10000rows-50subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 10000,
+      "subscriberCount": 50,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-ten-window-10000rows-50subs.summary.json",
+      "taskLabel": "raw live fanout ten-window 10000 rows 50 subscribers",
+      "topics": ["orders"]
+    },
+    {
+      "activeViewCountBeforeCleanup": 1,
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 10000 rows, 50 subscribers, unique-window",
+          "maxMs": 5.1065830000000005,
+          "meanMs": 3.1498915999999895,
+          "minMs": 2.380625000000009,
+          "name": "unique-window subscribers publish + delta fanout",
+          "p99Ms": 5.1065830000000005,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["unique-window subscribers publish + delta fanout"],
+      "benchmarkName": "raw live fanout benchmark",
+      "benchmarkScope": "engine-raw-live-fanout",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 58228736,
+      "minimumSampleCount": 5,
+      "mutationCount": 10005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-unique-window-10000rows-50subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 10000,
+      "subscriberCount": 50,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-unique-window-10000rows-50subs.summary.json",
+      "taskLabel": "raw live fanout unique-window 10000 rows 50 subscribers",
+      "topics": ["orders"]
+    },
+    {
+      "activeViewCountBeforeCleanup": 50,
+      "artifactKind": "engine-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/raw-live-fanout.bench.ts > raw live fanout benchmark: 10000 rows, 50 subscribers, unique-shape",
+          "maxMs": 5.533041999999966,
+          "meanMs": 3.4699751999999875,
+          "minMs": 2.848124999999982,
+          "name": "unique-shape subscribers publish + delta fanout",
+          "p99Ms": 5.533041999999966,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["unique-shape subscribers publish + delta fanout"],
+      "benchmarkName": "raw live fanout benchmark",
+      "benchmarkScope": "engine-raw-live-fanout",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 61620224,
+      "minimumSampleCount": 5,
+      "mutationCount": 10005,
+      "outputJsonPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-unique-shape-10000rows-50subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 10000,
+      "subscriberCount": 50,
+      "summaryPath": "packages/column-live-view-engine/.artifacts/raw-live-fanout-unique-shape-10000rows-50subs.summary.json",
+      "taskLabel": "raw live fanout unique-shape 10000 rows 50 subscribers",
+      "topics": ["orders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 5,
+      "maxRatio": 8
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 10,
+      "maxRatio": 8
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    },
+    "throughputAggregateRowsPerSecond": {
+      "minRatio": 0.5
+    }
+  }
+}

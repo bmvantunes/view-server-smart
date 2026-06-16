@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "bench:baseline": "pnpm run bench:baseline:smoke",
+    "bench:baseline:active-query-sharing": "node scripts/run-benchmark-baseline.mjs --profile=active-query-sharing",
+    "bench:baseline:active-query-sharing:update": "node scripts/run-benchmark-baseline.mjs --profile=active-query-sharing --update-baseline",
     "bench:baseline:grouped-admission": "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission",
     "bench:baseline:grouped-admission:update": "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission --update-baseline",
     "bench:baseline:grouped-order-neutral": "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral",

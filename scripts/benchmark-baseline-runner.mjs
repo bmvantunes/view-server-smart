@@ -500,6 +500,27 @@ export const profiles = new Map([
     ],
   ],
   [
+    "active-query-sharing",
+    [
+      rawLiveFanoutTask("same-window", 10_000, 50, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "1000",
+        ...commonEngineSmokeEnv,
+      }),
+      rawLiveFanoutTask("ten-window", 10_000, 50, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "1000",
+        ...commonEngineSmokeEnv,
+      }),
+      rawLiveFanoutTask("unique-window", 10_000, 50, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "1000",
+        ...commonEngineSmokeEnv,
+      }),
+      rawLiveFanoutTask("unique-shape", 10_000, 50, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "1000",
+        ...commonEngineSmokeEnv,
+      }),
+    ],
+  ],
+  [
     "grouped-admission",
     [
       groupedWriteTask("incremental", 100_000, groupedAdmissionReleaseEnv),
