@@ -76,6 +76,20 @@ export const kafkaSustainedFirehoseBenchmarkThresholds = {
   ...kafkaReadSnapshotThresholds,
 };
 
+export const websocketFirehoseBenchmarkThresholds = {
+  latencyMean: {
+    maxAbsoluteDeltaMs: 3,
+    maxRatio: 3,
+  },
+  latencyP99: {
+    maxAbsoluteDeltaMs: 4,
+    maxRatio: 3,
+  },
+  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  throughputAggregateRowsPerSecond:
+    defaultBenchmarkThresholds.throughputAggregateRowsPerSecond,
+};
+
 export const benchmarkThresholdsForProfile = (profile) =>
   profile === "grouped-order-neutral"
     ? groupedOrderNeutralBenchmarkThresholds
@@ -83,6 +97,8 @@ export const benchmarkThresholdsForProfile = (profile) =>
       ? kafkaIngestBenchmarkThresholds
     : profile === "kafka-sustained-firehose"
       ? kafkaSustainedFirehoseBenchmarkThresholds
+    : profile === "websocket-firehose"
+      ? websocketFirehoseBenchmarkThresholds
     : defaultBenchmarkThresholds;
 
 const readJsonFile = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -553,7 +569,7 @@ export const readBenchmarkObservation = (task) => {
   const requiresKafkaThroughput =
     artifactKind === "runtime-benchmark-summary" && benchmarkScope.startsWith("runtime-kafka-");
   const kafkaIngestLanes =
-    artifactKind === "runtime-benchmark-summary"
+    requiresKafkaThroughput
       ? validateRuntimeSummaryIngestCompleteness(summary, task.summaryPath, mutationCount)
       : undefined;
   const throughputCases =
@@ -1029,6 +1045,9 @@ const compareThroughputCases = (regressions, taskLabel, threshold, baselineCases
   }
 };
 
+const benchmarkScopeRequiresExactMutationCount = (benchmarkScope) =>
+  benchmarkScope === "runtime-kafka-ingest" || benchmarkScope === "runtime-websocket-firehose";
+
 export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
   const validatedBaseline = validateBenchmarkBaseline(baseline, "baseline");
   const validatedActual = validateBenchmarkBaseline(actualBaseline, "actual");
@@ -1094,7 +1113,7 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
       actualTask.benchmarkCases,
     );
     compareExact(regressions, taskLabel, "rowCount", baselineTask.rowCount, actualTask.rowCount);
-    if (baselineTask.benchmarkScope === "runtime-kafka-ingest") {
+    if (benchmarkScopeRequiresExactMutationCount(baselineTask.benchmarkScope)) {
       compareExact(
         regressions,
         taskLabel,

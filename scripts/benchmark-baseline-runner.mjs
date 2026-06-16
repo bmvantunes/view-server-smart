@@ -429,6 +429,27 @@ const runtimeKafkaSustainedFirehoseTask = (rowCount, sustainedBatchCount, env) =
   });
 };
 
+const runtimeWebSocketFirehoseTask = (firehoseCase, rowCount, subscriberCount, env) => {
+  const outputJsonPath = `.artifacts/websocket-firehose-${firehoseCase}-${rowCount}rows-${subscriberCount}subs.json`;
+  return task({
+    artifactKind: "runtime-benchmark-summary",
+    benchmarkScope: "runtime-websocket-firehose",
+    env: {
+      VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON: outputJsonPath,
+      VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_CASE: firehoseCase,
+      VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_ROWS: String(rowCount),
+      VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_SUBSCRIBERS: String(subscriberCount),
+      ...env,
+    },
+    label: `WebSocket firehose ${firehoseCase} ${rowCount} rows ${subscriberCount} subscribers`,
+    minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"),
+    outputJsonPath,
+    packageDirectory: runtimePackageDirectory,
+    rowCount,
+    vpTask: "runtime#bench:websocket-firehose",
+  });
+};
+
 export const profiles = new Map([
   [
     "smoke",
@@ -496,6 +517,23 @@ export const profiles = new Map([
     [
       runtimeKafkaSustainedFirehoseTask(250, 4, {
         ...commonRuntimeKafkaSmokeEnv,
+      }),
+    ],
+  ],
+  [
+    "websocket-firehose",
+    [
+      runtimeWebSocketFirehoseTask("same-window", 1_000, 10, {
+        VIEW_SERVER_RUNTIME_BENCH_ITERATIONS: "5",
+        VIEW_SERVER_RUNTIME_BENCH_TIME_MS: "1",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_ITERATIONS: "0",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_TIME_MS: "0",
+      }),
+      runtimeWebSocketFirehoseTask("ten-window", 1_000, 10, {
+        VIEW_SERVER_RUNTIME_BENCH_ITERATIONS: "5",
+        VIEW_SERVER_RUNTIME_BENCH_TIME_MS: "1",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_ITERATIONS: "0",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_TIME_MS: "0",
       }),
     ],
   ],

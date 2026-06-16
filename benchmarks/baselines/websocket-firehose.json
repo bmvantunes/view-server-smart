@@ -1,0 +1,83 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "websocket-firehose",
+  "tasks": [
+    {
+      "artifactKind": "runtime-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/websocket-firehose.bench.ts > WebSocket firehose runtime benchmark: same-window, 1000 rows, 10 subscribers",
+          "maxMs": 6.606459000000086,
+          "meanMs": 4.8670918000000025,
+          "minMs": 4.171083999999951,
+          "name": "same-window remote websocket publish + fanout",
+          "p99Ms": 6.606459000000086,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["same-window remote websocket publish + fanout"],
+      "benchmarkName": "WebSocket firehose runtime benchmark",
+      "benchmarkScope": "runtime-websocket-firehose",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 17432576,
+      "minimumSampleCount": 5,
+      "mutationCount": 5,
+      "outputJsonPath": "packages/runtime/.artifacts/websocket-firehose-same-window-1000rows-10subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 10,
+      "summaryPath": "packages/runtime/.artifacts/websocket-firehose-same-window-1000rows-10subs.summary.json",
+      "taskLabel": "WebSocket firehose same-window 1000 rows 10 subscribers",
+      "topics": ["orders"]
+    },
+    {
+      "artifactKind": "runtime-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/websocket-firehose.bench.ts > WebSocket firehose runtime benchmark: ten-window, 1000 rows, 10 subscribers",
+          "maxMs": 6.256665999999996,
+          "meanMs": 4.674825199999987,
+          "minMs": 4.14220899999998,
+          "name": "ten-window remote websocket publish + fanout",
+          "p99Ms": 6.256665999999996,
+          "sampleCount": 5
+        }
+      ],
+      "benchmarkCases": ["ten-window remote websocket publish + fanout"],
+      "benchmarkName": "WebSocket firehose runtime benchmark",
+      "benchmarkScope": "runtime-websocket-firehose",
+      "cleanupLeakCount": 0,
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 16662528,
+      "minimumSampleCount": 5,
+      "mutationCount": 5,
+      "outputJsonPath": "packages/runtime/.artifacts/websocket-firehose-ten-window-1000rows-10subs.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 10,
+      "summaryPath": "packages/runtime/.artifacts/websocket-firehose-ten-window-1000rows-10subs.summary.json",
+      "taskLabel": "WebSocket firehose ten-window 1000 rows 10 subscribers",
+      "topics": ["orders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 3,
+      "maxRatio": 3
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 4,
+      "maxRatio": 3
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    },
+    "throughputAggregateRowsPerSecond": {
+      "minRatio": 0.5
+    }
+  }
+}

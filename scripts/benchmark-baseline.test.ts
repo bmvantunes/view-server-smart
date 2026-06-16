@@ -14,6 +14,7 @@ import {
   readBenchmarkBaseline,
   readBenchmarkObservation,
   validateBenchmarkBaseline,
+  websocketFirehoseBenchmarkThresholds,
   writeBenchmarkBaseline,
 } from "./benchmark-baseline.mjs";
 
@@ -290,11 +291,14 @@ describe("benchmark baseline comparison", () => {
       kafkaIngest: benchmarkThresholdsForProfile("kafka-ingest"),
       kafkaSustainedFirehose: benchmarkThresholdsForProfile("kafka-sustained-firehose"),
       smoke: benchmarkThresholdsForProfile("smoke"),
+      websocketFirehose: benchmarkThresholdsForProfile("websocket-firehose"),
       kafkaIngestBaseline: buildBenchmarkBaseline("kafka-ingest", [observation]).thresholds,
       kafkaSustainedFirehoseBaseline: buildBenchmarkBaseline("kafka-sustained-firehose", [
         observation,
       ]).thresholds,
       smokeBaseline: buildBenchmarkBaseline("smoke", [observation]).thresholds,
+      websocketFirehoseBaseline: buildBenchmarkBaseline("websocket-firehose", [observation])
+        .thresholds,
       orderNeutralBaseline: buildBenchmarkBaseline("grouped-order-neutral", [observation])
         .thresholds,
     }).toStrictEqual({
@@ -302,9 +306,11 @@ describe("benchmark baseline comparison", () => {
       kafkaIngest: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehose: kafkaSustainedFirehoseBenchmarkThresholds,
       smoke: defaultBenchmarkThresholds,
+      websocketFirehose: websocketFirehoseBenchmarkThresholds,
       kafkaIngestBaseline: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehoseBaseline: kafkaSustainedFirehoseBenchmarkThresholds,
       smokeBaseline: defaultBenchmarkThresholds,
+      websocketFirehoseBaseline: websocketFirehoseBenchmarkThresholds,
       orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
     });
   });
@@ -439,6 +445,49 @@ describe("benchmark baseline comparison", () => {
       outputJsonPath,
       summaryPath,
       throughputCases: comparableRuntimeThroughputCases,
+    });
+  });
+
+  it("reads non-Kafka runtime benchmark observations without Kafka health", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
+    const summaryPath = join(directory, "actual.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    writeFileSync(
+      summaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-websocket-firehose",
+        groupedWriteAdmission: undefined,
+        health: {
+          engine: {
+            topics: {
+              orders: {
+                rowCount: 100,
+              },
+            },
+          },
+          transport: {
+            activeClients: 0,
+            activeStreams: 0,
+          },
+        },
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
+
+    expect(
+      readBenchmarkObservation({
+        ...runtimeTaskPaths(summaryPath, outputJsonPath),
+        expectedBenchmarkScope: "runtime-websocket-firehose",
+      }),
+    ).toStrictEqual({
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-websocket-firehose",
+      groupedWriteAdmission: undefined,
+      outputJsonPath,
+      summaryPath,
     });
   });
 
@@ -1807,6 +1856,28 @@ describe("benchmark baseline comparison", () => {
         "task a: case a throughput producedRowsPerSample changed from 100 to 200.",
         "task a: case a throughput totalProducedRows changed from 700 to 1400.",
       ],
+    });
+  });
+
+  it("requires exact WebSocket firehose mutation counts", () => {
+    const websocketObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-websocket-firehose",
+      groupedWriteAdmission: undefined,
+      mutationCount: 5,
+    };
+    const baseline = buildBenchmarkBaseline("websocket-firehose", [websocketObservation]);
+    const increasedMutationCount = buildBenchmarkBaseline("websocket-firehose", [
+      {
+        ...websocketObservation,
+        mutationCount: 10,
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, increasedMutationCount)).toStrictEqual({
+      ok: false,
+      regressions: ["task a: mutationCount changed from 5 to 10."],
     });
   });
 

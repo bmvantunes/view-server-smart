@@ -203,6 +203,8 @@ describe("benchmark baseline runner", () => {
       kafkaSustainedFirehose: scripts["bench:baseline:kafka-sustained-firehose"],
       kafkaSustainedFirehoseUpdate: scripts["bench:baseline:kafka-sustained-firehose:update"],
       release: scripts["bench:baseline:release"],
+      webSocketFirehose: scripts["bench:baseline:websocket-firehose"],
+      webSocketFirehoseUpdate: scripts["bench:baseline:websocket-firehose:update"],
     }).toStrictEqual({
       activeQuerySharing:
         "node scripts/run-benchmark-baseline.mjs --profile=active-query-sharing",
@@ -222,6 +224,9 @@ describe("benchmark baseline runner", () => {
       kafkaSustainedFirehoseUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=kafka-sustained-firehose --update-baseline",
       release: "node scripts/run-benchmark-baseline.mjs --profile=release --no-compare",
+      webSocketFirehose: "node scripts/run-benchmark-baseline.mjs --profile=websocket-firehose",
+      webSocketFirehoseUpdate:
+        "node scripts/run-benchmark-baseline.mjs --profile=websocket-firehose --update-baseline",
     });
   });
 
@@ -336,6 +341,47 @@ describe("benchmark baseline runner", () => {
         rowCount: "250",
         sustainedBatches: "4",
         task: ["run", "--no-cache", "runtime#bench:kafka-ingest"],
+      },
+    ]);
+  });
+
+  it("defines the WebSocket firehose runtime benchmark tasks", () => {
+    const webSocketFirehoseTasks = profiles.get("websocket-firehose") ?? [];
+
+    expect(
+      webSocketFirehoseTasks.map((task) => ({
+        artifactKind: task.expectedArtifactKind,
+        benchmarkCase: task.env["VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_CASE"],
+        benchmarkScope: task.expectedBenchmarkScope,
+        iterations: task.env["VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_ROWS"],
+        subscriberCount: task.env["VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_SUBSCRIBERS"],
+        task: task.args,
+        timeMs: task.env["VIEW_SERVER_RUNTIME_BENCH_TIME_MS"],
+      })),
+    ).toStrictEqual([
+      {
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkCase: "same-window",
+        benchmarkScope: "runtime-websocket-firehose",
+        iterations: "5",
+        outputJsonPath: ".artifacts/websocket-firehose-same-window-1000rows-10subs.json",
+        rowCount: "1000",
+        subscriberCount: "10",
+        task: ["run", "--no-cache", "runtime#bench:websocket-firehose"],
+        timeMs: "1",
+      },
+      {
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkCase: "ten-window",
+        benchmarkScope: "runtime-websocket-firehose",
+        iterations: "5",
+        outputJsonPath: ".artifacts/websocket-firehose-ten-window-1000rows-10subs.json",
+        rowCount: "1000",
+        subscriberCount: "10",
+        task: ["run", "--no-cache", "runtime#bench:websocket-firehose"],
+        timeMs: "1",
       },
     ]);
   });
@@ -1166,7 +1212,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       message:
-        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, active-query-sharing, grouped-admission, grouped-order-neutral, release",
+        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, websocket-firehose, active-query-sharing, grouped-admission, grouped-order-neutral, release",
     });
   });
 

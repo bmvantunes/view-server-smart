@@ -40,6 +40,25 @@ This profile runs `raw-live-fanout` across same-window, ten-window, unique-windo
 subscription sets. It exists to catch duplicated materialization/fanout regressions separately from
 the broader smoke gate while still using Vitest benchmark output and committed baselines.
 
+WebSocket firehose smoke has a focused runtime transport gate:
+
+```bash
+pnpm run bench:baseline:websocket-firehose
+```
+
+Refresh it only when a WebSocket transport performance change is intentionally accepted:
+
+```bash
+pnpm run bench:baseline:websocket-firehose:update
+```
+
+This profile starts a real runtime WebSocket server, connects the remote client over Effect RPC
+WebSocket + NDJSON, publishes through the runtime mutation client, and waits for subscription deltas
+over the wire with bounded stream reads. It currently covers small same-window hot fanout and
+ten-window fanout without starting Kafka. It is a deterministic smoke transport gate; larger
+50-browser/product-distributed WebSocket firehose profiles belong in a separate manual or release
+gate once their local-noise characteristics are stable enough to baseline.
+
 Kafka runtime profiles are separate from the default smoke gate because they start the Apache Kafka
 container and exercise real `@platformatic/kafka` producers/consumers:
 
