@@ -747,4 +747,262 @@ describe("@view-server/runtime Kafka ingress", () => {
       );
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
+
+  it.live("replays Kafka from earliest after restart and upserts duplicate row ids", () =>
+    Effect.gen(function* () {
+      const ordersSourceTopic = yield* uniqueTopicName("restart-orders");
+      const consumerGroupId = yield* uniqueGroupId();
+      yield* createKafkaTopics(kafkaBootstrapServers, [ordersSourceTopic]);
+
+      const regions = {
+        local: kafkaBootstrapServers,
+      };
+      const localKafkaTopic = viewServer.kafkaTopic<typeof regions>();
+      const runtimeOptions = (consumerGroupId: string) => ({
+        host: "127.0.0.1",
+        websocketPort: 0,
+        kafka: {
+          consumerGroupId,
+          startFrom: "earliest" as const,
+          regions,
+          topics: {
+            [ordersSourceTopic]: localKafkaTopic({
+              regions: ["local"],
+              value: kafka.json(IncomingOrder),
+              key: kafka.stringKey(),
+              viewServerTopic: "orders",
+              mapping: ({ key, value }) => ({
+                id: key,
+                customerId: value.customerId,
+                price: value.price,
+              }),
+            }),
+          },
+        },
+      });
+
+      yield* sendKafkaMessages(kafkaBootstrapServers, "view-server-kafka-restart-test", [
+        {
+          topic: ordersSourceTopic,
+          key: "order-0",
+          value: JSON.stringify({
+            customerId: "customer-0-earliest-sentinel",
+            price: 1,
+          }),
+        },
+        {
+          topic: ordersSourceTopic,
+          key: "order-1",
+          value: JSON.stringify({
+            customerId: "customer-1-initial",
+            price: 10,
+          }),
+        },
+        {
+          topic: ordersSourceTopic,
+          key: "order-1",
+          value: JSON.stringify({
+            customerId: "customer-1-replayed-update",
+            price: 99,
+          }),
+        },
+        {
+          topic: ordersSourceTopic,
+          key: "order-2",
+          value: JSON.stringify({
+            customerId: "customer-2",
+            price: 20,
+          }),
+        },
+      ]);
+
+      const firstResult = yield* Effect.acquireUseRelease(
+        makeViewServerRuntime(viewServer, runtimeOptions(consumerGroupId)),
+        (runtime) =>
+          Effect.gen(function* () {
+            const firstSnapshot = yield* runtime.client
+              .snapshot("orders", {
+                select: ["id", "customerId", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: healthPollSchedule,
+                  until: (snapshot) =>
+                    snapshot.totalRows === 3 &&
+                    snapshot.rows[0]?.customerId === "customer-0-earliest-sentinel" &&
+                    snapshot.rows[1]?.customerId === "customer-1-replayed-update",
+                }),
+              );
+            const firstHealth = yield* runtime.client.health().pipe(
+              Effect.repeat({
+                schedule: healthPollSchedule,
+                until: (currentHealth) =>
+                  currentHealth.engine.topics.orders.rowCount === 3 &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.committedOffset === "4" &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.consumerLagMessages === 0n,
+              }),
+            );
+            return {
+              firstSnapshot,
+              firstHealth,
+            };
+          }),
+        (runtime) => runtime.close.pipe(Effect.ignore),
+      );
+
+      const replayResult = yield* Effect.acquireUseRelease(
+        makeViewServerRuntime(viewServer, runtimeOptions(consumerGroupId)),
+        (runtime) =>
+          Effect.gen(function* () {
+            const replaySnapshot = yield* runtime.client
+              .snapshot("orders", {
+                select: ["id", "customerId", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: healthPollSchedule,
+                  until: (snapshot) =>
+                    snapshot.totalRows === 3 &&
+                    snapshot.rows[0]?.customerId === "customer-0-earliest-sentinel" &&
+                    snapshot.rows[1]?.customerId === "customer-1-replayed-update",
+                }),
+              );
+            const replayHealth = yield* runtime.client.health().pipe(
+              Effect.repeat({
+                schedule: healthPollSchedule,
+                until: (currentHealth) =>
+                  currentHealth.engine.topics.orders.rowCount === 3 &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.status === "ready" &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.committedOffset === "4" &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.consumerLagMessages === 0n,
+              }),
+            );
+            return {
+              replaySnapshot,
+              replayHealth,
+            };
+          }),
+        (runtime) => runtime.close.pipe(Effect.ignore),
+      );
+
+      expect({
+        firstSnapshot: firstResult.firstSnapshot,
+        firstHealth: {
+          status: firstResult.firstHealth.status,
+          engineRows: firstResult.firstHealth.engine.topics.orders.rowCount,
+          committedOffset:
+            firstResult.firstHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+              ?.committedOffset,
+        },
+        replaySnapshot: replayResult.replaySnapshot,
+        replayHealth: {
+          status: replayResult.replayHealth.status,
+          startFrom: replayResult.replayHealth.kafka?.startFrom,
+          kafkaRegions: replayResult.replayHealth.kafka?.regions,
+          engineRows: replayResult.replayHealth.engine.topics.orders.rowCount,
+          kafkaTopic: replayResult.replayHealth.kafka?.topics[ordersSourceTopic],
+        },
+      }).toStrictEqual({
+        firstSnapshot: {
+          status: "ready",
+          statusCode: "Ready",
+          rows: [
+            {
+              id: "order-0",
+              customerId: "customer-0-earliest-sentinel",
+              price: 1,
+            },
+            {
+              id: "order-1",
+              customerId: "customer-1-replayed-update",
+              price: 99,
+            },
+            {
+              id: "order-2",
+              customerId: "customer-2",
+              price: 20,
+            },
+          ],
+          totalRows: 3,
+          version: expect.any(Number),
+        },
+        firstHealth: {
+          status: "ready",
+          engineRows: 3,
+          committedOffset: "4",
+        },
+        replaySnapshot: {
+          status: "ready",
+          statusCode: "Ready",
+          rows: [
+            {
+              id: "order-0",
+              customerId: "customer-0-earliest-sentinel",
+              price: 1,
+            },
+            {
+              id: "order-1",
+              customerId: "customer-1-replayed-update",
+              price: 99,
+            },
+            {
+              id: "order-2",
+              customerId: "customer-2",
+              price: 20,
+            },
+          ],
+          totalRows: 3,
+          version: expect.any(Number),
+        },
+        replayHealth: {
+          status: "ready",
+          startFrom: {
+            consumerGroupId,
+            fallbackMode: "earliest",
+            mode: "earliest",
+          },
+          kafkaRegions: nullRecord({
+            local: {
+              status: "connected",
+              brokers: kafkaBootstrapServers,
+              lastConnectedAt: expect.any(Number),
+              lastError: null,
+            },
+          }),
+          engineRows: 3,
+          kafkaTopic: {
+            status: "ready",
+            sourceTopic: ordersSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              local: {
+                connected: true,
+                assignedPartitions: 1,
+                messagesPerSecond: expect.any(Number),
+                bytesPerSecond: expect.any(Number),
+                decodedMessagesPerSecond: expect.any(Number),
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: expect.any(Number),
+                lastCommitAt: expect.any(Number),
+                consumerLagMessages: 0n,
+                lagSampledAt: expect.any(Number),
+                committedOffset: "4",
+                lastError: null,
+              },
+            }),
+          },
+        },
+      });
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
 });
