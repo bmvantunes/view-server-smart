@@ -131,6 +131,7 @@ const regions = {
 };
 const localKafkaTopic = viewServer.kafkaTopic<typeof regions>();
 const ordersSourceTopic = "orders-source";
+const paymentsSourceTopic = "payments-source";
 const unknownSourceTopic = "unknown-source";
 const nonStringTagCodecError: { readonly _tag: 123; readonly message: "non-string tag" } = {
   _tag: 123,
@@ -1306,49 +1307,236 @@ describe("@view-server/runtime Kafka ingress internals", () => {
   it.effect("records Kafka assignments and lag samples", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
-      const ledger = makeViewServerKafkaHealthLedger<Topics>({
-        regions: kafkaOptions.regions,
-        topics: {
-          [ordersSourceTopic]: {
-            regions: ["local"],
-            viewServerTopic: "orders",
+      yield* Effect.gen(function* () {
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
           },
-        },
-      });
-      let healthRefreshRequestCount = 0;
-      const requestHealthRefresh = Effect.sync(() => {
-        healthRefreshRequestCount += 1;
-      });
-      yield* ledger.regionConnected("local", 1_000);
-      yield* recordKafkaAssignments(
-        ledger,
-        requestHealthRefresh,
-        "local",
-        [ordersSourceTopic],
-        [{ topic: ordersSourceTopic, partitions: [0, 1] }],
-        1_000,
-      );
-      yield* recordKafkaLag(
-        ledger,
-        requestHealthRefresh,
-        "local",
-        new Map([
-          [ordersSourceTopic, [3n, -1n, 2n]],
-          [unknownSourceTopic, [99n]],
-        ]),
-        2_000,
-      );
-      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
+        });
+        let healthRefreshRequestCount = 0;
+        const requestHealthRefresh = Effect.sync(() => {
+          healthRefreshRequestCount += 1;
+        });
+        yield* ledger.regionConnected("local", 1_000);
+        yield* recordKafkaAssignments(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          [{ topic: ordersSourceTopic, partitions: [0, 1] }],
+          1_000,
+        );
+        yield* recordKafkaLag(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic, unknownSourceTopic],
+          new Map([
+            [ordersSourceTopic, [3n, -1n, 2n]],
+            [unknownSourceTopic, [99n]],
+          ]),
+          2_000,
+        );
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
 
-      expect(healthRefreshRequestCount).toBe(2);
-      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
-        status: "ready",
-        sourceTopic: ordersSourceTopic,
-        viewServerTopic: "orders",
-        regions: nullRecord({
-          local: {
-            connected: true,
-            assignedPartitions: 2,
+        expect(healthRefreshRequestCount).toBe(2);
+        expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+          status: "ready",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 2,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: 5n,
+              lagSampledAt: 2_000,
+              committedOffset: null,
+              lastError: null,
+            },
+          }),
+        });
+        expect(health.kafka?.topics[unknownSourceTopic]).toBeUndefined();
+      }).pipe(Effect.ensuring(runtimeCore.close));
+    }),
+  );
+
+  it.effect("resets omitted configured source topics from full Kafka lag snapshots", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      yield* Effect.gen(function* () {
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+            [paymentsSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+          },
+        });
+        let healthRefreshRequestCount = 0;
+        const requestHealthRefresh = Effect.sync(() => {
+          healthRefreshRequestCount += 1;
+        });
+
+        yield* ledger.regionConnected("local", 1_000);
+        yield* recordKafkaAssignments(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic, paymentsSourceTopic],
+          [
+            { topic: ordersSourceTopic, partitions: [0] },
+            { topic: paymentsSourceTopic, partitions: [0, 1] },
+          ],
+          1_000,
+        );
+        yield* recordKafkaLag(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic, paymentsSourceTopic],
+          new Map([
+            [ordersSourceTopic, [5n]],
+            [paymentsSourceTopic, [3n, 4n]],
+          ]),
+          2_000,
+        );
+        yield* recordKafkaLag(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic, paymentsSourceTopic],
+          new Map([[ordersSourceTopic, [1n]]]),
+          3_000,
+        );
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 3_000);
+
+        expect(healthRefreshRequestCount).toBe(3);
+        expect({
+          orders: health.kafka?.topics[ordersSourceTopic],
+          payments: health.kafka?.topics[paymentsSourceTopic],
+        }).toStrictEqual({
+          orders: {
+            status: "ready",
+            sourceTopic: ordersSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              local: {
+                connected: true,
+                assignedPartitions: 1,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: 1n,
+                lagSampledAt: 3_000,
+                committedOffset: null,
+                lastError: null,
+              },
+            }),
+          },
+          payments: {
+            status: "ready",
+            sourceTopic: paymentsSourceTopic,
+            viewServerTopic: "orders",
+            regions: nullRecord({
+              local: {
+                connected: true,
+                assignedPartitions: 2,
+                messagesPerSecond: 0,
+                bytesPerSecond: 0,
+                decodedMessagesPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: null,
+                lastCommitAt: null,
+                consumerLagMessages: 0n,
+                lagSampledAt: 3_000,
+                committedOffset: null,
+                lastError: null,
+              },
+            }),
+          },
+        });
+      }).pipe(Effect.ensuring(runtimeCore.close));
+    }),
+  );
+
+  it.effect("keeps Kafka assignments authoritative when lag arrives after disconnect", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      yield* Effect.gen(function* () {
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+          },
+        });
+        let healthRefreshRequestCount = 0;
+        const requestHealthRefresh = Effect.sync(() => {
+          healthRefreshRequestCount += 1;
+        });
+
+        yield* ledger.regionConnected("local", 1_000);
+        yield* recordKafkaAssignments(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          [{ topic: ordersSourceTopic, partitions: [0, 1] }],
+          1_000,
+        );
+        yield* ledger.regionDisconnected("local", "Kafka consumer left group");
+        yield* recordKafkaLag(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          new Map([[ordersSourceTopic, [8n, -1n, 3n]]]),
+          2_000,
+        );
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
+
+        expect(healthRefreshRequestCount).toBe(2);
+        expect({
+          region: health.kafka?.regions["local"],
+          topicStatus: health.kafka?.topics[ordersSourceTopic]?.status,
+          topicRegion: health.kafka?.topics[ordersSourceTopic]?.regions["local"],
+        }).toStrictEqual({
+          region: {
+            status: "disconnected",
+            brokers: regions.local,
+            lastConnectedAt: 1_000,
+            lastError: "Kafka consumer left group",
+          },
+          topicStatus: "degraded",
+          topicRegion: {
+            connected: false,
+            assignedPartitions: 0,
             messagesPerSecond: 0,
             bytesPerSecond: 0,
             decodedMessagesPerSecond: 0,
@@ -1357,86 +1545,13 @@ describe("@view-server/runtime Kafka ingress internals", () => {
             processingFailuresPerSecond: 0,
             lastMessageAt: null,
             lastCommitAt: null,
-            consumerLagMessages: 5n,
+            consumerLagMessages: 11n,
             lagSampledAt: 2_000,
             committedOffset: null,
-            lastError: null,
+            lastError: "Kafka consumer left group",
           },
-        }),
-      });
-
-      yield* runtimeCore.close;
-    }),
-  );
-
-  it.effect("keeps Kafka assignments authoritative when lag arrives after disconnect", () =>
-    Effect.gen(function* () {
-      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
-      const ledger = makeViewServerKafkaHealthLedger<Topics>({
-        regions: kafkaOptions.regions,
-        topics: {
-          [ordersSourceTopic]: {
-            regions: ["local"],
-            viewServerTopic: "orders",
-          },
-        },
-      });
-      let healthRefreshRequestCount = 0;
-      const requestHealthRefresh = Effect.sync(() => {
-        healthRefreshRequestCount += 1;
-      });
-
-      yield* ledger.regionConnected("local", 1_000);
-      yield* recordKafkaAssignments(
-        ledger,
-        requestHealthRefresh,
-        "local",
-        [ordersSourceTopic],
-        [{ topic: ordersSourceTopic, partitions: [0, 1] }],
-        1_000,
-      );
-      yield* ledger.regionDisconnected("local", "Kafka consumer left group");
-      yield* recordKafkaLag(
-        ledger,
-        requestHealthRefresh,
-        "local",
-        new Map([[ordersSourceTopic, [8n, -1n, 3n]]]),
-        2_000,
-      );
-      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
-
-      expect(healthRefreshRequestCount).toBe(2);
-      expect({
-        region: health.kafka?.regions["local"],
-        topicStatus: health.kafka?.topics[ordersSourceTopic]?.status,
-        topicRegion: health.kafka?.topics[ordersSourceTopic]?.regions["local"],
-      }).toStrictEqual({
-        region: {
-          status: "disconnected",
-          brokers: regions.local,
-          lastConnectedAt: 1_000,
-          lastError: "Kafka consumer left group",
-        },
-        topicStatus: "degraded",
-        topicRegion: {
-          connected: false,
-          assignedPartitions: 0,
-          messagesPerSecond: 0,
-          bytesPerSecond: 0,
-          decodedMessagesPerSecond: 0,
-          decodeFailuresPerSecond: 0,
-          mappingFailuresPerSecond: 0,
-          processingFailuresPerSecond: 0,
-          lastMessageAt: null,
-          lastCommitAt: null,
-          consumerLagMessages: 11n,
-          lagSampledAt: 2_000,
-          committedOffset: null,
-          lastError: "Kafka consumer left group",
-        },
-      });
-
-      yield* runtimeCore.close;
+        });
+      }).pipe(Effect.ensuring(runtimeCore.close));
     }),
   );
 
