@@ -3,7 +3,11 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readBenchmarkBaseline, writeBenchmarkBaseline } from "./benchmark-baseline.mjs";
+import {
+  defaultBenchmarkThresholds,
+  readBenchmarkBaseline,
+  writeBenchmarkBaseline,
+} from "./benchmark-baseline.mjs";
 import {
   childIsRunning,
   createBenchmarkTaskRunner,
@@ -650,23 +654,7 @@ describe("benchmark baseline runner", () => {
             throughputCases: undefined,
           },
         ],
-        thresholds: {
-          latencyMean: {
-            maxAbsoluteDeltaMs: 5,
-            maxRatio: 8,
-          },
-          latencyP99: {
-            maxAbsoluteDeltaMs: 10,
-            maxRatio: 8,
-          },
-          memoryRssTotalDelta: {
-            maxAbsoluteDeltaBytes: 134217728,
-            maxRatio: 3,
-          },
-          throughputAggregateRowsPerSecond: {
-            minRatio: 0.5,
-          },
-        },
+        thresholds: defaultBenchmarkThresholds,
       },
       capturedEnvironments: [
         {
@@ -820,23 +808,7 @@ describe("benchmark baseline runner", () => {
           summaryPath: task.summaryPath,
         },
       ],
-      thresholds: {
-        latencyMean: {
-          maxAbsoluteDeltaMs: 5,
-          maxRatio: 8,
-        },
-        latencyP99: {
-          maxAbsoluteDeltaMs: 10,
-          maxRatio: 8,
-        },
-        memoryRssTotalDelta: {
-          maxAbsoluteDeltaBytes: 134217728,
-          maxRatio: 3,
-        },
-        throughputAggregateRowsPerSecond: {
-          minRatio: 0.5,
-        },
-      },
+      thresholds: defaultBenchmarkThresholds,
     });
 
     const exitCode = await runBenchmarkBaseline({

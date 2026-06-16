@@ -19,6 +19,17 @@ export const defaultBenchmarkThresholds = {
   },
 };
 
+const kafkaReadSnapshotThresholds = {
+  throughputReadSnapshotMax: {
+    maxAbsoluteDeltaMs: 50,
+    maxRatio: 10,
+  },
+  throughputReadSnapshotMean: {
+    maxAbsoluteDeltaMs: 25,
+    maxRatio: 8,
+  },
+};
+
 export const groupedOrderNeutralBenchmarkThresholds = {
   latencyMean: {
     maxAbsoluteDeltaMs: 0.5,
@@ -46,6 +57,7 @@ export const kafkaIngestBenchmarkThresholds = {
   throughputAggregateRowsPerSecond: {
     minRatio: 0.75,
   },
+  ...kafkaReadSnapshotThresholds,
 };
 
 export const kafkaSustainedFirehoseBenchmarkThresholds = {
@@ -61,6 +73,7 @@ export const kafkaSustainedFirehoseBenchmarkThresholds = {
   throughputAggregateRowsPerSecond: {
     minRatio: 0.75,
   },
+  ...kafkaReadSnapshotThresholds,
 };
 
 export const benchmarkThresholdsForProfile = (profile) =>
@@ -222,8 +235,25 @@ const comparableKafkaIngestLaneValue = (value, path) => {
   };
 };
 
-const throughputCaseValue = (value, path) => {
+const throughputCaseValue = (value, path, options) => {
   const throughputCase = objectValue(value, path);
+  const readSnapshotMetrics =
+    options.requireReadSnapshot === true
+      ? {
+          maxReadSnapshotMs: positiveFiniteNumber(
+            throughputCase.maxReadSnapshotMs,
+            `${path}.maxReadSnapshotMs`,
+          ),
+          meanReadSnapshotMs: positiveFiniteNumber(
+            throughputCase.meanReadSnapshotMs,
+            `${path}.meanReadSnapshotMs`,
+          ),
+          readSnapshotRowsPerSample: positiveInteger(
+            throughputCase.readSnapshotRowsPerSample,
+            `${path}.readSnapshotRowsPerSample`,
+          ),
+        }
+      : {};
   const result = {
     aggregateRowsPerSecond: positiveFiniteNumber(
       throughputCase.aggregateRowsPerSecond,
@@ -249,6 +279,7 @@ const throughputCaseValue = (value, path) => {
       throughputCase.producedRowsPerSample,
       `${path}.producedRowsPerSample`,
     ),
+    ...readSnapshotMetrics,
     sampleCount: positiveInteger(throughputCase.sampleCount, `${path}.sampleCount`),
     totalProducedRows: positiveInteger(
       throughputCase.totalProducedRows,
@@ -288,17 +319,29 @@ const throughputCaseValue = (value, path) => {
       `Benchmark artifact field ${path}.meanConvergenceMs must be less than or equal to meanTotalMs.`,
     );
   }
+  if (options.requireReadSnapshot === true) {
+    if (result.meanReadSnapshotMs > result.maxReadSnapshotMs) {
+      throw new Error(
+        `Benchmark artifact field ${path}.meanReadSnapshotMs must be less than or equal to maxReadSnapshotMs.`,
+      );
+    }
+    if (result.meanReadSnapshotMs > result.meanTotalMs) {
+      throw new Error(
+        `Benchmark artifact field ${path}.meanReadSnapshotMs must be less than or equal to meanTotalMs.`,
+      );
+    }
+  }
   return result;
 };
 
-const throughputCasesValue = (value, path) => {
+const throughputCasesValue = (value, path, options) => {
   const throughput = objectValue(value, path);
   const source = stringValue(throughput.source, `${path}.source`);
   if (source !== "benchmark-operation-timers") {
     throw new Error(`Benchmark artifact field ${path}.source must be benchmark-operation-timers.`);
   }
   return nonEmptyArrayValue(throughput.cases, `${path}.cases`).map((throughputCase, index) =>
-    throughputCaseValue(throughputCase, `${path}.cases[${index}]`),
+    throughputCaseValue(throughputCase, `${path}.cases[${index}]`, options),
   );
 };
 
@@ -516,7 +559,9 @@ export const readBenchmarkObservation = (task) => {
   const throughputCases =
     summary.throughput === undefined
       ? undefined
-      : throughputCasesValue(summary.throughput, `${task.summaryPath}.throughput`);
+      : throughputCasesValue(summary.throughput, `${task.summaryPath}.throughput`, {
+          requireReadSnapshot: requiresKafkaThroughput,
+        });
   if (requiresKafkaThroughput && throughputCases === undefined) {
     throw new Error(
       `Benchmark artifact field ${task.summaryPath}.throughput is required for ${benchmarkScope}.`,
@@ -644,6 +689,32 @@ const thresholdsValue = (value, path, expectedThresholds) => {
       ),
     },
   };
+  if (expectedThresholds.throughputReadSnapshotMax !== undefined) {
+    validatedThresholds.throughputReadSnapshotMax = {
+      maxAbsoluteDeltaMs: finiteNumber(
+        objectValue(thresholds.throughputReadSnapshotMax, `${path}.throughputReadSnapshotMax`)
+          .maxAbsoluteDeltaMs,
+        `${path}.throughputReadSnapshotMax.maxAbsoluteDeltaMs`,
+      ),
+      maxRatio: finiteNumber(
+        thresholds.throughputReadSnapshotMax.maxRatio,
+        `${path}.throughputReadSnapshotMax.maxRatio`,
+      ),
+    };
+  }
+  if (expectedThresholds.throughputReadSnapshotMean !== undefined) {
+    validatedThresholds.throughputReadSnapshotMean = {
+      maxAbsoluteDeltaMs: finiteNumber(
+        objectValue(thresholds.throughputReadSnapshotMean, `${path}.throughputReadSnapshotMean`)
+          .maxAbsoluteDeltaMs,
+        `${path}.throughputReadSnapshotMean.maxAbsoluteDeltaMs`,
+      ),
+      maxRatio: finiteNumber(
+        thresholds.throughputReadSnapshotMean.maxRatio,
+        `${path}.throughputReadSnapshotMean.maxRatio`,
+      ),
+    };
+  }
   if (JSON.stringify(validatedThresholds) !== JSON.stringify(expectedThresholds)) {
     throw new Error(`Benchmark artifact field ${path} must match code-owned profile thresholds.`);
   }
@@ -687,7 +758,9 @@ const validateTask = (task, path) => {
       ? undefined
       : nonEmptyArrayValue(task.throughputCases, `${path}.throughputCases`).map(
           (throughputCase, index) =>
-            throughputCaseValue(throughputCase, `${path}.throughputCases[${index}]`),
+            throughputCaseValue(throughputCase, `${path}.throughputCases[${index}]`, {
+              requireReadSnapshot: requiresKafkaThroughput,
+            }),
         );
   if (requiresKafkaThroughput && throughputCases === undefined) {
     throw new Error(
@@ -906,10 +979,37 @@ const compareThroughputCases = (regressions, taskLabel, threshold, baselineCases
       taskLabel,
       baselineCase.name,
       "aggregateRowsPerSecond",
-      threshold,
+      threshold.throughputAggregateRowsPerSecond,
       baselineCase.aggregateRowsPerSecond,
       actualCase.aggregateRowsPerSecond,
     );
+    if (threshold.throughputReadSnapshotMean !== undefined) {
+      compareExact(
+        regressions,
+        taskLabel,
+        `${baselineCase.name} throughput readSnapshotRowsPerSample`,
+        baselineCase.readSnapshotRowsPerSample,
+        actualCase.readSnapshotRowsPerSample,
+      );
+      compareLatency(
+        regressions,
+        taskLabel,
+        baselineCase.name,
+        "meanReadSnapshotMs",
+        threshold.throughputReadSnapshotMean,
+        baselineCase.meanReadSnapshotMs,
+        actualCase.meanReadSnapshotMs,
+      );
+      compareLatency(
+        regressions,
+        taskLabel,
+        baselineCase.name,
+        "maxReadSnapshotMs",
+        threshold.throughputReadSnapshotMax,
+        baselineCase.maxReadSnapshotMs,
+        actualCase.maxReadSnapshotMs,
+      );
+    }
   }
 };
 
@@ -1021,7 +1121,7 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
     compareThroughputCases(
       regressions,
       taskLabel,
-      thresholds.throughputAggregateRowsPerSecond,
+      thresholds,
       baselineTask.throughputCases,
       actualTask.throughputCases,
     );
