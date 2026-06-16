@@ -1139,6 +1139,7 @@ startFrom:
 Recovery tests:
 
 - Start runtime, ingest rows, stop runtime, restart from earliest, verify snapshot converges.
+- Start runtime in committed mode, ingest and commit rows, stop runtime, append new rows, restart with a distinct top-level `consumerGroupId` and `startFrom.committedConsumerGroup` pointing at the committed group, verify committed mode follows the committed group's offsets and only newly consumed rows are present unless durable state/checkpoints are added.
 - Start from latest, verify old rows are intentionally absent and health reports the policy.
 - Restart during active subscriptions, clients reconnect and receive fresh snapshots.
 
