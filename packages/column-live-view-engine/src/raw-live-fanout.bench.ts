@@ -9,10 +9,12 @@ import {
   type ColumnLiveViewSubscription,
 } from "./index";
 import {
+  activeViewCountFromEngineHealth,
   backpressureCountFromEngineHealth,
   benchmarkOutputJsonPath,
   cleanupLeakCountFromEngineHealth,
   failOnBenchmarkCleanupLeaks,
+  isBenchmarkEngineHealth,
   memorySnapshot,
   queuedEventCountFromEngineHealth,
   writeBenchmarkArtifact,
@@ -45,11 +47,11 @@ type Topics = typeof viewServer.topics;
 type Engine = ColumnLiveViewEngine<Topics>;
 type OrderRow = typeof Order.Type;
 type OrderStatus = OrderRow["status"];
-type SelectedOrderRow = Pick<OrderRow, "id" | "customerId" | "price" | "status" | "updatedAt">;
+type SelectedOrderRow = OrderRow;
 type OrderSubscription = ColumnLiveViewSubscription<SelectedOrderRow>;
 type OrderEvent = ColumnLiveViewEngineEvent<SelectedOrderRow>;
 type OrderEventReader = () => Effect.Effect<ReadonlyArray<OrderEvent>, Cause.Done>;
-type FanoutCaseName = "same-window" | "ten-window";
+type FanoutCaseName = "same-window" | "ten-window" | "unique-shape" | "unique-window";
 type CaseSpecificDeltaExpectation = (
   eventChunks: ReadonlyArray<ReadonlyArray<OrderEvent>>,
   rowId: string,
@@ -131,10 +133,17 @@ const fanoutCaseNameFromEnv = (): FanoutCaseName => {
     return defaultFanoutCaseName;
   }
   const trimmed = raw.trim();
-  if (trimmed === "same-window" || trimmed === "ten-window") {
+  if (
+    trimmed === "same-window" ||
+    trimmed === "ten-window" ||
+    trimmed === "unique-shape" ||
+    trimmed === "unique-window"
+  ) {
     return trimmed;
   }
-  throw new Error("VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE must be same-window or ten-window.");
+  throw new Error(
+    "VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE must be same-window, ten-window, unique-window, or unique-shape.",
+  );
 };
 
 const benchmarkRowCount = rowCountFromEnv();
@@ -216,11 +225,21 @@ const deltaOrder = (index: number): OrderRow => ({
   updatedAt: 1_000_000_000 + index,
 });
 
-const fanoutCaseWindowOffset = (caseName: FanoutCaseName): ((index: number) => number) => {
-  if (caseName === "same-window") {
+const fanoutCaseWindowOffset = (caseName: FanoutCaseName) => {
+  if (caseName === "same-window" || caseName === "unique-shape") {
     return () => 0;
   }
-  return (index) => index % 10;
+  if (caseName === "unique-window") {
+    return (index: number) => index;
+  }
+  return (index: number) => index % 10;
+};
+
+const fanoutCaseMinimumPrice = (caseName: FanoutCaseName, index: number): number => {
+  if (caseName === "unique-shape") {
+    return Math.min(index, subscriberCount - 1);
+  }
+  return 0;
 };
 
 const seedEngine = Effect.fn("ColumnLiveViewEngine.bench.rawLiveFanout.seed")(function* (
@@ -260,13 +279,19 @@ const makeEventReader = (
   );
 
 const makeSubscriptions = Effect.fn("ColumnLiveViewEngine.bench.rawLiveFanout.subscribe")(
-  function* (engine: Engine, count: number, windowOffset: (index: number) => number) {
+  function* (
+    engine: Engine,
+    count: number,
+    caseName: FanoutCaseName,
+    windowOffset: (index: number) => number,
+  ) {
     const subscriptions = yield* Effect.forEach(
       Array.from({ length: count }, (_value, index) => index),
       (index) =>
         engine.subscribe("orders", {
-          select: ["id", "customerId", "price", "status", "updatedAt"],
+          select: ["id", "customerId", "status", "price", "region", "updatedAt"],
           where: {
+            price: { gte: fanoutCaseMinimumPrice(caseName, index) },
             status: { eq: "open" },
           },
           orderBy: [{ field: "updatedAt", direction: "desc" }],
@@ -299,6 +324,7 @@ const makeFanoutCase = Effect.fn("ColumnLiveViewEngine.bench.rawLiveFanout.case.
   const subscriptions = yield* makeSubscriptions(
     engine,
     benchmarkProfile.subscriberCount,
+    benchmarkProfile.fanoutCaseName,
     windowOffset,
   );
   fanoutCase.engine = engine;
@@ -358,6 +384,9 @@ const eventIncludesDeltaRow = (event: OrderEvent, rowId: string): boolean => {
   });
 };
 
+const eventHasDeltaOperation = (event: OrderEvent): boolean =>
+  event.type === "delta" && event.operations.length > 0;
+
 const expectSameWindowDeltaRows: CaseSpecificDeltaExpectation = (
   eventChunks,
   rowId,
@@ -368,17 +397,44 @@ const expectSameWindowDeltaRows: CaseSpecificDeltaExpectation = (
   ).toStrictEqual(Array.from({ length: readerCount }, () => true));
 };
 
-const expectTenWindowDeltaRows: CaseSpecificDeltaExpectation = (
-  eventChunks,
-  _rowId,
-  readerCount,
+const expectWindowedDeltaRows = (
+  eventChunks: ReadonlyArray<ReadonlyArray<OrderEvent>>,
+  rowId: string,
+  readerCount: number,
+  includesInsertedRow: (index: number) => boolean,
 ) => {
   expect(eventChunks).toHaveLength(readerCount);
+  expect(
+    eventChunks.map((events) => events.some((event) => eventHasDeltaOperation(event))),
+  ).toStrictEqual(Array.from({ length: readerCount }, () => true));
+  expect(
+    eventChunks.map((events) => events.some((event) => eventIncludesDeltaRow(event, rowId))),
+  ).toStrictEqual(
+    Array.from({ length: readerCount }, (_value, index) => includesInsertedRow(index)),
+  );
 };
+
+const expectTenWindowDeltaRows: CaseSpecificDeltaExpectation = (eventChunks, rowId, readerCount) =>
+  expectWindowedDeltaRows(eventChunks, rowId, readerCount, (index) => index % 10 === 0);
+
+const expectUniqueWindowDeltaRows: CaseSpecificDeltaExpectation = (
+  eventChunks,
+  rowId,
+  readerCount,
+) => expectWindowedDeltaRows(eventChunks, rowId, readerCount, (index) => index === 0);
 
 const expectCaseSpecificDelta: Record<FanoutCaseName, CaseSpecificDeltaExpectation> = {
   "same-window": expectSameWindowDeltaRows,
   "ten-window": expectTenWindowDeltaRows,
+  "unique-shape": expectSameWindowDeltaRows,
+  "unique-window": expectUniqueWindowDeltaRows,
+};
+
+const expectedActiveViewCount = (caseName: FanoutCaseName, subscriberCount: number): number => {
+  if (caseName === "unique-shape") {
+    return subscriberCount;
+  }
+  return 1;
 };
 
 beforeAll(async () => {
@@ -391,23 +447,55 @@ beforeAll(async () => {
 afterAll(async () => {
   const memoryAfterSetup = profile.memoryAfterSetup ?? memoryBefore;
   const mutationCount = profile.fanoutCase.nextDeltaIndex;
+  const engine = profile.fanoutCase.engine;
+  let structuralError: Error | undefined;
+  let preCleanupHealth: unknown = {
+    status: "not-started",
+  };
+  if (engine !== undefined) {
+    const preCleanupHealthExit = await Effect.runPromiseExit(engine.health());
+    if (Exit.isSuccess(preCleanupHealthExit)) {
+      preCleanupHealth = preCleanupHealthExit.value;
+    } else {
+      structuralError = new Error("Raw live fanout benchmark pre-cleanup health read failed.", {
+        cause: preCleanupHealthExit.cause,
+      });
+    }
+  }
+  const activeViewCountBeforeCleanup = isBenchmarkEngineHealth(preCleanupHealth)
+    ? activeViewCountFromEngineHealth(preCleanupHealth)
+    : undefined;
+  const expectedActiveViews = expectedActiveViewCount(
+    profile.fanoutCaseName,
+    profile.subscriberCount,
+  );
+  if (structuralError === undefined) {
+    if (activeViewCountBeforeCleanup === undefined) {
+      structuralError = new Error("Raw live fanout benchmark pre-cleanup health is malformed.");
+    } else if (activeViewCountBeforeCleanup !== expectedActiveViews) {
+      structuralError = new Error(
+        `Raw live fanout benchmark ${profile.fanoutCaseName} expected ${expectedActiveViews} active view(s) before cleanup but saw ${activeViewCountBeforeCleanup}.`,
+      );
+    }
+  }
   await Effect.runPromise(
     closeSubscriptions(profile.fanoutCase.subscriptions, profile.fanoutCase.scope),
   );
   const health =
-    profile.fanoutCase.engine === undefined
+    engine === undefined
       ? {
           status: "not-started",
         }
-      : await Effect.runPromise(profile.fanoutCase.engine.health());
+      : await Effect.runPromise(engine.health());
   const cleanupLeakCount = cleanupLeakCountFromEngineHealth(health);
-  if (profile.fanoutCase.engine !== undefined) {
-    await Effect.runPromise(profile.fanoutCase.engine.close());
+  if (engine !== undefined) {
+    await Effect.runPromise(engine.close());
   }
   profile.fanoutCase = emptyFanoutCaseProfile();
   profile.memoryAfterSetup = undefined;
   const memoryAfterBenchmark = memorySnapshot();
   writeBenchmarkArtifact({
+    ...(activeViewCountBeforeCleanup === undefined ? {} : { activeViewCountBeforeCleanup }),
     artifactKind: "engine-benchmark-summary",
     backpressureCount: backpressureCountFromEngineHealth(health),
     benchmarkCases: [`${profile.fanoutCaseName} subscribers publish + delta fanout`],
@@ -426,14 +514,19 @@ afterAll(async () => {
     notes: [
       "Latency percentiles are emitted by Vitest in outputJsonPath.",
       "mutationCount includes setup seed rows plus live fanout publish benchmark iterations.",
+      "activeViewCountBeforeCleanup records the number of materialized active raw views before subscribers are closed.",
     ],
     outputJsonPath,
+    preCleanupHealth,
     queuedEventCount: queuedEventCountFromEngineHealth(health),
     rowCount: profile.rowCount,
     subscriberCount: profile.subscriberCount,
     topics: ["orders"],
   });
   failOnBenchmarkCleanupLeaks(cleanupLeakCount);
+  if (structuralError !== undefined) {
+    throw structuralError;
+  }
 }, 0);
 
 describe(`raw live fanout benchmark: ${profile.rowCount} rows, ${profile.subscriberCount} subscribers, ${profile.fanoutCaseName}`, () => {

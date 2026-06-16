@@ -24,6 +24,22 @@ small and noisy; structural metadata, counters, sample counts, and RSS remain st
 
 Do not run benchmark profiles in parallel when comparing results.
 
+Active-query sharing has a focused engine gate:
+
+```bash
+pnpm run bench:baseline:active-query-sharing
+```
+
+Refresh it only when an active-query sharing performance change is intentionally accepted:
+
+```bash
+pnpm run bench:baseline:active-query-sharing:update
+```
+
+This profile runs `raw-live-fanout` across same-window, ten-window, unique-window, and unique-shape
+subscription sets. It exists to catch duplicated materialization/fanout regressions separately from
+the broader smoke gate while still using Vitest benchmark output and committed baselines.
+
 Kafka runtime profiles are separate from the default smoke gate because they start the Apache Kafka
 container and exercise real `@platformatic/kafka` producers/consumers:
 

@@ -325,6 +325,27 @@ describe("benchmark baseline comparison", () => {
     });
   });
 
+  it("reads active-query sharing structural counters from summary artifacts", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
+    const summaryPath = join(directory, "actual.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    writeFileSync(
+      summaryPath,
+      `${JSON.stringify({
+        ...summary,
+        activeViewCountBeforeCleanup: 1,
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
+
+    expect(readBenchmarkObservation(taskPaths(summaryPath, outputJsonPath))).toStrictEqual({
+      ...observation,
+      activeViewCountBeforeCleanup: 1,
+      outputJsonPath,
+      summaryPath,
+    });
+  });
+
   it("reads browser benchmark observations without process memory data", () => {
     const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
     const summaryPath = join(directory, "actual.summary.json");
@@ -1570,6 +1591,43 @@ describe("benchmark baseline comparison", () => {
           },
         ],
         memoryRssTotalDeltaBytes: 2048,
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: true,
+      regressions: [],
+    });
+  });
+
+  it("reports active-query sharing structural regressions", () => {
+    const baseline = buildBenchmarkBaseline("active-query-sharing", [
+      {
+        ...observation,
+        activeViewCountBeforeCleanup: 1,
+      },
+    ]);
+    const regressed = buildBenchmarkBaseline("active-query-sharing", [
+      {
+        ...observation,
+        activeViewCountBeforeCleanup: 50,
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, regressed)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a: activeViewCountBeforeCleanup changed from 1 to 50.",
+      ],
+    });
+  });
+
+  it("does not force optional active-query structural counters onto older baselines", () => {
+    const baseline = buildBenchmarkBaseline("smoke", [observation]);
+    const actual = buildBenchmarkBaseline("smoke", [
+      {
+        ...observation,
+        activeViewCountBeforeCleanup: 1,
       },
     ]);
 

@@ -192,6 +192,8 @@ describe("benchmark baseline runner", () => {
     const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
 
     expect({
+      activeQuerySharing: scripts["bench:baseline:active-query-sharing"],
+      activeQuerySharingUpdate: scripts["bench:baseline:active-query-sharing:update"],
       groupedAdmission: scripts["bench:baseline:grouped-admission"],
       groupedAdmissionUpdate: scripts["bench:baseline:grouped-admission:update"],
       groupedOrderNeutral: scripts["bench:baseline:grouped-order-neutral"],
@@ -202,6 +204,10 @@ describe("benchmark baseline runner", () => {
       kafkaSustainedFirehoseUpdate: scripts["bench:baseline:kafka-sustained-firehose:update"],
       release: scripts["bench:baseline:release"],
     }).toStrictEqual({
+      activeQuerySharing:
+        "node scripts/run-benchmark-baseline.mjs --profile=active-query-sharing",
+      activeQuerySharingUpdate:
+        "node scripts/run-benchmark-baseline.mjs --profile=active-query-sharing --update-baseline",
       groupedAdmission: "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission",
       groupedAdmissionUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission --update-baseline",
@@ -217,6 +223,69 @@ describe("benchmark baseline runner", () => {
         "node scripts/run-benchmark-baseline.mjs --profile=kafka-sustained-firehose --update-baseline",
       release: "node scripts/run-benchmark-baseline.mjs --profile=release --no-compare",
     });
+  });
+
+  it("defines active-query sharing fanout tasks", () => {
+    const activeQuerySharingTasks = profiles.get("active-query-sharing") ?? [];
+
+    expect(
+      activeQuerySharingTasks.map((task) => ({
+        batchSize: task.env["VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE"],
+        benchmarkScope: task.expectedBenchmarkScope,
+        fanoutCase: task.env["VIEW_SERVER_ENGINE_BENCH_FANOUT_CASE"],
+        iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+        subscriberCount: task.env["VIEW_SERVER_ENGINE_BENCH_SUBSCRIBERS"],
+        task: task.args,
+        timeMs: task.env["VIEW_SERVER_ENGINE_BENCH_TIME_MS"],
+      })),
+    ).toStrictEqual([
+      {
+        batchSize: "1000",
+        benchmarkScope: "engine-raw-live-fanout",
+        fanoutCase: "same-window",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-live-fanout-same-window-10000rows-50subs.json",
+        rowCount: "10000",
+        subscriberCount: "50",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-live-fanout"],
+        timeMs: "1",
+      },
+      {
+        batchSize: "1000",
+        benchmarkScope: "engine-raw-live-fanout",
+        fanoutCase: "ten-window",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-live-fanout-ten-window-10000rows-50subs.json",
+        rowCount: "10000",
+        subscriberCount: "50",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-live-fanout"],
+        timeMs: "1",
+      },
+      {
+        batchSize: "1000",
+        benchmarkScope: "engine-raw-live-fanout",
+        fanoutCase: "unique-window",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-live-fanout-unique-window-10000rows-50subs.json",
+        rowCount: "10000",
+        subscriberCount: "50",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-live-fanout"],
+        timeMs: "1",
+      },
+      {
+        batchSize: "1000",
+        benchmarkScope: "engine-raw-live-fanout",
+        fanoutCase: "unique-shape",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-live-fanout-unique-shape-10000rows-50subs.json",
+        rowCount: "10000",
+        subscriberCount: "50",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-live-fanout"],
+        timeMs: "1",
+      },
+    ]);
   });
 
   it("defines the Kafka ingest runtime benchmark task", () => {
@@ -1097,7 +1166,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       message:
-        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, grouped-admission, grouped-order-neutral, release",
+        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, active-query-sharing, grouped-admission, grouped-order-neutral, release",
     });
   });
 
