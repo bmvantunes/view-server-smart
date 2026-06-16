@@ -8,11 +8,11 @@
       "benchmarks": [
         {
           "groupName": "src/kafka-ingest.bench.ts > Kafka sustained firehose runtime benchmark: 250 rows per producer batch",
-          "maxMs": 16871.110041,
-          "meanMs": 16266.416902666666,
-          "minMs": 15622.850625,
+          "maxMs": 17182.083125,
+          "meanMs": 16564.81754166667,
+          "minMs": 16095.242000000006,
           "name": "sustained mixed firehose ingest",
-          "p99Ms": 16871.110041,
+          "p99Ms": 17182.083125,
           "sampleCount": 3
         }
       ],
@@ -37,7 +37,7 @@
         }
       ],
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 34209792,
+      "memoryRssTotalDeltaBytes": 37289984,
       "minimumSampleCount": 3,
       "mutationCount": 6000,
       "outputJsonPath": "packages/runtime/.artifacts/kafka-sustained-firehose-250rows-4batches.json",
@@ -48,15 +48,18 @@
       "taskLabel": "Kafka sustained firehose 250 rows x 4 batches",
       "throughputCases": [
         {
-          "aggregateRowsPerSecond": 122.95339022943404,
-          "maxTotalMs": 16870.902042,
-          "meanConvergenceMs": 16221.077291333335,
-          "meanProducerSendMs": 42.13241666666772,
-          "meanRowsPerSecond": 123.0749977311353,
-          "meanTotalMs": 16266.326583333335,
-          "minRowsPerSecond": 118.54730677832241,
+          "aggregateRowsPerSecond": 120.73838464668563,
+          "maxTotalMs": 17181.896459000003,
+          "meanConvergenceMs": 16518.631041666667,
+          "meanProducerSendMs": 37.274332999997945,
+          "meanRowsPerSecond": 120.82874704338552,
+          "meanTotalMs": 16564.74041666667,
+          "minRowsPerSecond": 116.40158609804595,
           "name": "sustained mixed firehose ingest",
           "producedRowsPerSample": 2000,
+          "maxReadSnapshotMs": 7.929832999998325,
+          "meanReadSnapshotMs": 6.246944333333279,
+          "readSnapshotRowsPerSample": 50,
           "sampleCount": 3,
           "totalProducedRows": 6000
         }
@@ -79,6 +82,14 @@
     },
     "throughputAggregateRowsPerSecond": {
       "minRatio": 0.75
+    },
+    "throughputReadSnapshotMax": {
+      "maxAbsoluteDeltaMs": 50,
+      "maxRatio": 10
+    },
+    "throughputReadSnapshotMean": {
+      "maxAbsoluteDeltaMs": 25,
+      "maxRatio": 8
     }
   }
 }

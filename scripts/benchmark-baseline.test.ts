@@ -161,14 +161,17 @@ const runtimeThroughput = {
   cases: [
     {
       aggregateRowsPerSecond: 1000,
+      maxReadSnapshotMs: 6,
       maxTotalMs: 100,
       meanConvergenceMs: 75,
       meanProducerSendMs: 25,
+      meanReadSnapshotMs: 5,
       meanRowsPerSecond: 1000,
       meanTotalMs: 100,
       minRowsPerSecond: 900,
       name: "case a",
       producedRowsPerSample: 100,
+      readSnapshotRowsPerSample: 25,
       sampleCount: 7,
       totalProducedRows: 700,
     },
@@ -176,6 +179,22 @@ const runtimeThroughput = {
 };
 
 const comparableRuntimeThroughputCases = runtimeThroughput.cases;
+
+const comparableNonKafkaRuntimeThroughputCases = [
+  {
+    aggregateRowsPerSecond: 1000,
+    maxTotalMs: 100,
+    meanConvergenceMs: 75,
+    meanProducerSendMs: 25,
+    meanRowsPerSecond: 1000,
+    meanTotalMs: 100,
+    minRowsPerSecond: 900,
+    name: "case a",
+    producedRowsPerSample: 100,
+    sampleCount: 7,
+    totalProducedRows: 700,
+  },
+];
 
 const observation = {
   artifactKind: "engine-benchmark-summary",
@@ -362,7 +381,7 @@ describe("benchmark baseline comparison", () => {
       ...observation,
       outputJsonPath,
       summaryPath,
-      throughputCases: comparableRuntimeThroughputCases,
+      throughputCases: comparableNonKafkaRuntimeThroughputCases,
     });
   });
 
@@ -473,7 +492,7 @@ describe("benchmark baseline comparison", () => {
       ],
       outputJsonPath,
       summaryPath,
-      throughputCases: comparableRuntimeThroughputCases,
+      throughputCases: comparableNonKafkaRuntimeThroughputCases,
     });
   });
 
@@ -542,6 +561,14 @@ describe("benchmark baseline comparison", () => {
     const invalidConvergenceTimerSummaryPath = join(
       directory,
       "invalid-convergence-timer.summary.json",
+    );
+    const invalidReadTimerMaximumSummaryPath = join(
+      directory,
+      "invalid-read-timer-maximum.summary.json",
+    );
+    const invalidReadTimerTotalSummaryPath = join(
+      directory,
+      "invalid-read-timer-total.summary.json",
     );
     const mismatchedNameSummaryPath = join(directory, "mismatched-name.summary.json");
     const mismatchedSampleCountSummaryPath = join(
@@ -763,6 +790,51 @@ describe("benchmark baseline comparison", () => {
       })}\n`,
     );
     writeFileSync(
+      invalidReadTimerMaximumSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              maxReadSnapshotMs: 4,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidReadTimerTotalSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              maxReadSnapshotMs: 102,
+              meanReadSnapshotMs: 101,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
       mismatchedNameSummaryPath,
       `${JSON.stringify({
         ...summary,
@@ -897,6 +969,18 @@ describe("benchmark baseline comparison", () => {
       ),
     ).toThrow(
       `Benchmark artifact field ${invalidConvergenceTimerSummaryPath}.throughput.cases[0].meanConvergenceMs must be less than or equal to meanTotalMs.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(
+        runtimeTaskPaths(invalidReadTimerMaximumSummaryPath, outputJsonPath),
+      ),
+    ).toThrow(
+      `Benchmark artifact field ${invalidReadTimerMaximumSummaryPath}.throughput.cases[0].meanReadSnapshotMs must be less than or equal to maxReadSnapshotMs.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidReadTimerTotalSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidReadTimerTotalSummaryPath}.throughput.cases[0].meanReadSnapshotMs must be less than or equal to meanTotalMs.`,
     );
     expect(() =>
       readBenchmarkObservation(runtimeTaskPaths(mismatchedNameSummaryPath, outputJsonPath)),
@@ -1616,6 +1700,20 @@ describe("benchmark baseline comparison", () => {
     });
   });
 
+  it("does not require Kafka read snapshot gates for non-Kafka throughput profiles", () => {
+    const nonKafkaThroughputObservation = {
+      ...observation,
+      throughputCases: comparableNonKafkaRuntimeThroughputCases,
+    };
+    const baseline = buildBenchmarkBaseline("smoke", [nonKafkaThroughputObservation]);
+    const actual = buildBenchmarkBaseline("smoke", [nonKafkaThroughputObservation]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: true,
+      regressions: [],
+    });
+  });
+
   it("requires exact Kafka ingest mutation counts", () => {
     const kafkaObservation = {
       ...observation,
@@ -1683,6 +1781,41 @@ describe("benchmark baseline comparison", () => {
       ok: false,
       regressions: [
         "task a / case a: aggregateRowsPerSecond throughput regressed from 1000.000 rows/sec to 400.000 rows/sec; allowed >= 750.000 rows/sec.",
+      ],
+    });
+  });
+
+  it("reports Kafka read snapshot workload and latency regressions", () => {
+    const kafkaObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+      throughputCases: comparableRuntimeThroughputCases,
+    };
+    const baseline = buildBenchmarkBaseline("kafka-ingest", [kafkaObservation]);
+    const regressedReadSnapshot = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            maxReadSnapshotMs: 61,
+            meanReadSnapshotMs: 41,
+            readSnapshotRowsPerSample: 10,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, regressedReadSnapshot)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a: case a throughput readSnapshotRowsPerSample changed from 25 to 10.",
+        "task a / case a: meanReadSnapshotMs regressed from 5.000ms to 41.000ms; allowed <= 40.000ms.",
+        "task a / case a: maxReadSnapshotMs regressed from 6.000ms to 61.000ms; allowed <= 60.000ms.",
       ],
     });
   });
@@ -2111,20 +2244,10 @@ describe("benchmark baseline comparison", () => {
     const baseline = {
       ...buildBenchmarkBaseline("smoke", [observation]),
       thresholds: {
+        ...defaultBenchmarkThresholds,
         latencyMean: {
           maxAbsoluteDeltaMs: 5000,
           maxRatio: 8000,
-        },
-        latencyP99: {
-          maxAbsoluteDeltaMs: 10,
-          maxRatio: 8,
-        },
-        memoryRssTotalDelta: {
-          maxAbsoluteDeltaBytes: 134217728,
-          maxRatio: 3,
-        },
-        throughputAggregateRowsPerSecond: {
-          minRatio: 0.75,
         },
       },
     };
