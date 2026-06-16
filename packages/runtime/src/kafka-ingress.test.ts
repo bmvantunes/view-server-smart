@@ -5,6 +5,7 @@ import { Admin, Producer, stringSerializers } from "@platformatic/kafka";
 import { defineViewServerConfig, kafka } from "@view-server/config";
 import { Buffer } from "node:buffer";
 import { Crypto, Effect, Schedule, Schema } from "effect";
+import * as BigDecimal from "effect/BigDecimal";
 import { makeViewServerRuntime } from "./index";
 import {
   type OrderKey,
@@ -38,6 +39,19 @@ const IncomingTrade = Schema.Struct({
   quantity: Schema.Number,
 });
 
+const PrecisePosition = Schema.Struct({
+  id: Schema.String,
+  accountId: Schema.String,
+  quantity: Schema.BigInt,
+  price: Schema.BigDecimal,
+});
+
+const IncomingPrecisePosition = Schema.Struct({
+  accountId: Schema.String,
+  quantity: Schema.BigInt,
+  price: Schema.BigDecimal,
+});
+
 const viewServer = defineViewServerConfig({
   topics: {
     orders: {
@@ -46,6 +60,15 @@ const viewServer = defineViewServerConfig({
     },
     trades: {
       schema: Trade,
+      key: "id",
+    },
+  },
+});
+
+const preciseViewServer = defineViewServerConfig({
+  topics: {
+    positions: {
+      schema: PrecisePosition,
       key: "id",
     },
   },
@@ -392,6 +415,171 @@ describe("@view-server/runtime Kafka ingress", () => {
           (runtime) => runtime.close.pipe(Effect.ignore),
         );
       }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.live("preserves high-precision Kafka JSON values through real Kafka ingestion", () =>
+    Effect.gen(function* () {
+      const positionsSourceTopic = yield* uniqueTopicName("json-precise-positions");
+      const consumerGroupId = yield* uniqueGroupId();
+      yield* createKafkaTopics(kafkaBootstrapServers, [positionsSourceTopic]);
+
+      const regions = {
+        local: kafkaBootstrapServers,
+      };
+      const localKafkaTopic = preciseViewServer.kafkaTopic<typeof regions>();
+
+      yield* Effect.acquireUseRelease(
+        makeViewServerRuntime(preciseViewServer, {
+          host: "127.0.0.1",
+          websocketPort: 0,
+          kafka: {
+            consumerGroupId,
+            regions,
+            topics: {
+              [positionsSourceTopic]: localKafkaTopic({
+                regions: ["local"],
+                value: kafka.json(IncomingPrecisePosition),
+                key: kafka.stringKey(),
+                viewServerTopic: "positions",
+                mapping: ({ key, value, region }) => {
+                  expectTypeOf(key).toEqualTypeOf<string>();
+                  expectTypeOf(value).toEqualTypeOf<typeof IncomingPrecisePosition.Type>();
+                  expectTypeOf(region).toEqualTypeOf<"local">();
+                  expect(typeof value.quantity).toBe("bigint");
+                  expect(value.quantity).toBe(9007199254740993n);
+                  expect(BigDecimal.isBigDecimal(value.price)).toBe(true);
+                  expect(BigDecimal.format(value.price)).toBe("1234567890.123456789");
+                  return {
+                    id: key,
+                    accountId: value.accountId,
+                    quantity: value.quantity,
+                    price: value.price,
+                  };
+                },
+              }),
+            },
+          },
+        }),
+        (runtime) =>
+          Effect.gen(function* () {
+            yield* sendKafkaMessages(
+              kafkaBootstrapServers,
+              "view-server-kafka-json-precision-ingress-test",
+              [
+                {
+                  topic: positionsSourceTopic,
+                  key: "position-precise-1",
+                  value: JSON.stringify({
+                    accountId: "account-precise-1",
+                    quantity: "9007199254740993",
+                    price: "1234567890.123456789",
+                  }),
+                },
+              ],
+            );
+
+            const positionsSnapshot = yield* runtime.client
+              .snapshot("positions", {
+                select: ["id", "accountId", "quantity", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: healthPollSchedule,
+                  until: (snapshot) => snapshot.totalRows === 1,
+                }),
+              );
+            const health = yield* runtime.client.health().pipe(
+              Effect.repeat({
+                schedule: healthPollSchedule,
+                until: (currentHealth) =>
+                  currentHealth.engine.topics.positions.rowCount === 1 &&
+                  currentHealth.kafka?.topics[positionsSourceTopic]?.status === "ready" &&
+                  currentHealth.kafka?.topics[positionsSourceTopic]?.regions["local"]
+                    ?.committedOffset === "1" &&
+                  currentHealth.kafka?.topics[positionsSourceTopic]?.regions["local"]
+                    ?.consumerLagMessages === 0n,
+              }),
+            );
+
+            expect({
+              status: health.status,
+              positionsSnapshot: {
+                ...positionsSnapshot,
+                rows: positionsSnapshot.rows.map((row) => ({
+                  ...row,
+                  price: BigDecimal.format(row.price),
+                })),
+              },
+              engineRows: {
+                positions: health.engine.topics.positions.rowCount,
+              },
+              kafka: health.kafka,
+            }).toStrictEqual({
+              status: "ready",
+              positionsSnapshot: {
+                status: "ready",
+                statusCode: "Ready",
+                rows: [
+                  {
+                    id: "position-precise-1",
+                    accountId: "account-precise-1",
+                    quantity: 9007199254740993n,
+                    price: "1234567890.123456789",
+                  },
+                ],
+                totalRows: 1,
+                version: expect.any(Number),
+              },
+              engineRows: {
+                positions: 1,
+              },
+              kafka: {
+                startFrom: {
+                  consumerGroupId,
+                  fallbackMode: "earliest",
+                  mode: "committed",
+                },
+                regions: nullRecord({
+                  local: {
+                    status: "connected",
+                    brokers: kafkaBootstrapServers,
+                    lastConnectedAt: expect.any(Number),
+                    lastError: null,
+                  },
+                }),
+                topics: nullRecord({
+                  [positionsSourceTopic]: {
+                    status: "ready",
+                    sourceTopic: positionsSourceTopic,
+                    viewServerTopic: "positions",
+                    regions: nullRecord({
+                      local: {
+                        connected: true,
+                        assignedPartitions: 1,
+                        messagesPerSecond: expect.any(Number),
+                        bytesPerSecond: expect.any(Number),
+                        decodedMessagesPerSecond: expect.any(Number),
+                        decodeFailuresPerSecond: 0,
+                        mappingFailuresPerSecond: 0,
+                        processingFailuresPerSecond: 0,
+                        lastMessageAt: expect.any(Number),
+                        lastCommitAt: expect.any(Number),
+                        consumerLagMessages: 0n,
+                        lagSampledAt: expect.any(Number),
+                        committedOffset: "1",
+                        lastError: null,
+                      },
+                    }),
+                  },
+                }),
+              },
+            });
+          }),
+        (runtime) => runtime.close.pipe(Effect.ignore),
+      );
+    }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
   it.live("ingests protobuf Kafka key and value messages into a View Server topic", () =>
