@@ -179,7 +179,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
   const initialHealth = yield* cleanupOnConstructionFailure(
     healthRpc().pipe(Effect.flatMap((next) => viewServerDecodeHealth(config, next))),
   );
-  const remoteHealth = makeRemoteHealthState(initialHealth);
+  const remoteHealth = makeRemoteHealthState<Topics>(initialHealth);
   const clientScope = yield* Scope.make("parallel");
 
   const close = runAllFinalizers([

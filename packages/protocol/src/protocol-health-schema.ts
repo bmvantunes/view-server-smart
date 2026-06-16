@@ -102,6 +102,8 @@ export const ViewServerHealthSchema = Schema.Struct({
               decodedMessagesPerSecond: Schema.Number,
               decodeFailuresPerSecond: Schema.Number,
               mappingFailuresPerSecond: Schema.Number,
+              publishFailuresPerSecond: Schema.Number,
+              commitFailuresPerSecond: Schema.Number,
               processingFailuresPerSecond: Schema.Number,
               lastMessageAt: NumberOrNull,
               lastCommitAt: NumberOrNull,

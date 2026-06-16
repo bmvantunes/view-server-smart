@@ -27,6 +27,8 @@ type KafkaTopicRegionLedger = {
   decodedMessagesPerSecond: number;
   decodeFailuresPerSecond: number;
   mappingFailuresPerSecond: number;
+  publishFailuresPerSecond: number;
+  commitFailuresPerSecond: number;
   processingFailuresPerSecond: number;
   lastMessageAt: number | null;
   lastCommitAt: number | null;
@@ -45,6 +47,8 @@ type KafkaRateBucket = {
   decoded: number;
   failed: number;
   mappingFailed: number;
+  publishFailed: number;
+  commitFailed: number;
   processingFailed: number;
 };
 
@@ -114,7 +118,16 @@ export type ViewServerKafkaHealthLedger<Topics extends ViewServerRuntimeTopicDef
       readonly nowMillis: number;
     },
   ) => Effect.Effect<void>;
-  readonly messageProcessingFailed: (
+  readonly messagePublishFailed: (
+    sourceTopic: string,
+    region: string,
+    input: {
+      readonly bytes: number;
+      readonly message: string;
+      readonly nowMillis: number;
+    },
+  ) => Effect.Effect<void>;
+  readonly messageCommitFailed: (
     sourceTopic: string,
     region: string,
     input: {
@@ -133,6 +146,8 @@ const initialTopicRegionLedger = (): KafkaTopicRegionLedger => ({
   decodedMessagesPerSecond: 0,
   decodeFailuresPerSecond: 0,
   mappingFailuresPerSecond: 0,
+  publishFailuresPerSecond: 0,
+  commitFailuresPerSecond: 0,
   processingFailuresPerSecond: 0,
   lastMessageAt: null,
   lastCommitAt: null,
@@ -152,6 +167,8 @@ const copyTopicRegionHealth = (region: KafkaTopicRegionLedger): KafkaTopicRegion
   decodedMessagesPerSecond: region.decodedMessagesPerSecond,
   decodeFailuresPerSecond: region.decodeFailuresPerSecond,
   mappingFailuresPerSecond: region.mappingFailuresPerSecond,
+  publishFailuresPerSecond: region.publishFailuresPerSecond,
+  commitFailuresPerSecond: region.commitFailuresPerSecond,
   processingFailuresPerSecond: region.processingFailuresPerSecond,
   lastMessageAt: region.lastMessageAt,
   lastCommitAt: region.lastCommitAt,
@@ -170,6 +187,8 @@ const incrementWindow = (
     readonly decoded: number;
     readonly failed: number;
     readonly mappingFailed: number;
+    readonly publishFailed: number;
+    readonly commitFailed: number;
     readonly processingFailed: number;
   },
 ) => {
@@ -182,6 +201,8 @@ const incrementWindow = (
     existingBucket.decoded += counters.decoded;
     existingBucket.failed += counters.failed;
     existingBucket.mappingFailed += counters.mappingFailed;
+    existingBucket.publishFailed += counters.publishFailed;
+    existingBucket.commitFailed += counters.commitFailed;
     existingBucket.processingFailed += counters.processingFailed;
     return;
   }
@@ -192,6 +213,8 @@ const incrementWindow = (
     decoded: counters.decoded,
     failed: counters.failed,
     mappingFailed: counters.mappingFailed,
+    publishFailed: counters.publishFailed,
+    commitFailed: counters.commitFailed,
     processingFailed: counters.processingFailed,
   };
 };
@@ -204,6 +227,8 @@ const resetIdleWindow = (region: KafkaTopicRegionLedger, nowMillis: number) => {
   let decodedMessagesPerSecond = 0;
   let decodeFailuresPerSecond = 0;
   let mappingFailuresPerSecond = 0;
+  let publishFailuresPerSecond = 0;
+  let commitFailuresPerSecond = 0;
   let processingFailuresPerSecond = 0;
   for (const bucket of region.rateBuckets) {
     if (
@@ -218,6 +243,8 @@ const resetIdleWindow = (region: KafkaTopicRegionLedger, nowMillis: number) => {
     decodedMessagesPerSecond += bucket.decoded;
     decodeFailuresPerSecond += bucket.failed;
     mappingFailuresPerSecond += bucket.mappingFailed;
+    publishFailuresPerSecond += bucket.publishFailed;
+    commitFailuresPerSecond += bucket.commitFailed;
     processingFailuresPerSecond += bucket.processingFailed;
   }
   region.messagesPerSecond = messagesPerSecond;
@@ -225,6 +252,8 @@ const resetIdleWindow = (region: KafkaTopicRegionLedger, nowMillis: number) => {
   region.decodedMessagesPerSecond = decodedMessagesPerSecond;
   region.decodeFailuresPerSecond = decodeFailuresPerSecond;
   region.mappingFailuresPerSecond = mappingFailuresPerSecond;
+  region.publishFailuresPerSecond = publishFailuresPerSecond;
+  region.commitFailuresPerSecond = commitFailuresPerSecond;
   region.processingFailuresPerSecond = processingFailuresPerSecond;
 };
 
@@ -467,6 +496,8 @@ export const makeViewServerKafkaHealthLedger = <
             decoded: 1,
             failed: 0,
             mappingFailed: 0,
+            publishFailed: 0,
+            commitFailed: 0,
             messages: 1,
             processingFailed: 0,
           });
@@ -488,6 +519,8 @@ export const makeViewServerKafkaHealthLedger = <
             decoded: 0,
             failed: 1,
             mappingFailed: 0,
+            publishFailed: 0,
+            commitFailed: 0,
             messages: 1,
             processingFailed: 0,
           });
@@ -506,6 +539,8 @@ export const makeViewServerKafkaHealthLedger = <
             decoded: 0,
             failed: 0,
             mappingFailed: 1,
+            publishFailed: 0,
+            commitFailed: 0,
             messages: 1,
             processingFailed: 0,
           });
@@ -513,7 +548,7 @@ export const makeViewServerKafkaHealthLedger = <
           ledger.lastError = input.message;
         }
       }),
-    messageProcessingFailed: (sourceTopic, region, input) =>
+    messagePublishFailed: (sourceTopic, region, input) =>
       Effect.sync(() => {
         const ledger = getTopicRegion(topics, sourceTopic, region);
         const topic = topics.get(sourceTopic);
@@ -523,6 +558,28 @@ export const makeViewServerKafkaHealthLedger = <
             decoded: 0,
             failed: 0,
             mappingFailed: 0,
+            publishFailed: 1,
+            commitFailed: 0,
+            messages: 1,
+            processingFailed: 1,
+          });
+          ledger.lastMessageAt = input.nowMillis;
+          ledger.lastError = input.message;
+          refreshTopicStatus(topic);
+        }
+      }),
+    messageCommitFailed: (sourceTopic, region, input) =>
+      Effect.sync(() => {
+        const ledger = getTopicRegion(topics, sourceTopic, region);
+        const topic = topics.get(sourceTopic);
+        if (ledger !== undefined && topic !== undefined) {
+          incrementWindow(ledger, input.nowMillis, {
+            bytes: input.bytes,
+            decoded: 0,
+            failed: 0,
+            mappingFailed: 0,
+            publishFailed: 0,
+            commitFailed: 1,
             messages: 1,
             processingFailed: 1,
           });

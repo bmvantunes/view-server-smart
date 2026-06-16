@@ -510,6 +510,8 @@ type ViewServerHealth = {
             decodedMessagesPerSecond: number;
             decodeFailuresPerSecond: number;
             mappingFailuresPerSecond: number;
+            publishFailuresPerSecond: number;
+            commitFailuresPerSecond: number;
             processingFailuresPerSecond: number;
             lastMessageAt: number | null;
             lastCommitAt: number | null;

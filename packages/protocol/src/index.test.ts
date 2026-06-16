@@ -202,7 +202,7 @@ describe("@view-server/protocol", () => {
         engine: {
           topics: {
             orders: {
-              status: "ready",
+              status: "degraded",
               rowCount: 1,
               liveRowCount: 1,
               deletedRowCount: 0,
@@ -286,18 +286,20 @@ describe("@view-server/protocol", () => {
                 usa: {
                   connected: true,
                   assignedPartitions: 1,
-                  messagesPerSecond: 0,
-                  bytesPerSecond: 0,
+                  messagesPerSecond: 2,
+                  bytesPerSecond: 2,
                   decodedMessagesPerSecond: 0,
                   decodeFailuresPerSecond: 0,
                   mappingFailuresPerSecond: 0,
+                  publishFailuresPerSecond: 1,
+                  commitFailuresPerSecond: 1,
                   processingFailuresPerSecond: 2,
-                  lastMessageAt: null,
+                  lastMessageAt: 123,
                   lastCommitAt: null,
                   consumerLagMessages: largeLag.toString(),
                   lagSampledAt: null,
                   committedOffset: null,
-                  lastError: null,
+                  lastError: "commit failed",
                 },
               },
             },
@@ -321,6 +323,8 @@ describe("@view-server/protocol", () => {
       expect(lagHealth.kafka?.topics["orders"]?.regions["usa"]?.processingFailuresPerSecond).toBe(
         2,
       );
+      expect(lagHealth.kafka?.topics["orders"]?.regions["usa"]?.publishFailuresPerSecond).toBe(1);
+      expect(lagHealth.kafka?.topics["orders"]?.regions["usa"]?.commitFailuresPerSecond).toBe(1);
       const encodedLagHealth = yield* Schema.encodeUnknownEffect(ViewServerHealthSchema)(lagHealth);
       expect(lagHealth.kafka?.startFrom).toStrictEqual(kafkaStartFromHealth);
       expect(encodedLagHealth.kafka?.topics["orders"]?.regions["usa"]?.consumerLagMessages).toBe(

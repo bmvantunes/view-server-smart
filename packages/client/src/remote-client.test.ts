@@ -126,6 +126,49 @@ const health = (rowCount: number, activeSubscriptions: number): ViewServerWireHe
   },
 });
 
+const kafkaHealth = (): NonNullable<ViewServerWireHealth["kafka"]> => ({
+  startFrom: {
+    consumerGroupId: "view-server-test",
+    fallbackMode: "earliest",
+    mode: "committed",
+  },
+  regions: {
+    usa: {
+      status: "connected",
+      brokers: "localhost:9092",
+      lastConnectedAt: 10,
+      lastError: null,
+    },
+  },
+  topics: {
+    sourceOrders: {
+      status: "degraded",
+      sourceTopic: "orders-source",
+      viewServerTopic: "orders",
+      regions: {
+        usa: {
+          connected: true,
+          assignedPartitions: 3,
+          messagesPerSecond: 23,
+          bytesPerSecond: 33,
+          decodedMessagesPerSecond: 20,
+          decodeFailuresPerSecond: 1,
+          mappingFailuresPerSecond: 0,
+          publishFailuresPerSecond: 1,
+          commitFailuresPerSecond: 1,
+          processingFailuresPerSecond: 2,
+          lastMessageAt: 60,
+          lastCommitAt: 50,
+          consumerLagMessages: 9n,
+          lagSampledAt: 70,
+          committedOffset: "91",
+          lastError: "commit failed",
+        },
+      },
+    },
+  },
+});
+
 const healthSummaryWireRow = (): typeof ViewServerWireRowSchema.Type => ({
   id: "summary",
   status: "ready",
@@ -822,13 +865,15 @@ describe("remote ViewServer client", () => {
               usa: {
                 connected: true,
                 assignedPartitions: 3,
-                messagesPerSecond: 22,
+                messagesPerSecond: 21,
                 bytesPerSecond: 33,
                 decodedMessagesPerSecond: 20,
                 decodeFailuresPerSecond: 1,
                 mappingFailuresPerSecond: 0,
-                processingFailuresPerSecond: 2,
-                lastMessageAt: 40,
+                publishFailuresPerSecond: 0,
+                commitFailuresPerSecond: 0,
+                processingFailuresPerSecond: 0,
+                lastMessageAt: 60,
                 lastCommitAt: 50,
                 consumerLagMessages: 9n,
                 lagSampledAt: 70,
@@ -918,6 +963,64 @@ describe("remote ViewServer client", () => {
       yield* Fiber.join(detailEventsFiber);
       expect(client.health.value.engine.topics.orders.rowCount).toBe(25);
       yield* healthSubscription.close();
+
+      yield* client.close;
+      yield* server.close;
+    }),
+  );
+
+  it.live("decodes Kafka health counters from initial remote health", () =>
+    Effect.gen(function* () {
+      const server = yield* makeTestRpcServer();
+      server.setHealth({
+        ...health(0, 0),
+        kafka: kafkaHealth(),
+      });
+
+      const client = yield* makeViewServerClient(viewServer, { url: server.url });
+
+      expect(client.health.value.kafka).toStrictEqual({
+        startFrom: {
+          consumerGroupId: "view-server-test",
+          fallbackMode: "earliest",
+          mode: "committed",
+        },
+        regions: {
+          usa: {
+            status: "connected",
+            brokers: "localhost:9092",
+            lastConnectedAt: 10,
+            lastError: null,
+          },
+        },
+        topics: {
+          sourceOrders: {
+            status: "degraded",
+            sourceTopic: "orders-source",
+            viewServerTopic: "orders",
+            regions: {
+              usa: {
+                connected: true,
+                assignedPartitions: 3,
+                messagesPerSecond: 23,
+                bytesPerSecond: 33,
+                decodedMessagesPerSecond: 20,
+                decodeFailuresPerSecond: 1,
+                mappingFailuresPerSecond: 0,
+                publishFailuresPerSecond: 1,
+                commitFailuresPerSecond: 1,
+                processingFailuresPerSecond: 2,
+                lastMessageAt: 60,
+                lastCommitAt: 50,
+                consumerLagMessages: 9n,
+                lagSampledAt: 70,
+                committedOffset: "91",
+                lastError: "commit failed",
+              },
+            },
+          },
+        },
+      });
 
       yield* client.close;
       yield* server.close;

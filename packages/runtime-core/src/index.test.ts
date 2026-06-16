@@ -496,6 +496,8 @@ describe("@view-server/runtime-core", () => {
                     decodedMessagesPerSecond: 0,
                     decodeFailuresPerSecond: 0,
                     mappingFailuresPerSecond: 0,
+                    publishFailuresPerSecond: 0,
+                    commitFailuresPerSecond: 0,
                     processingFailuresPerSecond: 0,
                     lastMessageAt: null,
                     lastCommitAt: null,

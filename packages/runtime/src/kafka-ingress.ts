@@ -671,7 +671,7 @@ const publishKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.publis
           return Effect.forEach(
             group.messages,
             (message) =>
-              health.messageProcessingFailed(message.sourceTopic, region, {
+              health.messagePublishFailed(message.sourceTopic, region, {
                 bytes: message.messageBytes,
                 message: messageFromUnknown(cause),
                 nowMillis: message.nowMillis,
@@ -711,7 +711,7 @@ const commitKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.commit"
           Effect.matchEffect({
             onFailure: (error) =>
               health
-                .messageProcessingFailed(message.sourceTopic, region, {
+                .messageCommitFailed(message.sourceTopic, region, {
                   bytes: message.messageBytes,
                   message: `${error.message}: ${messageFromUnknown(error.cause)}`,
                   nowMillis: message.nowMillis,
