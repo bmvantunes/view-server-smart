@@ -36,3 +36,8 @@ pnpm run bench:baseline:kafka-sustained-firehose
 uses the same Vitest benchmark file in `sustained-firehose` mode and sends repeated mixed producer
 batches before waiting for final View Server convergence. Both profiles require exact Kafka lane
 completeness in their summary artifacts: produced rows, engine rows, and committed offsets must agree.
+They also record per-case write-path throughput from benchmark operation timers. The baseline gate
+compares exact produced-row/sample metadata and guards `aggregateRowsPerSecond`, which is total rows
+divided by total measured time across samples; per-sample mean/min rows-per-second stay in the
+artifact for diagnosis but are intentionally not the regression gate because tiny Kafka sample sets
+can contain one unusually fast or slow sample.

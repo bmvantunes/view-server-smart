@@ -647,6 +647,7 @@ describe("benchmark baseline runner", () => {
             groupedKeyWidthParameters: undefined,
             outputJsonPath: task.outputJsonPath,
             summaryPath: task.summaryPath,
+            throughputCases: undefined,
           },
         ],
         thresholds: {
@@ -661,6 +662,9 @@ describe("benchmark baseline runner", () => {
           memoryRssTotalDelta: {
             maxAbsoluteDeltaBytes: 134217728,
             maxRatio: 3,
+          },
+          throughputAggregateRowsPerSecond: {
+            minRatio: 0.5,
           },
         },
       },
@@ -828,6 +832,9 @@ describe("benchmark baseline runner", () => {
         memoryRssTotalDelta: {
           maxAbsoluteDeltaBytes: 134217728,
           maxRatio: 3,
+        },
+        throughputAggregateRowsPerSecond: {
+          minRatio: 0.5,
         },
       },
     });

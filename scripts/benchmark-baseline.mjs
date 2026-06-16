@@ -14,6 +14,9 @@ export const defaultBenchmarkThresholds = {
     maxAbsoluteDeltaBytes: 128 * 1024 * 1024,
     maxRatio: 3,
   },
+  throughputAggregateRowsPerSecond: {
+    minRatio: 0.5,
+  },
 };
 
 export const groupedOrderNeutralBenchmarkThresholds = {
@@ -26,6 +29,8 @@ export const groupedOrderNeutralBenchmarkThresholds = {
     maxRatio: 6,
   },
   memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  throughputAggregateRowsPerSecond:
+    defaultBenchmarkThresholds.throughputAggregateRowsPerSecond,
 };
 
 export const kafkaIngestBenchmarkThresholds = {
@@ -38,6 +43,9 @@ export const kafkaIngestBenchmarkThresholds = {
     maxRatio: 1.5,
   },
   memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  throughputAggregateRowsPerSecond: {
+    minRatio: 0.75,
+  },
 };
 
 export const kafkaSustainedFirehoseBenchmarkThresholds = {
@@ -50,6 +58,9 @@ export const kafkaSustainedFirehoseBenchmarkThresholds = {
     maxRatio: 1.75,
   },
   memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  throughputAggregateRowsPerSecond: {
+    minRatio: 0.75,
+  },
 };
 
 export const benchmarkThresholdsForProfile = (profile) =>
@@ -104,6 +115,14 @@ const optionalArrayValue = (value, path) =>
 
 const optionalFiniteNumber = (value, path) =>
   value === undefined ? undefined : finiteNumber(value, path);
+
+const positiveFiniteNumber = (value, path) => {
+  const number = finiteNumber(value, path);
+  if (number <= 0) {
+    throw new Error(`Benchmark artifact field ${path} must be a positive finite number.`);
+  }
+  return number;
+};
 
 const stringArrayValue = (value, path) =>
   arrayValue(value, path).map((item, index) => stringValue(item, `${path}[${index}]`));
@@ -201,6 +220,130 @@ const comparableKafkaIngestLaneValue = (value, path) => {
     region: stringValue(lane.region, `${path}.region`),
     sourceTopicAlias: stringValue(lane.sourceTopicAlias, `${path}.sourceTopicAlias`),
   };
+};
+
+const throughputCaseValue = (value, path) => {
+  const throughputCase = objectValue(value, path);
+  const result = {
+    aggregateRowsPerSecond: positiveFiniteNumber(
+      throughputCase.aggregateRowsPerSecond,
+      `${path}.aggregateRowsPerSecond`,
+    ),
+    maxTotalMs: positiveFiniteNumber(throughputCase.maxTotalMs, `${path}.maxTotalMs`),
+    meanConvergenceMs: positiveFiniteNumber(
+      throughputCase.meanConvergenceMs,
+      `${path}.meanConvergenceMs`,
+    ),
+    meanProducerSendMs: positiveFiniteNumber(
+      throughputCase.meanProducerSendMs,
+      `${path}.meanProducerSendMs`,
+    ),
+    meanRowsPerSecond: positiveFiniteNumber(
+      throughputCase.meanRowsPerSecond,
+      `${path}.meanRowsPerSecond`,
+    ),
+    meanTotalMs: positiveFiniteNumber(throughputCase.meanTotalMs, `${path}.meanTotalMs`),
+    minRowsPerSecond: positiveFiniteNumber(throughputCase.minRowsPerSecond, `${path}.minRowsPerSecond`),
+    name: stringValue(throughputCase.name, `${path}.name`),
+    producedRowsPerSample: positiveInteger(
+      throughputCase.producedRowsPerSample,
+      `${path}.producedRowsPerSample`,
+    ),
+    sampleCount: positiveInteger(throughputCase.sampleCount, `${path}.sampleCount`),
+    totalProducedRows: positiveInteger(
+      throughputCase.totalProducedRows,
+      `${path}.totalProducedRows`,
+    ),
+  };
+  const expectedTotalProducedRows = result.producedRowsPerSample * result.sampleCount;
+  if (result.totalProducedRows !== expectedTotalProducedRows) {
+    throw new Error(
+      `Benchmark artifact field ${path}.totalProducedRows must equal producedRowsPerSample * sampleCount (${expectedTotalProducedRows}).`,
+    );
+  }
+  const expectedAggregateRowsPerSecond = (result.producedRowsPerSample * 1000) / result.meanTotalMs;
+  const aggregateTolerance = Math.max(1e-9, expectedAggregateRowsPerSecond * 1e-9);
+  if (Math.abs(result.aggregateRowsPerSecond - expectedAggregateRowsPerSecond) > aggregateTolerance) {
+    throw new Error(
+      `Benchmark artifact field ${path}.aggregateRowsPerSecond must match producedRowsPerSample * 1000 / meanTotalMs.`,
+    );
+  }
+  if (result.minRowsPerSecond > result.meanRowsPerSecond) {
+    throw new Error(
+      `Benchmark artifact field ${path}.minRowsPerSecond must be less than or equal to meanRowsPerSecond.`,
+    );
+  }
+  if (result.meanTotalMs > result.maxTotalMs) {
+    throw new Error(
+      `Benchmark artifact field ${path}.meanTotalMs must be less than or equal to maxTotalMs.`,
+    );
+  }
+  if (result.meanProducerSendMs > result.meanTotalMs) {
+    throw new Error(
+      `Benchmark artifact field ${path}.meanProducerSendMs must be less than or equal to meanTotalMs.`,
+    );
+  }
+  if (result.meanConvergenceMs > result.meanTotalMs) {
+    throw new Error(
+      `Benchmark artifact field ${path}.meanConvergenceMs must be less than or equal to meanTotalMs.`,
+    );
+  }
+  return result;
+};
+
+const throughputCasesValue = (value, path) => {
+  const throughput = objectValue(value, path);
+  const source = stringValue(throughput.source, `${path}.source`);
+  if (source !== "benchmark-operation-timers") {
+    throw new Error(`Benchmark artifact field ${path}.source must be benchmark-operation-timers.`);
+  }
+  return nonEmptyArrayValue(throughput.cases, `${path}.cases`).map((throughputCase, index) =>
+    throughputCaseValue(throughputCase, `${path}.cases[${index}]`),
+  );
+};
+
+const validateThroughputCasesMatchBenchmarks = (throughputCases, benchmarks, path) => {
+  const benchmarkSampleCountByName = new Map();
+  for (const benchmark of benchmarks) {
+    const previousSampleCount = benchmarkSampleCountByName.get(benchmark.name);
+    if (previousSampleCount !== undefined && previousSampleCount !== benchmark.sampleCount) {
+      throw new Error(
+        `Benchmark artifact field ${path}.benchmarks contains ambiguous benchmark sampleCount values for ${benchmark.name}.`,
+      );
+    }
+    benchmarkSampleCountByName.set(benchmark.name, benchmark.sampleCount);
+  }
+  const throughputByName = throughputCaseByName(throughputCases, path);
+  for (const [benchmarkName, benchmarkSampleCount] of benchmarkSampleCountByName) {
+    const throughputCase = throughputByName.get(benchmarkName);
+    if (throughputCase === undefined) {
+      throw new Error(`Benchmark artifact field ${path} is missing throughput case ${benchmarkName}.`);
+    }
+    if (throughputCase.sampleCount !== benchmarkSampleCount) {
+      throw new Error(
+        `Benchmark artifact field ${path}.${benchmarkName}.sampleCount must equal benchmark sampleCount ${benchmarkSampleCount} but was ${throughputCase.sampleCount}.`,
+      );
+    }
+  }
+  for (const throughputCase of throughputCases) {
+    if (!benchmarkSampleCountByName.has(throughputCase.name)) {
+      throw new Error(
+        `Benchmark artifact field ${path} contains throughput case without matching benchmark: ${throughputCase.name}.`,
+      );
+    }
+  }
+};
+
+const validateThroughputCasesMatchMutationCount = (throughputCases, mutationCount, path) => {
+  const totalProducedRows = throughputCases.reduce(
+    (total, throughputCase) => total + throughputCase.totalProducedRows,
+    0,
+  );
+  if (totalProducedRows !== mutationCount) {
+    throw new Error(
+      `Benchmark artifact field ${path} totalProducedRows must equal mutationCount ${mutationCount} but was ${totalProducedRows}.`,
+    );
+  }
 };
 
 const validateRuntimeSummaryIngestCompleteness = (summary, path, mutationCount) => {
@@ -364,10 +507,35 @@ export const readBenchmarkObservation = (task) => {
   const benchmarkCases = stringArrayValue(summary.benchmarkCases, `${task.summaryPath}.benchmarkCases`);
   const mutationCount = nonNegativeInteger(summary.mutationCount, `${task.summaryPath}.mutationCount`);
   const topics = stringArrayValue(summary.topics, `${task.summaryPath}.topics`);
+  const requiresKafkaThroughput =
+    artifactKind === "runtime-benchmark-summary" && benchmarkScope.startsWith("runtime-kafka-");
   const kafkaIngestLanes =
     artifactKind === "runtime-benchmark-summary"
       ? validateRuntimeSummaryIngestCompleteness(summary, task.summaryPath, mutationCount)
       : undefined;
+  const throughputCases =
+    summary.throughput === undefined
+      ? undefined
+      : throughputCasesValue(summary.throughput, `${task.summaryPath}.throughput`);
+  if (requiresKafkaThroughput && throughputCases === undefined) {
+    throw new Error(
+      `Benchmark artifact field ${task.summaryPath}.throughput is required for ${benchmarkScope}.`,
+    );
+  }
+  if (throughputCases !== undefined) {
+    validateThroughputCasesMatchBenchmarks(
+      throughputCases,
+      benchmarks,
+      `${task.summaryPath}.throughput.cases`,
+    );
+    if (requiresKafkaThroughput) {
+      validateThroughputCasesMatchMutationCount(
+        throughputCases,
+        mutationCount,
+        `${task.summaryPath}.throughput.cases`,
+      );
+    }
+  }
 
   return {
     artifactKind,
@@ -401,6 +569,7 @@ export const readBenchmarkObservation = (task) => {
     subscriberCount: finiteNumber(summary.subscriberCount, `${task.summaryPath}.subscriberCount`),
     summaryPath: task.summaryPath,
     taskLabel: task.label,
+    throughputCases,
     topics,
   };
 };
@@ -465,6 +634,15 @@ const thresholdsValue = (value, path, expectedThresholds) => {
         `${path}.memoryRssTotalDelta.maxRatio`,
       ),
     },
+    throughputAggregateRowsPerSecond: {
+      minRatio: finiteNumber(
+        objectValue(
+          thresholds.throughputAggregateRowsPerSecond,
+          `${path}.throughputAggregateRowsPerSecond`,
+        ).minRatio,
+        `${path}.throughputAggregateRowsPerSecond.minRatio`,
+      ),
+    },
   };
   if (JSON.stringify(validatedThresholds) !== JSON.stringify(expectedThresholds)) {
     throw new Error(`Benchmark artifact field ${path} must match code-owned profile thresholds.`);
@@ -484,6 +662,10 @@ const validateBenchmark = (benchmark, path) => ({
 
 const validateTask = (task, path) => {
   const artifactKind = summaryArtifactKind(task.artifactKind, `${path}.artifactKind`);
+  const benchmarkScope = stringValue(task.benchmarkScope, `${path}.benchmarkScope`);
+  const mutationCount = nonNegativeInteger(task.mutationCount, `${path}.mutationCount`);
+  const requiresKafkaThroughput =
+    artifactKind === "runtime-benchmark-summary" && benchmarkScope.startsWith("runtime-kafka-");
   const memoryRssTotalDeltaBytes = optionalFiniteNumber(
     task.memoryRssTotalDeltaBytes,
     `${path}.memoryRssTotalDeltaBytes`,
@@ -497,15 +679,38 @@ const validateTask = (task, path) => {
       `Benchmark artifact field ${path}.memoryRssTotalDeltaBytes is required for ${artifactKind}.`,
     );
   }
+  const benchmarks = nonEmptyArrayValue(task.benchmarks, `${path}.benchmarks`).map(
+    (benchmark, index) => validateBenchmark(benchmark, `${path}.benchmarks[${index}]`),
+  );
+  const throughputCases =
+    task.throughputCases === undefined
+      ? undefined
+      : nonEmptyArrayValue(task.throughputCases, `${path}.throughputCases`).map(
+          (throughputCase, index) =>
+            throughputCaseValue(throughputCase, `${path}.throughputCases[${index}]`),
+        );
+  if (requiresKafkaThroughput && throughputCases === undefined) {
+    throw new Error(
+      `Benchmark artifact field ${path}.throughputCases is required for ${benchmarkScope}.`,
+    );
+  }
+  if (throughputCases !== undefined) {
+    validateThroughputCasesMatchBenchmarks(throughputCases, benchmarks, `${path}.throughputCases`);
+    if (requiresKafkaThroughput) {
+      validateThroughputCasesMatchMutationCount(
+        throughputCases,
+        mutationCount,
+        `${path}.throughputCases`,
+      );
+    }
+  }
   return {
     artifactKind,
     backpressureCount: finiteNumber(task.backpressureCount, `${path}.backpressureCount`),
-    benchmarks: nonEmptyArrayValue(task.benchmarks, `${path}.benchmarks`).map((benchmark, index) =>
-      validateBenchmark(benchmark, `${path}.benchmarks[${index}]`),
-    ),
+    benchmarks,
     benchmarkCases: stringArrayValue(task.benchmarkCases, `${path}.benchmarkCases`),
     benchmarkName: stringValue(task.benchmarkName, `${path}.benchmarkName`),
-    benchmarkScope: stringValue(task.benchmarkScope, `${path}.benchmarkScope`),
+    benchmarkScope,
     browser: optionalObjectValue(task.browser, `${path}.browser`),
     cleanupLeakCount: finiteNumber(task.cleanupLeakCount, `${path}.cleanupLeakCount`),
     groupedKeyWidthParameters: optionalObjectValue(
@@ -522,7 +727,7 @@ const validateTask = (task, path) => {
     latencySource: stringValue(task.latencySource, `${path}.latencySource`),
     memoryRssTotalDeltaBytes,
     minimumSampleCount: positiveInteger(task.minimumSampleCount, `${path}.minimumSampleCount`),
-    mutationCount: nonNegativeInteger(task.mutationCount, `${path}.mutationCount`),
+    mutationCount,
     outputJsonPath: stringValue(task.outputJsonPath, `${path}.outputJsonPath`),
     queuedEventCount: finiteNumber(task.queuedEventCount, `${path}.queuedEventCount`),
     rowCount: finiteNumber(task.rowCount, `${path}.rowCount`),
@@ -530,6 +735,7 @@ const validateTask = (task, path) => {
     subscriberCount: finiteNumber(task.subscriberCount, `${path}.subscriberCount`),
     summaryPath: stringValue(task.summaryPath, `${path}.summaryPath`),
     taskLabel: stringValue(task.taskLabel, `${path}.taskLabel`),
+    throughputCases,
     topics: stringArrayValue(task.topics, `${path}.topics`),
   };
 };
@@ -570,6 +776,9 @@ const taskByLabel = (tasks, path) =>
 
 const benchmarkByName = (benchmarks, path) =>
   mapByUniqueKey(benchmarks, benchmarkKey, path, "benchmark case");
+
+const throughputCaseByName = (throughputCases, path) =>
+  mapByUniqueKey(throughputCases, (throughputCase) => throughputCase.name, path, "throughput case");
 
 const pushRegression = (regressions, message) => {
   regressions.push(message);
@@ -626,6 +835,80 @@ const compareRss = (regressions, taskLabel, threshold, baseline, actual) => {
       `${taskLabel}: total RSS delta regressed from ${baseline} bytes to ${actual} bytes; allowed <= ${Math.round(
         limit,
       )} bytes.`,
+    );
+  }
+};
+
+const compareThroughput = (
+  regressions,
+  taskLabel,
+  caseName,
+  metricName,
+  threshold,
+  baseline,
+  actual,
+) => {
+  const minimum = baseline * threshold.minRatio;
+  if (actual < minimum) {
+    pushRegression(
+      regressions,
+      `${taskLabel} / ${caseName}: ${metricName} throughput regressed from ${baseline.toFixed(
+        3,
+      )} rows/sec to ${actual.toFixed(3)} rows/sec; allowed >= ${minimum.toFixed(3)} rows/sec.`,
+    );
+  }
+};
+
+const compareThroughputCases = (regressions, taskLabel, threshold, baselineCases, actualCases) => {
+  if (baselineCases === undefined && actualCases === undefined) {
+    return;
+  }
+  if (baselineCases === undefined || actualCases === undefined) {
+    pushRegression(regressions, `${taskLabel}: throughputCases presence changed.`);
+    return;
+  }
+  const baselineByName = throughputCaseByName(baselineCases, `baseline.tasks[${taskLabel}]`);
+  const actualByName = throughputCaseByName(actualCases, `actual.tasks[${taskLabel}]`);
+  for (const caseName of actualByName.keys()) {
+    if (!baselineByName.has(caseName)) {
+      pushRegression(regressions, `${taskLabel}: unexpected throughput case ${caseName}.`);
+    }
+  }
+  for (const baselineCase of baselineCases) {
+    const actualCase = actualByName.get(baselineCase.name);
+    if (actualCase === undefined) {
+      pushRegression(regressions, `${taskLabel}: missing throughput case ${baselineCase.name}.`);
+      continue;
+    }
+    compareExact(
+      regressions,
+      taskLabel,
+      `${baselineCase.name} throughput producedRowsPerSample`,
+      baselineCase.producedRowsPerSample,
+      actualCase.producedRowsPerSample,
+    );
+    compareExact(
+      regressions,
+      taskLabel,
+      `${baselineCase.name} throughput sampleCount`,
+      baselineCase.sampleCount,
+      actualCase.sampleCount,
+    );
+    compareExact(
+      regressions,
+      taskLabel,
+      `${baselineCase.name} throughput totalProducedRows`,
+      baselineCase.totalProducedRows,
+      actualCase.totalProducedRows,
+    );
+    compareThroughput(
+      regressions,
+      taskLabel,
+      baselineCase.name,
+      "aggregateRowsPerSecond",
+      threshold,
+      baselineCase.aggregateRowsPerSecond,
+      actualCase.aggregateRowsPerSecond,
     );
   }
 };
@@ -734,6 +1017,13 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
       "kafkaIngestLanes",
       baselineTask.kafkaIngestLanes,
       actualTask.kafkaIngestLanes,
+    );
+    compareThroughputCases(
+      regressions,
+      taskLabel,
+      thresholds.throughputAggregateRowsPerSecond,
+      baselineTask.throughputCases,
+      actualTask.throughputCases,
     );
     compareExact(
       regressions,

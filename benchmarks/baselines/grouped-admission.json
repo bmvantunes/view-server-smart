@@ -495,6 +495,9 @@
     "memoryRssTotalDelta": {
       "maxAbsoluteDeltaBytes": 134217728,
       "maxRatio": 3
+    },
+    "throughputAggregateRowsPerSecond": {
+      "minRatio": 0.5
     }
   }
 }

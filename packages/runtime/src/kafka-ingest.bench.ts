@@ -8,6 +8,7 @@ import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/
 import { Buffer } from "node:buffer";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { Crypto, Effect, Exit, Schedule, Schema } from "effect";
 import { makeViewServerRuntime, type ViewServerRuntime } from "./index";
 import { OrderKeySchema, OrderValueSchema } from "./test-fixtures/runtime_orders_pb";
@@ -50,6 +51,29 @@ type BenchmarkProfile = {
 type BenchmarkCase = {
   readonly name: string;
   readonly run: () => Promise<void>;
+};
+
+type IngestSample = {
+  readonly convergenceMs: number;
+  readonly name: string;
+  readonly producerSendMs: number;
+  readonly rows: number;
+  readonly rowsPerSecond: number;
+  readonly totalMs: number;
+};
+
+type IngestThroughputCaseSummary = {
+  readonly aggregateRowsPerSecond: number;
+  readonly maxTotalMs: number;
+  readonly meanConvergenceMs: number;
+  readonly meanProducerSendMs: number;
+  readonly meanRowsPerSecond: number;
+  readonly meanTotalMs: number;
+  readonly minRowsPerSecond: number;
+  readonly name: string;
+  readonly producedRowsPerSample: number;
+  readonly sampleCount: number;
+  readonly totalProducedRows: number;
 };
 
 class KafkaIngestBenchmarkError extends Schema.TaggedErrorClass<KafkaIngestBenchmarkError>()(
@@ -195,6 +219,7 @@ const profile: BenchmarkProfile = {
   stringProducer: undefined,
 };
 
+const ingestSamples: Array<IngestSample> = [];
 const internalTopicNames = ["jsonOrders", "protobufOrders"] as const;
 
 function memorySnapshot(): BenchmarkMemorySnapshot {
@@ -425,18 +450,27 @@ const waitForRows = Effect.fn("ViewServerRuntime.kafka.bench.waitForRows")(funct
   topic: "jsonOrders" | "protobufOrders",
   expectedRows: number,
 ) {
+  const expectedSourceTopic =
+    topic === "jsonOrders" ? sourceTopics().jsonOrders : sourceTopics().protobufOrders;
   const health = yield* startedRuntime()
     .client.health()
     .pipe(
       Effect.repeat({
         schedule: healthPollSchedule,
-        until: (currentHealth) => currentHealth.engine.topics[topic].rowCount === expectedRows,
+        until: (currentHealth) =>
+          currentHealth.engine.topics[topic].rowCount === expectedRows &&
+          committedOffset(currentHealth, expectedSourceTopic) === expectedRows,
       }),
     );
   const actualRows = health.engine.topics[topic].rowCount;
-  if (actualRows !== expectedRows) {
+  const actualCommittedOffset = committedOffset(health, expectedSourceTopic);
+  if (actualRows !== expectedRows || actualCommittedOffset !== expectedRows) {
     return yield* new KafkaIngestBenchmarkError({
-      message: `Kafka ingest benchmark ${topic} did not converge: expected exactly ${expectedRows} row(s), got ${actualRows}.`,
+      message: [
+        `Kafka ingest benchmark ${topic} did not converge.`,
+        `rows=${actualRows}/${expectedRows}`,
+        `committedOffset=${actualCommittedOffset}/${expectedRows}`,
+      ].join(" "),
     });
   }
   return health;
@@ -490,35 +524,6 @@ const waitForFinalHealth = Effect.fn("ViewServerRuntime.kafka.bench.waitForFinal
   },
 );
 
-const publishJsonBatch = async (count: number): Promise<void> => {
-  const nextTotal = profile.jsonProducedRows + count;
-  await stringProducer().send({
-    messages: jsonMessages(sourceTopics().jsonOrders, profile.jsonProducedRows, count),
-  });
-  profile.jsonProducedRows = nextTotal;
-  await Effect.runPromise(waitForRows("jsonOrders", nextTotal));
-};
-
-const publishProtobufBatch = async (count: number): Promise<void> => {
-  const nextTotal = profile.protobufProducedRows + count;
-  await binaryProducer().send({
-    messages: protobufMessages(sourceTopics().protobufOrders, profile.protobufProducedRows, count),
-  });
-  profile.protobufProducedRows = nextTotal;
-  await Effect.runPromise(waitForRows("protobufOrders", nextTotal));
-};
-
-const publishMixedBatch = async (count: number): Promise<void> => {
-  const results = await Promise.allSettled([publishJsonBatch(count), publishProtobufBatch(count)]);
-  const failures = results.filter((result) => result.status === "rejected");
-  if (failures.length > 0) {
-    throw new AggregateError(
-      failures.map((failure) => failure.reason),
-      `Kafka ingest benchmark mixed burst failed in ${failures.length} lane(s).`,
-    );
-  }
-};
-
 const topicHealthValues = (health: ViewServerHealth<Topics>) =>
   internalTopicNames.map((topic) => health.engine.topics[topic]);
 
@@ -547,35 +552,194 @@ const backpressureCountFromHealth = (health: ViewServerHealth<Topics>): number =
   return backpressureCount;
 };
 
-const publishJsonBatchWithoutWaiting = async (count: number): Promise<void> => {
-  await stringProducer().send({
-    messages: jsonMessages(sourceTopics().jsonOrders, profile.jsonProducedRows, count),
-  });
-  profile.jsonProducedRows += count;
+const timed = async <A>(operation: () => Promise<A>): Promise<readonly [A, number]> => {
+  const startedAt = performance.now();
+  const value = await operation();
+  return [value, performance.now() - startedAt];
 };
 
-const publishProtobufBatchWithoutWaiting = async (count: number): Promise<void> => {
-  await binaryProducer().send({
-    messages: protobufMessages(sourceTopics().protobufOrders, profile.protobufProducedRows, count),
+const recordIngestSample = ({
+  convergenceMs,
+  name,
+  producerSendMs,
+  rows,
+  totalMs,
+}: Omit<IngestSample, "rowsPerSecond">): void => {
+  ingestSamples.push({
+    convergenceMs,
+    name,
+    producerSendMs,
+    rows,
+    rowsPerSecond: rows / (totalMs / 1_000),
+    totalMs,
   });
+};
+
+const mean = (values: ReadonlyArray<number>): number =>
+  values.reduce((total, value) => total + value, 0) / values.length;
+
+const settledValuesOrThrow = <A>(
+  results: ReadonlyArray<PromiseSettledResult<A>>,
+  message: string,
+): ReadonlyArray<A> => {
+  const values: Array<A> = [];
+  const failures: Array<unknown> = [];
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      values.push(result.value);
+    } else {
+      failures.push(result.reason);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, message);
+  }
+  return values;
+};
+
+const ingestThroughputCases = (): ReadonlyArray<IngestThroughputCaseSummary> => {
+  const samplesByName = Map.groupBy(ingestSamples, (sample) => sample.name);
+  return [...samplesByName.entries()]
+    .map(([name, samples]) => {
+      const totalProducedRows = samples.reduce((total, sample) => total + sample.rows, 0);
+      const totalMs = samples.reduce((total, sample) => total + sample.totalMs, 0);
+      return {
+        aggregateRowsPerSecond: totalProducedRows / (totalMs / 1_000),
+        maxTotalMs: Math.max(...samples.map((sample) => sample.totalMs)),
+        meanConvergenceMs: mean(samples.map((sample) => sample.convergenceMs)),
+        meanProducerSendMs: mean(samples.map((sample) => sample.producerSendMs)),
+        meanRowsPerSecond: mean(samples.map((sample) => sample.rowsPerSecond)),
+        meanTotalMs: mean(samples.map((sample) => sample.totalMs)),
+        minRowsPerSecond: Math.min(...samples.map((sample) => sample.rowsPerSecond)),
+        name,
+        producedRowsPerSample: samples[0]?.rows ?? 0,
+        sampleCount: samples.length,
+        totalProducedRows,
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+};
+
+const publishJsonBatchTimed = async (count: number) => {
+  const nextTotal = profile.jsonProducedRows + count;
+  const [_sendResult, producerSendMs] = await timed(() =>
+    stringProducer().send({
+      messages: jsonMessages(sourceTopics().jsonOrders, profile.jsonProducedRows, count),
+    }),
+  );
+  profile.jsonProducedRows = nextTotal;
+  const [_health, convergenceMs] = await timed(() =>
+    Effect.runPromise(waitForRows("jsonOrders", nextTotal)),
+  );
+  return {
+    convergenceMs,
+    producerSendMs,
+    rows: count,
+    totalMs: producerSendMs + convergenceMs,
+  };
+};
+
+const publishProtobufBatchTimed = async (count: number) => {
+  const nextTotal = profile.protobufProducedRows + count;
+  const [_sendResult, producerSendMs] = await timed(() =>
+    binaryProducer().send({
+      messages: protobufMessages(
+        sourceTopics().protobufOrders,
+        profile.protobufProducedRows,
+        count,
+      ),
+    }),
+  );
+  profile.protobufProducedRows = nextTotal;
+  const [_health, convergenceMs] = await timed(() =>
+    Effect.runPromise(waitForRows("protobufOrders", nextTotal)),
+  );
+  return {
+    convergenceMs,
+    producerSendMs,
+    rows: count,
+    totalMs: producerSendMs + convergenceMs,
+  };
+};
+
+const publishJsonBatchWithoutWaiting = async (count: number): Promise<number> => {
+  const [_sendResult, producerSendMs] = await timed(() =>
+    stringProducer().send({
+      messages: jsonMessages(sourceTopics().jsonOrders, profile.jsonProducedRows, count),
+    }),
+  );
+  profile.jsonProducedRows += count;
+  return producerSendMs;
+};
+
+const publishProtobufBatchWithoutWaiting = async (count: number): Promise<number> => {
+  const [_sendResult, producerSendMs] = await timed(() =>
+    binaryProducer().send({
+      messages: protobufMessages(
+        sourceTopics().protobufOrders,
+        profile.protobufProducedRows,
+        count,
+      ),
+    }),
+  );
   profile.protobufProducedRows += count;
+  return producerSendMs;
+};
+
+const publishJsonBatch = async (count: number): Promise<void> => {
+  const sample = await publishJsonBatchTimed(count);
+  recordIngestSample({
+    ...sample,
+    name: "json source batch ingest",
+  });
+};
+
+const publishProtobufBatch = async (count: number): Promise<void> => {
+  const sample = await publishProtobufBatchTimed(count);
+  recordIngestSample({
+    ...sample,
+    name: "protobuf source batch ingest",
+  });
+};
+
+const publishMixedBatch = async (count: number): Promise<void> => {
+  const startedAt = performance.now();
+  const results = await Promise.allSettled([
+    publishJsonBatchTimed(count),
+    publishProtobufBatchTimed(count),
+  ]);
+  const samples = settledValuesOrThrow(results, "Kafka ingest benchmark mixed burst failed.");
+  recordIngestSample({
+    convergenceMs: Math.max(...samples.map((sample) => sample.convergenceMs)),
+    name: "mixed source burst ingest",
+    producerSendMs: Math.max(...samples.map((sample) => sample.producerSendMs)),
+    rows: samples.reduce((total, sample) => total + sample.rows, 0),
+    totalMs: performance.now() - startedAt,
+  });
 };
 
 const publishSustainedMixedFirehose = async (): Promise<void> => {
+  const startedAt = performance.now();
+  let producerSendMs = 0;
   for (let batchIndex = 0; batchIndex < sustainedBatchCount; batchIndex += 1) {
     const results = await Promise.allSettled([
       publishJsonBatchWithoutWaiting(batchSize),
       publishProtobufBatchWithoutWaiting(batchSize),
     ]);
-    const failures = results.filter((result) => result.status === "rejected");
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures.map((failure) => failure.reason),
-        `Kafka ingest benchmark sustained firehose batch ${batchIndex} failed in ${failures.length} lane(s).`,
-      );
-    }
+    const sendDurations = settledValuesOrThrow(
+      results,
+      `Kafka ingest benchmark sustained firehose batch ${batchIndex} failed.`,
+    );
+    producerSendMs += Math.max(...sendDurations);
   }
-  await Effect.runPromise(waitForFinalHealth());
+  const [_health, convergenceMs] = await timed(() => Effect.runPromise(waitForFinalHealth()));
+  recordIngestSample({
+    convergenceMs,
+    name: "sustained mixed firehose ingest",
+    producerSendMs,
+    rows: batchSize * sustainedBatchCount * 2,
+    totalMs: performance.now() - startedAt,
+  });
 };
 
 beforeAll(async () => {
@@ -671,6 +835,10 @@ afterAll(async () => {
     rowCount: batchSize,
     subscriberCount: 0,
     topics: ["jsonOrders", "protobufOrders"],
+    throughput: {
+      cases: ingestThroughputCases(),
+      source: "benchmark-operation-timers",
+    },
   });
   if (Exit.isFailure(finalHealthExit)) {
     throw new Error(

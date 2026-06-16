@@ -111,6 +111,72 @@ const comparableRuntimeKafkaIngestLanes = [
   },
 ];
 
+const runtimeThroughputMutationCount = 700;
+
+const runtimeThroughputHealth = {
+  engine: {
+    topics: {
+      orders: {
+        rowCount: runtimeThroughputMutationCount,
+      },
+    },
+  },
+  kafka: {
+    topics: {
+      sourceOrders: {
+        regions: {
+          local: {
+            committedOffset: String(runtimeThroughputMutationCount),
+          },
+        },
+        viewServerTopic: "orders",
+      },
+    },
+  },
+};
+
+const runtimeThroughputKafkaIngestLanes = [
+  {
+    internalTopic: "orders",
+    lane: "orders",
+    producedRows: runtimeThroughputMutationCount,
+    region: "local",
+    sourceTopic: "sourceOrders",
+    sourceTopicAlias: "unique-topic-per-run:orders",
+  },
+];
+
+const comparableRuntimeThroughputKafkaIngestLanes = [
+  {
+    internalTopic: "orders",
+    lane: "orders",
+    producedRows: runtimeThroughputMutationCount,
+    region: "local",
+    sourceTopicAlias: "unique-topic-per-run:orders",
+  },
+];
+
+const runtimeThroughput = {
+  source: "benchmark-operation-timers",
+  cases: [
+    {
+      aggregateRowsPerSecond: 1000,
+      maxTotalMs: 100,
+      meanConvergenceMs: 75,
+      meanProducerSendMs: 25,
+      meanRowsPerSecond: 1000,
+      meanTotalMs: 100,
+      minRowsPerSecond: 900,
+      name: "case a",
+      producedRowsPerSample: 100,
+      sampleCount: 7,
+      totalProducedRows: 700,
+    },
+  ],
+};
+
+const comparableRuntimeThroughputCases = runtimeThroughput.cases;
+
 const observation = {
   artifactKind: "engine-benchmark-summary",
   backpressureCount: 0,
@@ -147,6 +213,7 @@ const observation = {
   subscriberCount: 1,
   summaryPath: "actual.summary.json",
   taskLabel: "task a",
+  throughputCases: undefined,
   topics: ["orders"],
 };
 
@@ -278,6 +345,27 @@ describe("benchmark baseline comparison", () => {
     });
   });
 
+  it("reads non-Kafka throughput observations without Kafka mutation reconciliation", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
+    const summaryPath = join(directory, "actual.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    writeFileSync(
+      summaryPath,
+      `${JSON.stringify({
+        ...summary,
+        throughput: runtimeThroughput,
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
+
+    expect(readBenchmarkObservation(taskPaths(summaryPath, outputJsonPath))).toStrictEqual({
+      ...observation,
+      outputJsonPath,
+      summaryPath,
+      throughputCases: comparableRuntimeThroughputCases,
+    });
+  });
+
   it("reads runtime benchmark observations with process memory data", () => {
     const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
     const summaryPath = join(directory, "actual.summary.json");
@@ -289,10 +377,12 @@ describe("benchmark baseline comparison", () => {
         artifactKind: "runtime-benchmark-summary",
         benchmarkScope: "runtime-kafka-ingest",
         groupedWriteAdmission: undefined,
-        health: runtimeHealth,
+        health: runtimeThroughputHealth,
         kafka: {
-          ingestLanes: runtimeKafkaIngestLanes,
+          ingestLanes: runtimeThroughputKafkaIngestLanes,
         },
+        mutationCount: runtimeThroughputMutationCount,
+        throughput: runtimeThroughput,
       })}\n`,
     );
     writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
@@ -304,10 +394,530 @@ describe("benchmark baseline comparison", () => {
       artifactKind: "runtime-benchmark-summary",
       benchmarkScope: "runtime-kafka-ingest",
       groupedWriteAdmission: undefined,
-      kafkaIngestLanes: comparableRuntimeKafkaIngestLanes,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
       outputJsonPath,
       summaryPath,
+      throughputCases: comparableRuntimeThroughputCases,
     });
+  });
+
+  it("accepts duplicate throughput benchmark names across groups with matching sample counts", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-throughput-groups-"));
+    const summaryPath = join(directory, "actual.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    const duplicateGroupVitestOutput = {
+      files: [
+        {
+          groups: [
+            {
+              fullName: "src/example-a.bench.ts > first group",
+              benchmarks: [
+                {
+                  max: 3,
+                  mean: 2,
+                  min: 1,
+                  name: "case a",
+                  p99: 3,
+                  sampleCount: 7,
+                },
+              ],
+            },
+            {
+              fullName: "src/example-b.bench.ts > second group",
+              benchmarks: [
+                {
+                  max: 4,
+                  mean: 3,
+                  min: 2,
+                  name: "case a",
+                  p99: 4,
+                  sampleCount: 7,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    writeFileSync(
+      summaryPath,
+      `${JSON.stringify({
+        ...summary,
+        throughput: runtimeThroughput,
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(duplicateGroupVitestOutput)}\n`);
+
+    expect(readBenchmarkObservation(taskPaths(summaryPath, outputJsonPath))).toStrictEqual({
+      ...observation,
+      benchmarks: [
+        {
+          groupName: "src/example-a.bench.ts > first group",
+          maxMs: 3,
+          meanMs: 2,
+          minMs: 1,
+          name: "case a",
+          p99Ms: 3,
+          sampleCount: 7,
+        },
+        {
+          groupName: "src/example-b.bench.ts > second group",
+          maxMs: 4,
+          meanMs: 3,
+          minMs: 2,
+          name: "case a",
+          p99Ms: 4,
+          sampleCount: 7,
+        },
+      ],
+      outputJsonPath,
+      summaryPath,
+      throughputCases: comparableRuntimeThroughputCases,
+    });
+  });
+
+  it("rejects ambiguous throughput benchmark sample counts across groups", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-throughput-groups-"));
+    const summaryPath = join(directory, "actual.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    const ambiguousGroupVitestOutput = {
+      files: [
+        {
+          groups: [
+            {
+              fullName: "src/example-a.bench.ts > first group",
+              benchmarks: [
+                {
+                  max: 3,
+                  mean: 2,
+                  min: 1,
+                  name: "case a",
+                  p99: 3,
+                  sampleCount: 7,
+                },
+              ],
+            },
+            {
+              fullName: "src/example-b.bench.ts > second group",
+              benchmarks: [
+                {
+                  max: 4,
+                  mean: 3,
+                  min: 2,
+                  name: "case a",
+                  p99: 4,
+                  sampleCount: 8,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    writeFileSync(
+      summaryPath,
+      `${JSON.stringify({
+        ...summary,
+        throughput: runtimeThroughput,
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(ambiguousGroupVitestOutput)}\n`);
+
+    expect(() => readBenchmarkObservation(taskPaths(summaryPath, outputJsonPath))).toThrow(
+      `Benchmark artifact field ${summaryPath}.throughput.cases.benchmarks contains ambiguous benchmark sampleCount values for case a.`,
+    );
+  });
+
+  it("rejects runtime benchmark observations with malformed throughput", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-throughput-"));
+    const invalidSourceSummaryPath = join(directory, "invalid-source.summary.json");
+    const invalidRowsSummaryPath = join(directory, "invalid-rows.summary.json");
+    const invalidTotalRowsSummaryPath = join(directory, "invalid-total-rows.summary.json");
+    const invalidPositiveRateSummaryPath = join(directory, "invalid-positive-rate.summary.json");
+    const invalidAggregateSummaryPath = join(directory, "invalid-aggregate.summary.json");
+    const invalidMinRowsSummaryPath = join(directory, "invalid-min-rows.summary.json");
+    const invalidMaxTotalSummaryPath = join(directory, "invalid-max-total.summary.json");
+    const invalidProducerTimerSummaryPath = join(directory, "invalid-producer-timer.summary.json");
+    const invalidConvergenceTimerSummaryPath = join(
+      directory,
+      "invalid-convergence-timer.summary.json",
+    );
+    const mismatchedNameSummaryPath = join(directory, "mismatched-name.summary.json");
+    const mismatchedSampleCountSummaryPath = join(
+      directory,
+      "mismatched-sample-count.summary.json",
+    );
+    const extraThroughputCaseSummaryPath = join(directory, "extra-throughput-case.summary.json");
+    const mismatchedMutationTotalSummaryPath = join(
+      directory,
+      "mismatched-mutation-total.summary.json",
+    );
+    const missingThroughputSummaryPath = join(directory, "missing-throughput.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    writeFileSync(
+      missingThroughputSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidSourceSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          source: "other-timer",
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidRowsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              producedRowsPerSample: 0,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidTotalRowsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              totalProducedRows: 699,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidAggregateSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              aggregateRowsPerSecond: 999,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidPositiveRateSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              aggregateRowsPerSecond: 0,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidMinRowsSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              meanRowsPerSecond: 900,
+              minRowsPerSecond: 901,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidMaxTotalSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              maxTotalMs: 99,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidProducerTimerSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              meanProducerSendMs: 101,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      invalidConvergenceTimerSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              meanConvergenceMs: 101,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      mismatchedNameSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              name: "case b",
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      mismatchedSampleCountSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            {
+              ...runtimeThroughput.cases[0],
+              sampleCount: 6,
+              totalProducedRows: 600,
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      extraThroughputCaseSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: {
+          ...runtimeThroughput,
+          cases: [
+            runtimeThroughput.cases[0],
+            {
+              ...runtimeThroughput.cases[0],
+              name: "case b",
+            },
+          ],
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      mismatchedMutationTotalSummaryPath,
+      `${JSON.stringify({
+        ...summary,
+        artifactKind: "runtime-benchmark-summary",
+        benchmarkScope: "runtime-kafka-ingest",
+        groupedWriteAdmission: undefined,
+        health: runtimeHealth,
+        kafka: {
+          ingestLanes: runtimeKafkaIngestLanes,
+        },
+        throughput: runtimeThroughput,
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
+
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(missingThroughputSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${missingThroughputSummaryPath}.throughput is required for runtime-kafka-ingest.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidSourceSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidSourceSummaryPath}.throughput.source must be benchmark-operation-timers.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidRowsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidRowsSummaryPath}.throughput.cases[0].producedRowsPerSample must be a positive integer.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidTotalRowsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidTotalRowsSummaryPath}.throughput.cases[0].totalProducedRows must equal producedRowsPerSample * sampleCount (700).`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidAggregateSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidAggregateSummaryPath}.throughput.cases[0].aggregateRowsPerSecond must match producedRowsPerSample * 1000 / meanTotalMs.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidPositiveRateSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidPositiveRateSummaryPath}.throughput.cases[0].aggregateRowsPerSecond must be a positive finite number.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidMinRowsSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidMinRowsSummaryPath}.throughput.cases[0].minRowsPerSecond must be less than or equal to meanRowsPerSecond.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidMaxTotalSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidMaxTotalSummaryPath}.throughput.cases[0].meanTotalMs must be less than or equal to maxTotalMs.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(invalidProducerTimerSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${invalidProducerTimerSummaryPath}.throughput.cases[0].meanProducerSendMs must be less than or equal to meanTotalMs.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(
+        runtimeTaskPaths(invalidConvergenceTimerSummaryPath, outputJsonPath),
+      ),
+    ).toThrow(
+      `Benchmark artifact field ${invalidConvergenceTimerSummaryPath}.throughput.cases[0].meanConvergenceMs must be less than or equal to meanTotalMs.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(mismatchedNameSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${mismatchedNameSummaryPath}.throughput.cases is missing throughput case case a.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(mismatchedSampleCountSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${mismatchedSampleCountSummaryPath}.throughput.cases.case a.sampleCount must equal benchmark sampleCount 7 but was 6.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(extraThroughputCaseSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${extraThroughputCaseSummaryPath}.throughput.cases contains throughput case without matching benchmark: case b.`,
+    );
+    expect(() =>
+      readBenchmarkObservation(runtimeTaskPaths(mismatchedMutationTotalSummaryPath, outputJsonPath)),
+    ).toThrow(
+      `Benchmark artifact field ${mismatchedMutationTotalSummaryPath}.throughput.cases totalProducedRows must equal mutationCount 100 but was 700.`,
+    );
   });
 
   it("rejects incomplete runtime benchmark health", () => {
@@ -1012,19 +1622,243 @@ describe("benchmark baseline comparison", () => {
       artifactKind: "runtime-benchmark-summary",
       benchmarkScope: "runtime-kafka-ingest",
       groupedWriteAdmission: undefined,
-      kafkaIngestLanes: comparableRuntimeKafkaIngestLanes,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+      throughputCases: comparableRuntimeThroughputCases,
     };
     const baseline = buildBenchmarkBaseline("kafka-ingest", [kafkaObservation]);
     const changedMutationCount = buildBenchmarkBaseline("kafka-ingest", [
       {
         ...kafkaObservation,
-        mutationCount: 99,
+        mutationCount: 1400,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            aggregateRowsPerSecond: 2000,
+            meanRowsPerSecond: 2000,
+            minRowsPerSecond: 1800,
+            producedRowsPerSample: 200,
+            totalProducedRows: 1400,
+          },
+        ],
       },
     ]);
 
     expect(compareBenchmarkBaseline(baseline, changedMutationCount)).toStrictEqual({
       ok: false,
-      regressions: ["task a: mutationCount changed from 100 to 99."],
+      regressions: [
+        "task a: mutationCount changed from 700 to 1400.",
+        "task a: case a throughput producedRowsPerSample changed from 100 to 200.",
+        "task a: case a throughput totalProducedRows changed from 700 to 1400.",
+      ],
+    });
+  });
+
+  it("reports Kafka ingest throughput regressions", () => {
+    const kafkaObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+      throughputCases: comparableRuntimeThroughputCases,
+    };
+    const baseline = buildBenchmarkBaseline("kafka-ingest", [kafkaObservation]);
+    const regressedThroughput = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            aggregateRowsPerSecond: 400,
+            maxTotalMs: 250,
+            meanTotalMs: 250,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, regressedThroughput)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a / case a: aggregateRowsPerSecond throughput regressed from 1000.000 rows/sec to 400.000 rows/sec; allowed >= 750.000 rows/sec.",
+      ],
+    });
+  });
+
+  it("uses the Kafka profile throughput threshold", () => {
+    const kafkaObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+      throughputCases: comparableRuntimeThroughputCases,
+    };
+    const baseline = buildBenchmarkBaseline("kafka-ingest", [kafkaObservation]);
+    const thresholdThroughput = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            aggregateRowsPerSecond: 750,
+            maxTotalMs: 133.33333333333334,
+            meanRowsPerSecond: 750,
+            meanTotalMs: 133.33333333333334,
+            minRowsPerSecond: 700,
+          },
+        ],
+      },
+    ]);
+    const belowThresholdThroughput = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            aggregateRowsPerSecond: 749,
+            maxTotalMs: 133.5113484646195,
+            meanRowsPerSecond: 749,
+            meanTotalMs: 133.5113484646195,
+            minRowsPerSecond: 700,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, thresholdThroughput)).toStrictEqual({
+      ok: true,
+      regressions: [],
+    });
+    expect(compareBenchmarkBaseline(baseline, belowThresholdThroughput)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a / case a: aggregateRowsPerSecond throughput regressed from 1000.000 rows/sec to 749.000 rows/sec; allowed >= 750.000 rows/sec.",
+      ],
+    });
+  });
+
+  it("requires throughput cases in committed Kafka baselines", () => {
+    const kafkaObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+    };
+    const baseline = buildBenchmarkBaseline("kafka-ingest", [kafkaObservation]);
+    const completeBaseline = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: comparableRuntimeThroughputCases,
+      },
+    ]);
+    const emptyThroughputBaseline = {
+      ...completeBaseline,
+      tasks: [
+        {
+          ...completeBaseline.tasks[0],
+          throughputCases: [],
+        },
+      ],
+    };
+    const renamedThroughputBaseline = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            name: "case b",
+          },
+        ],
+      },
+    ]);
+    const mismatchedSampleCountBaseline = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            sampleCount: 6,
+            totalProducedRows: 600,
+          },
+        ],
+      },
+    ]);
+
+    expect(() => validateBenchmarkBaseline(baseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases is required for runtime-kafka-ingest.",
+    );
+    expect(() => validateBenchmarkBaseline(emptyThroughputBaseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases must be a non-empty array.",
+    );
+    expect(() => validateBenchmarkBaseline(renamedThroughputBaseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases is missing throughput case case a.",
+    );
+    expect(() => validateBenchmarkBaseline(mismatchedSampleCountBaseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases.case a.sampleCount must equal benchmark sampleCount 7 but was 6.",
+    );
+  });
+
+  it("requires throughput cases in committed Kafka sustained firehose baselines", () => {
+    const kafkaObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-sustained-firehose",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+    };
+    const baseline = buildBenchmarkBaseline("kafka-sustained-firehose", [kafkaObservation]);
+
+    expect(() => validateBenchmarkBaseline(baseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases is required for runtime-kafka-sustained-firehose.",
+    );
+  });
+
+  it("reports throughput metadata drift", () => {
+    const withThroughput = {
+      ...observation,
+      throughputCases: comparableRuntimeThroughputCases,
+    };
+    const baseline = buildBenchmarkBaseline("smoke", [withThroughput]);
+    const missingThroughput = buildBenchmarkBaseline("smoke", [observation]);
+    const renamedThroughput = buildBenchmarkBaseline("smoke", [
+      {
+        ...withThroughput,
+        benchmarks: [
+          {
+            ...observation.benchmarks[0],
+            name: "case b",
+          },
+        ],
+        benchmarkCases: ["case b"],
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            name: "case b",
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, missingThroughput)).toStrictEqual({
+      ok: false,
+      regressions: ["task a: throughputCases presence changed."],
+    });
+    expect(compareBenchmarkBaseline(baseline, renamedThroughput)).toStrictEqual({
+      ok: false,
+      regressions: [
+        'task a: benchmarkCases changed from ["case a"] to ["case b"].',
+        "task a: unexpected throughput case case b.",
+        "task a: missing throughput case case a.",
+        "task a: unexpected benchmark case src/example.bench.ts > example benchmark group / case b.",
+        "task a: missing benchmark case src/example.bench.ts > example benchmark group / case a.",
+      ],
     });
   });
 
@@ -1288,6 +2122,9 @@ describe("benchmark baseline comparison", () => {
         memoryRssTotalDelta: {
           maxAbsoluteDeltaBytes: 134217728,
           maxRatio: 3,
+        },
+        throughputAggregateRowsPerSecond: {
+          minRatio: 0.75,
         },
       },
     };
