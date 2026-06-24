@@ -312,7 +312,7 @@
         "writeBatchSize": 1
       },
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 3006726144,
+      "memoryRssTotalDeltaBytes": 3153690624,
       "minimumSampleCount": 3,
       "mutationCount": 5000018,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-write-incremental-order-neutral-5000000rows-1mutations.json",
