@@ -202,6 +202,8 @@ describe("benchmark baseline runner", () => {
       kafkaIngestUpdate: scripts["bench:baseline:kafka-ingest:update"],
       kafkaSustainedFirehose: scripts["bench:baseline:kafka-sustained-firehose"],
       kafkaSustainedFirehoseUpdate: scripts["bench:baseline:kafka-sustained-firehose:update"],
+      rawReadWrite: scripts["bench:baseline:raw-read-write"],
+      rawReadWriteUpdate: scripts["bench:baseline:raw-read-write:update"],
       release: scripts["bench:baseline:release"],
       webSocketFirehose: scripts["bench:baseline:websocket-firehose"],
       webSocketFirehoseUpdate: scripts["bench:baseline:websocket-firehose:update"],
@@ -223,11 +225,103 @@ describe("benchmark baseline runner", () => {
         "node scripts/run-benchmark-baseline.mjs --profile=kafka-sustained-firehose",
       kafkaSustainedFirehoseUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=kafka-sustained-firehose --update-baseline",
+      rawReadWrite: "node scripts/run-benchmark-baseline.mjs --profile=raw-read-write",
+      rawReadWriteUpdate:
+        "node scripts/run-benchmark-baseline.mjs --profile=raw-read-write --update-baseline",
       release: "node scripts/run-benchmark-baseline.mjs --profile=release --no-compare",
       webSocketFirehose: "node scripts/run-benchmark-baseline.mjs --profile=websocket-firehose",
       webSocketFirehoseUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=websocket-firehose --update-baseline",
     });
+  });
+
+  it("defines raw read and write performance gate tasks", () => {
+    const rawReadWriteTasks = profiles.get("raw-read-write") ?? [];
+
+    expect(
+      rawReadWriteTasks.map((task) => ({
+        batchSize: task.env["VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE"],
+        benchmarkScope: task.expectedBenchmarkScope,
+        iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        rowCount: task.env["VIEW_SERVER_ENGINE_BENCH_ROWS"],
+        task: task.args,
+        timeMs: task.env["VIEW_SERVER_ENGINE_BENCH_TIME_MS"],
+        writeMode: task.env["VIEW_SERVER_ENGINE_BENCH_WRITE_MODE"],
+      })),
+    ).toStrictEqual([
+      {
+        batchSize: undefined,
+        benchmarkScope: "engine-raw-snapshot",
+        iterations: "20",
+        outputJsonPath: ".artifacts/raw-snapshot-100000rows.json",
+        rowCount: "100000",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-snapshot"],
+        timeMs: "1",
+        writeMode: undefined,
+      },
+      {
+        batchSize: undefined,
+        benchmarkScope: "engine-raw-predicate-index",
+        iterations: "20",
+        outputJsonPath: ".artifacts/raw-predicate-index-100000rows.json",
+        rowCount: "100000",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-predicate-index"],
+        timeMs: "1",
+        writeMode: undefined,
+      },
+      {
+        batchSize: "1000",
+        benchmarkScope: "engine-raw-write",
+        iterations: "20",
+        outputJsonPath: ".artifacts/raw-write-base-100000rows.json",
+        rowCount: "100000",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-write"],
+        timeMs: "0",
+        writeMode: "base",
+      },
+      {
+        batchSize: "1000",
+        benchmarkScope: "engine-raw-write",
+        iterations: "20",
+        outputJsonPath: ".artifacts/raw-write-indexed-100000rows.json",
+        rowCount: "100000",
+        task: ["run", "--no-cache", "column-live-view-engine#bench:raw-write"],
+        timeMs: "0",
+        writeMode: "indexed",
+      },
+    ]);
+  });
+
+  it("defines exact raw write smoke tasks", () => {
+    const rawWriteSmokeTasks = (profiles.get("smoke") ?? []).filter(
+      (task) => task.expectedBenchmarkScope === "engine-raw-write",
+    );
+
+    expect(
+      rawWriteSmokeTasks.map((task) => ({
+        batchSize: task.env["VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE"],
+        iterations: task.env["VIEW_SERVER_ENGINE_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        timeMs: task.env["VIEW_SERVER_ENGINE_BENCH_TIME_MS"],
+        writeMode: task.env["VIEW_SERVER_ENGINE_BENCH_WRITE_MODE"],
+      })),
+    ).toStrictEqual([
+      {
+        batchSize: "100",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-write-base-1000rows.json",
+        timeMs: "0",
+        writeMode: "base",
+      },
+      {
+        batchSize: "100",
+        iterations: "5",
+        outputJsonPath: ".artifacts/raw-write-indexed-1000rows.json",
+        timeMs: "0",
+        writeMode: "indexed",
+      },
+    ]);
   });
 
   it("defines active-query sharing fanout tasks", () => {
@@ -1212,7 +1306,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       message:
-        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, websocket-firehose, active-query-sharing, grouped-admission, grouped-order-neutral, release",
+        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, websocket-firehose, active-query-sharing, raw-read-write, grouped-admission, grouped-order-neutral, release",
     });
   });
 

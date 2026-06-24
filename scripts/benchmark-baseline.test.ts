@@ -11,6 +11,7 @@ import {
   groupedOrderNeutralBenchmarkThresholds,
   kafkaIngestBenchmarkThresholds,
   kafkaSustainedFirehoseBenchmarkThresholds,
+  rawReadWriteBenchmarkThresholds,
   readBenchmarkBaseline,
   readBenchmarkObservation,
   validateBenchmarkBaseline,
@@ -321,12 +322,14 @@ describe("benchmark baseline comparison", () => {
       groupedOrderNeutral: benchmarkThresholdsForProfile("grouped-order-neutral"),
       kafkaIngest: benchmarkThresholdsForProfile("kafka-ingest"),
       kafkaSustainedFirehose: benchmarkThresholdsForProfile("kafka-sustained-firehose"),
+      rawReadWrite: benchmarkThresholdsForProfile("raw-read-write"),
       smoke: benchmarkThresholdsForProfile("smoke"),
       websocketFirehose: benchmarkThresholdsForProfile("websocket-firehose"),
       kafkaIngestBaseline: buildBenchmarkBaseline("kafka-ingest", [observation]).thresholds,
       kafkaSustainedFirehoseBaseline: buildBenchmarkBaseline("kafka-sustained-firehose", [
         observation,
       ]).thresholds,
+      rawReadWriteBaseline: buildBenchmarkBaseline("raw-read-write", [observation]).thresholds,
       smokeBaseline: buildBenchmarkBaseline("smoke", [observation]).thresholds,
       websocketFirehoseBaseline: buildBenchmarkBaseline("websocket-firehose", [observation])
         .thresholds,
@@ -336,10 +339,12 @@ describe("benchmark baseline comparison", () => {
       groupedOrderNeutral: groupedOrderNeutralBenchmarkThresholds,
       kafkaIngest: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehose: kafkaSustainedFirehoseBenchmarkThresholds,
+      rawReadWrite: rawReadWriteBenchmarkThresholds,
       smoke: defaultBenchmarkThresholds,
       websocketFirehose: websocketFirehoseBenchmarkThresholds,
       kafkaIngestBaseline: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehoseBaseline: kafkaSustainedFirehoseBenchmarkThresholds,
+      rawReadWriteBaseline: rawReadWriteBenchmarkThresholds,
       smokeBaseline: defaultBenchmarkThresholds,
       websocketFirehoseBaseline: websocketFirehoseBenchmarkThresholds,
       orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
@@ -1755,6 +1760,134 @@ describe("benchmark baseline comparison", () => {
     });
   });
 
+  it("keeps raw read/write sub-millisecond mean jitter report-only inside the absolute window", () => {
+    const subMillisecondObservation = {
+      ...observation,
+      benchmarks: [
+        {
+          ...observation.benchmarks[0],
+          meanMs: 0.067,
+          p99Ms: 0.3,
+        },
+      ],
+    };
+    const baseline = buildBenchmarkBaseline("raw-read-write", [subMillisecondObservation]);
+    const actual = buildBenchmarkBaseline("raw-read-write", [
+      {
+        ...subMillisecondObservation,
+        benchmarks: [
+          {
+            ...subMillisecondObservation.benchmarks[0],
+            meanMs: 0.239,
+            p99Ms: 0.3,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: true,
+      regressions: [],
+    });
+  });
+
+  it("rejects raw read/write mean regressions outside the focused absolute window", () => {
+    const subMillisecondObservation = {
+      ...observation,
+      benchmarks: [
+        {
+          ...observation.benchmarks[0],
+          meanMs: 0.125,
+          p99Ms: 0.3,
+        },
+      ],
+    };
+    const baseline = buildBenchmarkBaseline("raw-read-write", [subMillisecondObservation]);
+    const actual = buildBenchmarkBaseline("raw-read-write", [
+      {
+        ...subMillisecondObservation,
+        benchmarks: [
+          {
+            ...subMillisecondObservation.benchmarks[0],
+            meanMs: 0.7,
+            p99Ms: 0.3,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a / src/example.bench.ts > example benchmark group / case a: mean regressed from 0.125ms to 0.700ms; allowed <= 0.625ms.",
+      ],
+    });
+  });
+
+  it("keeps raw read/write millisecond-scale runner spikes inside the focused window", () => {
+    const indexedSnapshotObservation = {
+      ...observation,
+      benchmarks: [
+        {
+          ...observation.benchmarks[0],
+          meanMs: 1.401,
+          p99Ms: 2.284,
+        },
+      ],
+    };
+    const baseline = buildBenchmarkBaseline("raw-read-write", [indexedSnapshotObservation]);
+    const actual = buildBenchmarkBaseline("raw-read-write", [
+      {
+        ...indexedSnapshotObservation,
+        benchmarks: [
+          {
+            ...indexedSnapshotObservation.benchmarks[0],
+            meanMs: 4.599,
+            p99Ms: 20.404,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: true,
+      regressions: [],
+    });
+  });
+
+  it("rejects raw read/write p99 regressions outside the focused tail window", () => {
+    const indexedSnapshotObservation = {
+      ...observation,
+      benchmarks: [
+        {
+          ...observation.benchmarks[0],
+          meanMs: 1.401,
+          p99Ms: 2.284,
+        },
+      ],
+    };
+    const baseline = buildBenchmarkBaseline("raw-read-write", [indexedSnapshotObservation]);
+    const actual = buildBenchmarkBaseline("raw-read-write", [
+      {
+        ...indexedSnapshotObservation,
+        benchmarks: [
+          {
+            ...indexedSnapshotObservation.benchmarks[0],
+            meanMs: 4.599,
+            p99Ms: 30,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a / src/example.bench.ts > example benchmark group / case a: p99 regressed from 2.284ms to 30.000ms; allowed <= 22.284ms.",
+      ],
+    });
+  });
+
   it("reports missing tasks, counter regressions, memory regressions, and latency regressions", () => {
     const baseline = buildBenchmarkBaseline("smoke", [observation]);
     const regressed = buildBenchmarkBaseline("smoke", [
@@ -2578,6 +2711,41 @@ describe("benchmark baseline comparison", () => {
       ok: false,
       regressions: [
         "task a / src/example.bench.ts > example benchmark group / case a: sampleCount must be at least 5 but was 1.",
+      ],
+    });
+  });
+
+  it("requires exact raw write sample and mutation counts", () => {
+    const rawWriteObservation = {
+      ...observation,
+      benchmarks: [
+        {
+          ...observation.benchmarks[0],
+          sampleCount: 10,
+        },
+      ],
+      benchmarkScope: "engine-raw-write",
+      minimumSampleCount: 10,
+    };
+    const baseline = buildBenchmarkBaseline("raw-read-write", [rawWriteObservation]);
+    const changedRawWriteShape = buildBenchmarkBaseline("raw-read-write", [
+      {
+        ...rawWriteObservation,
+        benchmarks: [
+          {
+            ...rawWriteObservation.benchmarks[0],
+            sampleCount: 11,
+          },
+        ],
+        mutationCount: rawWriteObservation.mutationCount + 1,
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, changedRawWriteShape)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a: mutationCount changed from 100 to 101.",
+        "task a / src/example.bench.ts > example benchmark group / case a: sampleCount changed from 10 to 11.",
       ],
     });
   });

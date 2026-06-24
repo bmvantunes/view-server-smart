@@ -88,3 +88,6 @@ jobs:
 
       - name: Smoke benchmark regression gate
         run: pnpm run bench:baseline:smoke
+
+      - name: Raw read/write benchmark regression gate
+        run: pnpm run bench:baseline:raw-read-write

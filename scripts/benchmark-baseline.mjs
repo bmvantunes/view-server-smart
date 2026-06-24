@@ -49,6 +49,20 @@ export const groupedOrderNeutralBenchmarkThresholds = {
     defaultBenchmarkThresholds.throughputAggregateRowsPerSecond,
 };
 
+export const rawReadWriteBenchmarkThresholds = {
+  latencyMean: {
+    maxAbsoluteDeltaMs: 0.5,
+    maxRatio: 4,
+  },
+  latencyP99: {
+    maxAbsoluteDeltaMs: 20,
+    maxRatio: 8,
+  },
+  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  throughputAggregateRowsPerSecond:
+    defaultBenchmarkThresholds.throughputAggregateRowsPerSecond,
+};
+
 export const kafkaIngestBenchmarkThresholds = {
   commitObservedMean: {
     maxAbsoluteDeltaMs: 2_000,
@@ -114,6 +128,8 @@ export const websocketFirehoseBenchmarkThresholds = {
 export const benchmarkThresholdsForProfile = (profile) =>
   profile === "grouped-order-neutral"
     ? groupedOrderNeutralBenchmarkThresholds
+    : profile === "raw-read-write"
+      ? rawReadWriteBenchmarkThresholds
     : profile === "kafka-ingest"
       ? kafkaIngestBenchmarkThresholds
     : profile === "kafka-sustained-firehose"
@@ -1269,7 +1285,12 @@ const compareKafkaSustainedFirehoseFinalLag = (regressions, taskLabel, actualTas
 };
 
 const benchmarkScopeRequiresExactMutationCount = (benchmarkScope) =>
-  benchmarkScope === "runtime-kafka-ingest" || benchmarkScope === "runtime-websocket-firehose";
+  benchmarkScope === "engine-raw-write" ||
+  benchmarkScope === "runtime-kafka-ingest" ||
+  benchmarkScope === "runtime-websocket-firehose";
+
+const benchmarkScopeRequiresExactSampleCount = (benchmarkScope) =>
+  benchmarkScope === "engine-raw-write";
 
 export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
   const validatedBaseline = validateBenchmarkBaseline(baseline, "baseline");
@@ -1485,6 +1506,15 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
         pushRegression(
           regressions,
           `${taskLabel} / ${baselineBenchmarkKey}: sampleCount must be at least ${actualTask.minimumSampleCount} but was ${actualBenchmark.sampleCount}.`,
+        );
+      }
+      if (benchmarkScopeRequiresExactSampleCount(baselineTask.benchmarkScope)) {
+        compareExact(
+          regressions,
+          `${taskLabel} / ${baselineBenchmarkKey}`,
+          "sampleCount",
+          baselineBenchmark.sampleCount,
+          actualBenchmark.sampleCount,
         );
       }
       compareLatency(

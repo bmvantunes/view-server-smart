@@ -33,6 +33,27 @@ const commonEngineSmokeEnv = {
   VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
 };
 
+const rawWriteSmokeEnv = {
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "5",
+  VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
+};
+
+const rawReadWriteReadEnv = {
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "20",
+  VIEW_SERVER_ENGINE_BENCH_TIME_MS: "1",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
+};
+
+const rawReadWriteWriteEnv = {
+  VIEW_SERVER_ENGINE_BENCH_ITERATIONS: "20",
+  VIEW_SERVER_ENGINE_BENCH_TIME_MS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS: "0",
+  VIEW_SERVER_ENGINE_BENCH_WARMUP_TIME_MS: "0",
+};
+
 const commonReactSmokeEnv = {
   VIEW_SERVER_REACT_BENCH_ITERATIONS: "5",
   VIEW_SERVER_REACT_BENCH_TIME_MS: "1",
@@ -461,11 +482,11 @@ export const profiles = new Map([
       rawPredicateIndexTask(1_000, commonEngineSmokeEnv),
       rawWriteTask("base", 1_000, {
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "100",
-        ...commonEngineSmokeEnv,
+        ...rawWriteSmokeEnv,
       }),
       rawWriteTask("indexed", 1_000, {
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "100",
-        ...commonEngineSmokeEnv,
+        ...rawWriteSmokeEnv,
       }),
       rawLiveFanoutTask("same-window", 1_000, 5, {
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "500",
@@ -555,6 +576,21 @@ export const profiles = new Map([
       rawLiveFanoutTask("unique-shape", 10_000, 50, {
         VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "1000",
         ...commonEngineSmokeEnv,
+      }),
+    ],
+  ],
+  [
+    "raw-read-write",
+    [
+      rawSnapshotTask(100_000, rawReadWriteReadEnv),
+      rawPredicateIndexTask(100_000, rawReadWriteReadEnv),
+      rawWriteTask("base", 100_000, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "1000",
+        ...rawReadWriteWriteEnv,
+      }),
+      rawWriteTask("indexed", 100_000, {
+        VIEW_SERVER_ENGINE_BENCH_BATCH_SIZE: "1000",
+        ...rawReadWriteWriteEnv,
       }),
     ],
   ],

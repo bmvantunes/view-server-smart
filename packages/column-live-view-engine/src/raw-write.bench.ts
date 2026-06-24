@@ -64,7 +64,7 @@ type BenchmarkCase = {
 };
 
 const defaultBatchSize = 1_000;
-const defaultBenchmarkTimeMs = 250;
+const defaultBenchmarkTimeMs = 0;
 const defaultIterations = 5;
 const defaultRowCount = 100_000;
 const defaultWarmupIterations = 0;
@@ -138,7 +138,7 @@ const outputJsonPath = benchmarkOutputJsonPath(
 const memoryBefore = memorySnapshot();
 const benchOptions = {
   iterations: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_ITERATIONS", defaultIterations),
-  time: positiveIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_TIME_MS", defaultBenchmarkTimeMs),
+  time: nonNegativeIntegerFromEnv("VIEW_SERVER_ENGINE_BENCH_TIME_MS", defaultBenchmarkTimeMs),
   warmupIterations: nonNegativeIntegerFromEnv(
     "VIEW_SERVER_ENGINE_BENCH_WARMUP_ITERATIONS",
     defaultWarmupIterations,
@@ -148,8 +148,10 @@ const benchOptions = {
     defaultWarmupTimeMs,
   ),
 };
-if (benchOptions.warmupIterations > 0 || benchOptions.warmupTime > 0) {
-  throw new Error("Raw write benchmark mutates shared engine state; warmup must stay disabled.");
+if (benchOptions.time > 0 || benchOptions.warmupIterations > 0 || benchOptions.warmupTime > 0) {
+  throw new Error(
+    "Raw write benchmark mutates shared engine state; time and warmup must stay disabled.",
+  );
 }
 
 const profile: BenchmarkProfile = {
