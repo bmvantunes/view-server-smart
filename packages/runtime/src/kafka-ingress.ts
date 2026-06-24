@@ -219,11 +219,15 @@ const snapshotKafkaAssignments = (
   }));
 
 const consumerLagMessagesFromLag = (lags: ReadonlyArray<bigint>): bigint | null => {
-  const initializedLags = lags.filter((lag) => lag >= 0n);
-  if (initializedLags.length === 0) {
-    return null;
+  let total = 0n;
+  let hasKnownLag = false;
+  for (const lag of lags) {
+    if (lag >= 0n) {
+      hasKnownLag = true;
+      total += lag;
+    }
   }
-  return initializedLags.reduce((total, lag) => total + lag, 0n);
+  return hasKnownLag ? total : null;
 };
 
 export const kafkaConsumerStartError = (

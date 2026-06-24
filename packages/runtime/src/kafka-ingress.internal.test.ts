@@ -1501,7 +1501,7 @@ describe("@view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
-  it.effect("clears Kafka lag to unknown when later samples only contain negative sentinels", () =>
+  it.effect("keeps Kafka all-negative lag sentinels unknown", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
       yield* Effect.gen(function* () {
@@ -1545,36 +1545,97 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         );
         const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
 
-        expect({
-          healthRefreshRequestCount,
-          orders: health.kafka?.topics[ordersSourceTopic],
-        }).toStrictEqual({
-          healthRefreshRequestCount: 3,
-          orders: {
-            status: "ready",
-            sourceTopic: ordersSourceTopic,
-            viewServerTopic: "orders",
-            regions: nullRecord({
-              local: {
-                connected: true,
-                assignedPartitions: 1,
-                messagesPerSecond: 0,
-                bytesPerSecond: 0,
-                decodedMessagesPerSecond: 0,
-                decodeFailuresPerSecond: 0,
-                mappingFailuresPerSecond: 0,
-                publishFailuresPerSecond: 0,
-                commitFailuresPerSecond: 0,
-                processingFailuresPerSecond: 0,
-                lastMessageAt: null,
-                lastCommitAt: null,
-                consumerLagMessages: null,
-                lagSampledAt: 2_000,
-                committedOffset: null,
-                lastError: null,
-              },
-            }),
+        expect(healthRefreshRequestCount).toBe(3);
+        expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+          status: "ready",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              publishFailuresPerSecond: 0,
+              commitFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: 2_000,
+              committedOffset: null,
+              lastError: null,
+            },
+          }),
+        });
+      }).pipe(Effect.ensuring(runtimeCore.close));
+    }),
+  );
+
+  it.effect("keeps Kafka empty lag samples unknown", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      yield* Effect.gen(function* () {
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
           },
+        });
+        let healthRefreshRequestCount = 0;
+        const requestHealthRefresh = Effect.sync(() => {
+          healthRefreshRequestCount += 1;
+        });
+
+        yield* recordKafkaAssignments(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          [{ topic: ordersSourceTopic, partitions: [0] }],
+          1_000,
+        );
+        yield* recordKafkaLag(
+          ledger,
+          requestHealthRefresh,
+          "local",
+          [ordersSourceTopic],
+          new Map([[ordersSourceTopic, []]]),
+          2_000,
+        );
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 2_000);
+
+        expect(healthRefreshRequestCount).toBe(2);
+        expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+          status: "ready",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              publishFailuresPerSecond: 0,
+              commitFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: 2_000,
+              committedOffset: null,
+              lastError: null,
+            },
+          }),
         });
       }).pipe(Effect.ensuring(runtimeCore.close));
     }),
