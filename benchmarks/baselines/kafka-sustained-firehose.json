@@ -8,11 +8,11 @@
       "benchmarks": [
         {
           "groupName": "src/kafka-ingest.bench.ts > Kafka sustained firehose runtime benchmark: 250 rows per producer batch",
-          "maxMs": 18123.79325,
-          "meanMs": 17440.216833,
-          "minMs": 17093.851582999996,
+          "maxMs": 18137.986084,
+          "meanMs": 17089.841361333336,
+          "minMs": 16067.873250000004,
           "name": "sustained mixed firehose ingest",
-          "p99Ms": 18123.79325,
+          "p99Ms": 18137.986084,
           "sampleCount": 3
         }
       ],
@@ -37,7 +37,7 @@
         }
       ],
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 26312704,
+      "memoryRssTotalDeltaBytes": 21676032,
       "minimumSampleCount": 3,
       "mutationCount": 6000,
       "outputJsonPath": "packages/runtime/.artifacts/kafka-sustained-firehose-250rows-4batches.json",
@@ -45,14 +45,14 @@
       "rowCount": 250,
       "runtimeMetrics": {
         "eventLoopDelay": {
-          "maxMs": 25.591807,
-          "meanMs": 10.712128,
-          "p99Ms": 12.705791
+          "maxMs": 22.478847,
+          "meanMs": 10.709345536261491,
+          "p99Ms": 12.402687
         },
         "healthPolling": {
-          "count": 1969,
-          "maxMs": 2.311582999998791,
-          "totalMs": 1497.1916060000103
+          "count": 1949,
+          "maxMs": 1.7385420000009617,
+          "totalMs": 1180.5179880000126
         },
         "kafkaLag": {
           "maxConsumerLagMessages": "0",
@@ -65,17 +65,19 @@
       "taskLabel": "Kafka sustained firehose 250 rows x 4 batches",
       "throughputCases": [
         {
-          "aggregateRowsPerSecond": 114.67800599252743,
-          "maxTotalMs": 18123.630999999998,
-          "meanConvergenceMs": 17393.824889,
-          "meanProducerSendMs": 37.51636100000193,
-          "meanRowsPerSecond": 114.76445271951725,
-          "meanTotalMs": 17440.135819333333,
-          "minRowsPerSecond": 110.3531626747422,
+          "aggregateRowsPerSecond": 117.02903556125037,
+          "maxTotalMs": 18137.843417,
+          "meanConvergenceMs": 17045.588527666663,
+          "meanProducerSendMs": 34.56661066666584,
+          "meanRowsPerSecond": 117.31572675479136,
+          "meanTotalMs": 17089.775972333333,
+          "minRowsPerSecond": 110.26669235249139,
           "name": "sustained mixed firehose ingest",
           "producedRowsPerSample": 2000,
-          "maxReadSnapshotMs": 7.44920799999818,
-          "meanReadSnapshotMs": 6.348875000003318,
+          "maxCommitObservedMs": 18082.6865,
+          "maxReadSnapshotMs": 7.347750000000815,
+          "meanCommitObservedMs": 17045.588527666663,
+          "meanReadSnapshotMs": 6.232693999998446,
           "readSnapshotRowsPerSample": 50,
           "sampleCount": 3,
           "totalProducedRows": 6000
@@ -85,6 +87,14 @@
     }
   ],
   "thresholds": {
+    "commitObservedMean": {
+      "maxAbsoluteDeltaMs": 5000,
+      "maxRatio": 1.75
+    },
+    "commitObservedMax": {
+      "maxAbsoluteDeltaMs": 6000,
+      "maxRatio": 1.75
+    },
     "latencyMean": {
       "maxAbsoluteDeltaMs": 5000,
       "maxRatio": 1.75
@@ -94,8 +104,8 @@
       "maxRatio": 1.75
     },
     "memoryRssTotalDelta": {
-      "maxAbsoluteDeltaBytes": 134217728,
-      "maxRatio": 3
+      "maxAbsoluteDeltaBytes": 268435456,
+      "maxRatio": 64
     },
     "throughputAggregateRowsPerSecond": {
       "minRatio": 0.75

@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "bench:kafka-ingest": "vp run -t @view-server/effect-utils#build && vp run -t @view-server/runtime-core#build && vp run -t @view-server/server#build && sh -c 'status=0; cleanup() { down_status=0; docker compose -f ../../compose.yaml down || down_status=$?; if [ $status -eq 0 ]; then status=$down_status; fi; exit $status; }; trap cleanup EXIT INT TERM; output=${VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON:-.artifacts/kafka-ingest-${VIEW_SERVER_RUNTIME_BENCH_KAFKA_BATCH_SIZE:-1000}rows.json}; mkdir -p .artifacts; docker compose -f ../../compose.yaml up -d --wait kafka || status=$?; if [ $status -eq 0 ]; then VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON=$output VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS=${VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS:-localhost:9092} vp test bench src/kafka-ingest.bench.ts --run --testTimeout 0 --outputJson $output || status=$?; fi'",
+    "bench:kafka-ingest": "node ../../scripts/run-runtime-kafka-ingest-bench.mjs",
     "bench:websocket-firehose": "vp run -t @view-server/effect-utils#build && vp run -t @view-server/runtime-core#build && vp run -t @view-server/server#build && output=${VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON:-.artifacts/websocket-firehose-${VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_CASE:-same-window}-${VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_ROWS:-1000}rows-${VIEW_SERVER_RUNTIME_BENCH_WEBSOCKET_SUBSCRIBERS:-10}subs.json} && mkdir -p .artifacts && VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON=$output vp test bench src/websocket-firehose.bench.ts --run --testTimeout 0 --outputJson $output",
     "build": "vp run -t @view-server/effect-utils#build && vp run -t @view-server/runtime-core#build && vp run -t @view-server/server#build && vp pack",
     "test": "node ../../scripts/test-runtime.mjs"

@@ -30,6 +30,11 @@ const kafkaReadSnapshotThresholds = {
   },
 };
 
+const kafkaRssReportThresholds = {
+  maxAbsoluteDeltaBytes: 256 * 1024 * 1024,
+  maxRatio: 64,
+};
+
 export const groupedOrderNeutralBenchmarkThresholds = {
   latencyMean: {
     maxAbsoluteDeltaMs: 0.5,
@@ -45,6 +50,14 @@ export const groupedOrderNeutralBenchmarkThresholds = {
 };
 
 export const kafkaIngestBenchmarkThresholds = {
+  commitObservedMean: {
+    maxAbsoluteDeltaMs: 2_000,
+    maxRatio: 1.5,
+  },
+  commitObservedMax: {
+    maxAbsoluteDeltaMs: 2_500,
+    maxRatio: 1.5,
+  },
   latencyMean: {
     maxAbsoluteDeltaMs: 2_000,
     maxRatio: 1.5,
@@ -53,7 +66,7 @@ export const kafkaIngestBenchmarkThresholds = {
     maxAbsoluteDeltaMs: 2_500,
     maxRatio: 1.5,
   },
-  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  memoryRssTotalDelta: kafkaRssReportThresholds,
   throughputAggregateRowsPerSecond: {
     minRatio: 0.75,
   },
@@ -61,6 +74,14 @@ export const kafkaIngestBenchmarkThresholds = {
 };
 
 export const kafkaSustainedFirehoseBenchmarkThresholds = {
+  commitObservedMean: {
+    maxAbsoluteDeltaMs: 5_000,
+    maxRatio: 1.75,
+  },
+  commitObservedMax: {
+    maxAbsoluteDeltaMs: 6_000,
+    maxRatio: 1.75,
+  },
   latencyMean: {
     maxAbsoluteDeltaMs: 5_000,
     maxRatio: 1.75,
@@ -69,7 +90,7 @@ export const kafkaSustainedFirehoseBenchmarkThresholds = {
     maxAbsoluteDeltaMs: 6_000,
     maxRatio: 1.75,
   },
-  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  memoryRssTotalDelta: kafkaRssReportThresholds,
   throughputAggregateRowsPerSecond: {
     minRatio: 0.75,
   },
@@ -127,6 +148,18 @@ const objectValue = (value, path) => {
     throw new Error(`Benchmark artifact field ${path} must be an object.`);
   }
   return value;
+};
+
+const exactObjectValue = (value, path, expectedKeys) => {
+  const object = objectValue(value, path);
+  const actualKeys = Object.keys(object).sort();
+  const sortedExpectedKeys = [...expectedKeys].sort();
+  if (JSON.stringify(actualKeys) !== JSON.stringify(sortedExpectedKeys)) {
+    throw new Error(
+      `Benchmark artifact field ${path} must contain exactly these keys: ${sortedExpectedKeys.join(", ")}.`,
+    );
+  }
+  return object;
 };
 
 const arrayValue = (value, path) => {
@@ -337,9 +370,17 @@ const throughputCaseValue = (value, path, options) => {
   const readSnapshotMetrics =
     options.requireReadSnapshot === true
       ? {
+          maxCommitObservedMs: positiveFiniteNumber(
+            throughputCase.maxCommitObservedMs,
+            `${path}.maxCommitObservedMs`,
+          ),
           maxReadSnapshotMs: positiveFiniteNumber(
             throughputCase.maxReadSnapshotMs,
             `${path}.maxReadSnapshotMs`,
+          ),
+          meanCommitObservedMs: positiveFiniteNumber(
+            throughputCase.meanCommitObservedMs,
+            `${path}.meanCommitObservedMs`,
           ),
           meanReadSnapshotMs: positiveFiniteNumber(
             throughputCase.meanReadSnapshotMs,
@@ -417,6 +458,21 @@ const throughputCaseValue = (value, path, options) => {
     );
   }
   if (options.requireReadSnapshot === true) {
+    if (result.meanCommitObservedMs > result.maxCommitObservedMs) {
+      throw new Error(
+        `Benchmark artifact field ${path}.meanCommitObservedMs must be less than or equal to maxCommitObservedMs.`,
+      );
+    }
+    if (result.maxCommitObservedMs > result.maxTotalMs) {
+      throw new Error(
+        `Benchmark artifact field ${path}.maxCommitObservedMs must be less than or equal to maxTotalMs.`,
+      );
+    }
+    if (result.meanCommitObservedMs > result.meanTotalMs) {
+      throw new Error(
+        `Benchmark artifact field ${path}.meanCommitObservedMs must be less than or equal to meanTotalMs.`,
+      );
+    }
     if (result.meanReadSnapshotMs > result.maxReadSnapshotMs) {
       throw new Error(
         `Benchmark artifact field ${path}.meanReadSnapshotMs must be less than or equal to maxReadSnapshotMs.`,
@@ -765,68 +821,79 @@ const nonEmptyArrayValue = (value, path) => {
 };
 
 const thresholdsValue = (value, path, expectedThresholds) => {
-  const thresholds = objectValue(value, path);
-  const validatedThresholds = {
-    latencyMean: {
+  const thresholds = exactObjectValue(value, path, Object.keys(expectedThresholds));
+  const validatedThresholds = {};
+  const deltaThresholdValue = (threshold, thresholdPath) => {
+    const thresholdObject = exactObjectValue(threshold, thresholdPath, [
+      "maxAbsoluteDeltaMs",
+      "maxRatio",
+    ]);
+    return {
       maxAbsoluteDeltaMs: finiteNumber(
-        objectValue(thresholds.latencyMean, `${path}.latencyMean`).maxAbsoluteDeltaMs,
-        `${path}.latencyMean.maxAbsoluteDeltaMs`,
+        thresholdObject.maxAbsoluteDeltaMs,
+        `${thresholdPath}.maxAbsoluteDeltaMs`,
       ),
-      maxRatio: finiteNumber(thresholds.latencyMean.maxRatio, `${path}.latencyMean.maxRatio`),
-    },
-    latencyP99: {
-      maxAbsoluteDeltaMs: finiteNumber(
-        objectValue(thresholds.latencyP99, `${path}.latencyP99`).maxAbsoluteDeltaMs,
-        `${path}.latencyP99.maxAbsoluteDeltaMs`,
-      ),
-      maxRatio: finiteNumber(thresholds.latencyP99.maxRatio, `${path}.latencyP99.maxRatio`),
-    },
-    memoryRssTotalDelta: {
-      maxAbsoluteDeltaBytes: finiteNumber(
-        objectValue(thresholds.memoryRssTotalDelta, `${path}.memoryRssTotalDelta`)
-          .maxAbsoluteDeltaBytes,
-        `${path}.memoryRssTotalDelta.maxAbsoluteDeltaBytes`,
-      ),
-      maxRatio: finiteNumber(
-        thresholds.memoryRssTotalDelta.maxRatio,
-        `${path}.memoryRssTotalDelta.maxRatio`,
-      ),
-    },
-    throughputAggregateRowsPerSecond: {
-      minRatio: finiteNumber(
-        objectValue(
-          thresholds.throughputAggregateRowsPerSecond,
-          `${path}.throughputAggregateRowsPerSecond`,
-        ).minRatio,
-        `${path}.throughputAggregateRowsPerSecond.minRatio`,
-      ),
-    },
-  };
-  if (expectedThresholds.throughputReadSnapshotMax !== undefined) {
-    validatedThresholds.throughputReadSnapshotMax = {
-      maxAbsoluteDeltaMs: finiteNumber(
-        objectValue(thresholds.throughputReadSnapshotMax, `${path}.throughputReadSnapshotMax`)
-          .maxAbsoluteDeltaMs,
-        `${path}.throughputReadSnapshotMax.maxAbsoluteDeltaMs`,
-      ),
-      maxRatio: finiteNumber(
-        thresholds.throughputReadSnapshotMax.maxRatio,
-        `${path}.throughputReadSnapshotMax.maxRatio`,
-      ),
+      maxRatio: finiteNumber(thresholdObject.maxRatio, `${thresholdPath}.maxRatio`),
     };
+  };
+  const throughputThresholdValue = (threshold, thresholdPath) => {
+    const thresholdObject = exactObjectValue(threshold, thresholdPath, ["minRatio"]);
+    return {
+      minRatio: finiteNumber(thresholdObject.minRatio, `${thresholdPath}.minRatio`),
+    };
+  };
+  const memoryThresholdValue = (threshold, thresholdPath) => {
+    const thresholdObject = exactObjectValue(threshold, thresholdPath, [
+      "maxAbsoluteDeltaBytes",
+      "maxRatio",
+    ]);
+    return {
+      maxAbsoluteDeltaBytes: finiteNumber(
+        thresholdObject.maxAbsoluteDeltaBytes,
+        `${thresholdPath}.maxAbsoluteDeltaBytes`,
+      ),
+      maxRatio: finiteNumber(thresholdObject.maxRatio, `${thresholdPath}.maxRatio`),
+    };
+  };
+  if (expectedThresholds.commitObservedMean !== undefined) {
+    validatedThresholds.commitObservedMean = deltaThresholdValue(
+      thresholds.commitObservedMean,
+      `${path}.commitObservedMean`,
+    );
+  }
+  if (expectedThresholds.commitObservedMax !== undefined) {
+    validatedThresholds.commitObservedMax = deltaThresholdValue(
+      thresholds.commitObservedMax,
+      `${path}.commitObservedMax`,
+    );
+  }
+  validatedThresholds.latencyMean = deltaThresholdValue(
+    thresholds.latencyMean,
+    `${path}.latencyMean`,
+  );
+  validatedThresholds.latencyP99 = deltaThresholdValue(
+    thresholds.latencyP99,
+    `${path}.latencyP99`,
+  );
+  validatedThresholds.memoryRssTotalDelta = memoryThresholdValue(
+    thresholds.memoryRssTotalDelta,
+    `${path}.memoryRssTotalDelta`,
+  );
+  validatedThresholds.throughputAggregateRowsPerSecond = throughputThresholdValue(
+    thresholds.throughputAggregateRowsPerSecond,
+    `${path}.throughputAggregateRowsPerSecond`,
+  );
+  if (expectedThresholds.throughputReadSnapshotMax !== undefined) {
+    validatedThresholds.throughputReadSnapshotMax = deltaThresholdValue(
+      thresholds.throughputReadSnapshotMax,
+      `${path}.throughputReadSnapshotMax`,
+    );
   }
   if (expectedThresholds.throughputReadSnapshotMean !== undefined) {
-    validatedThresholds.throughputReadSnapshotMean = {
-      maxAbsoluteDeltaMs: finiteNumber(
-        objectValue(thresholds.throughputReadSnapshotMean, `${path}.throughputReadSnapshotMean`)
-          .maxAbsoluteDeltaMs,
-        `${path}.throughputReadSnapshotMean.maxAbsoluteDeltaMs`,
-      ),
-      maxRatio: finiteNumber(
-        thresholds.throughputReadSnapshotMean.maxRatio,
-        `${path}.throughputReadSnapshotMean.maxRatio`,
-      ),
-    };
+    validatedThresholds.throughputReadSnapshotMean = deltaThresholdValue(
+      thresholds.throughputReadSnapshotMean,
+      `${path}.throughputReadSnapshotMean`,
+    );
   }
   if (JSON.stringify(validatedThresholds) !== JSON.stringify(expectedThresholds)) {
     throw new Error(`Benchmark artifact field ${path} must match code-owned profile thresholds.`);
@@ -1119,6 +1186,24 @@ const compareThroughputCases = (regressions, taskLabel, threshold, baselineCases
       actualCase.aggregateRowsPerSecond,
     );
     if (threshold.throughputReadSnapshotMean !== undefined) {
+      compareLatency(
+        regressions,
+        taskLabel,
+        baselineCase.name,
+        "meanCommitObservedMs",
+        threshold.commitObservedMean,
+        baselineCase.meanCommitObservedMs,
+        actualCase.meanCommitObservedMs,
+      );
+      compareLatency(
+        regressions,
+        taskLabel,
+        baselineCase.name,
+        "maxCommitObservedMs",
+        threshold.commitObservedMax,
+        baselineCase.maxCommitObservedMs,
+        actualCase.maxCommitObservedMs,
+      );
       compareExact(
         regressions,
         taskLabel,

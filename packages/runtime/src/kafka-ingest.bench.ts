@@ -54,6 +54,7 @@ type BenchmarkCase = {
 };
 
 type IngestSample = {
+  readonly commitObservedMs: number;
   readonly convergenceMs: number;
   readonly readSnapshotMs: number;
   readonly readSnapshotRows: number;
@@ -66,8 +67,10 @@ type IngestSample = {
 
 type IngestThroughputCaseSummary = {
   readonly aggregateRowsPerSecond: number;
+  readonly maxCommitObservedMs: number;
   readonly maxReadSnapshotMs: number;
   readonly maxTotalMs: number;
+  readonly meanCommitObservedMs: number;
   readonly meanConvergenceMs: number;
   readonly meanProducerSendMs: number;
   readonly meanReadSnapshotMs: number;
@@ -655,6 +658,7 @@ const timed = async <A>(operation: () => Promise<A>): Promise<readonly [A, numbe
 };
 
 const recordIngestSample = ({
+  commitObservedMs,
   convergenceMs,
   name,
   producerSendMs,
@@ -664,6 +668,7 @@ const recordIngestSample = ({
   totalMs,
 }: Omit<IngestSample, "rowsPerSecond">): void => {
   ingestSamples.push({
+    commitObservedMs,
     convergenceMs,
     name,
     producerSendMs,
@@ -724,8 +729,10 @@ const ingestThroughputCases = (): ReadonlyArray<IngestThroughputCaseSummary> => 
       const totalMs = samples.reduce((total, sample) => total + sample.totalMs, 0);
       return {
         aggregateRowsPerSecond: totalProducedRows / (totalMs / 1_000),
+        maxCommitObservedMs: Math.max(...samples.map((sample) => sample.commitObservedMs)),
         maxReadSnapshotMs: Math.max(...samples.map((sample) => sample.readSnapshotMs)),
         maxTotalMs: Math.max(...samples.map((sample) => sample.totalMs)),
+        meanCommitObservedMs: mean(samples.map((sample) => sample.commitObservedMs)),
         meanConvergenceMs: mean(samples.map((sample) => sample.convergenceMs)),
         meanProducerSendMs: mean(samples.map((sample) => sample.producerSendMs)),
         meanReadSnapshotMs: mean(samples.map((sample) => sample.readSnapshotMs)),
@@ -753,6 +760,7 @@ const ingestThroughputCases = (): ReadonlyArray<IngestThroughputCaseSummary> => 
 };
 
 type ConvergedIngestSample = {
+  readonly commitObservedMs: number;
   readonly convergenceMs: number;
   readonly producerSendMs: number;
   readonly rows: number;
@@ -816,6 +824,7 @@ const publishJsonBatchThroughConvergenceTimed = async (
     Effect.runPromise(waitForRows("jsonOrders", nextTotal)),
   );
   return {
+    commitObservedMs: convergenceMs,
     convergenceMs,
     producerSendMs,
     rows: count,
@@ -850,6 +859,7 @@ const publishProtobufBatchThroughConvergenceTimed = async (
     Effect.runPromise(waitForRows("protobufOrders", nextTotal)),
   );
   return {
+    commitObservedMs: convergenceMs,
     convergenceMs,
     producerSendMs,
     rows: count,
@@ -915,6 +925,7 @@ const publishMixedBatch = async (count: number): Promise<void> => {
   const samples = settledValuesOrThrow(results, "Kafka ingest benchmark mixed burst failed.");
   const { readSnapshotMs, readSnapshotRows } = await readBothSnapshotsTimed();
   recordIngestSample({
+    commitObservedMs: Math.max(...samples.map((sample) => sample.commitObservedMs)),
     convergenceMs: Math.max(...samples.map((sample) => sample.convergenceMs)),
     name: "mixed source burst ingest",
     producerSendMs: Math.max(...samples.map((sample) => sample.producerSendMs)),
@@ -954,6 +965,7 @@ const publishSustainedMixedFirehose = async (): Promise<void> => {
   const [_health, convergenceMs] = await timed(() => Effect.runPromise(waitForFinalHealth()));
   const { readSnapshotMs, readSnapshotRows } = await readBothSnapshotsTimed();
   recordIngestSample({
+    commitObservedMs: convergenceMs,
     convergenceMs,
     name: "sustained mixed firehose ingest",
     producerSendMs,

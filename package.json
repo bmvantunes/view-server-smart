@@ -26,7 +26,7 @@
     "check:package-exports": "tsc --ignoreConfig --noEmit --strict --skipLibCheck --module preserve --moduleResolution bundler scripts/node-ambient.d.ts scripts/check-package-exports.ts && node --experimental-strip-types scripts/check-package-exports.ts",
     "ready": "vp run -r build && pnpm run check:package-exports && pnpm run check:internal-seams && pnpm run test:repository-scripts && vp check && pnpm run check:effect && vp run --filter '@view-server/*' --filter '!@view-server/runtime' test && vp run @view-server/runtime#test",
     "test:benchmark-baseline": "pnpm run test:repository-scripts",
-    "test:repository-scripts": "vp test run scripts/benchmark-baseline.test.ts scripts/benchmark-baseline-runner.test.ts scripts/check-internal-seams.test.ts --coverage",
+    "test:repository-scripts": "vp test run scripts/benchmark-baseline.test.ts scripts/benchmark-baseline-runner.test.ts scripts/bench-runtime-kafka-ingest.test.ts scripts/check-internal-seams.test.ts --coverage",
     "prepare": "vp config && effect-language-service patch"
   },
   "devDependencies": {

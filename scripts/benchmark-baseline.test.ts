@@ -162,8 +162,10 @@ const runtimeThroughput = {
   cases: [
     {
       aggregateRowsPerSecond: 1000,
+      maxCommitObservedMs: 80,
       maxReadSnapshotMs: 6,
       maxTotalMs: 100,
+      meanCommitObservedMs: 75,
       meanConvergenceMs: 75,
       meanProducerSendMs: 25,
       meanReadSnapshotMs: 5,
@@ -1945,6 +1947,45 @@ describe("benchmark baseline comparison", () => {
     });
   });
 
+  it("reports Kafka commit-observed latency regressions", () => {
+    const kafkaObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+      throughputCases: comparableRuntimeThroughputCases,
+    };
+    const baseline = buildBenchmarkBaseline("kafka-ingest", [kafkaObservation]);
+    const regressedCommitObserved = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            aggregateRowsPerSecond: 100_000 / 2_100,
+            maxCommitObservedMs: 2_600,
+            maxTotalMs: 2_600,
+            meanCommitObservedMs: 2_076,
+            meanRowsPerSecond: 100_000 / 2_100,
+            meanTotalMs: 2_100,
+            minRowsPerSecond: 40,
+          },
+        ],
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, regressedCommitObserved)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a / case a: aggregateRowsPerSecond throughput regressed from 1000.000 rows/sec to 47.619 rows/sec; allowed >= 750.000 rows/sec.",
+        "task a / case a: meanCommitObservedMs regressed from 75.000ms to 2076.000ms; allowed <= 2075.000ms.",
+        "task a / case a: maxCommitObservedMs regressed from 80.000ms to 2600.000ms; allowed <= 2580.000ms.",
+      ],
+    });
+  });
+
   it("reports Kafka read snapshot workload and latency regressions", () => {
     const kafkaObservation = {
       ...observation,
@@ -2234,6 +2275,53 @@ describe("benchmark baseline comparison", () => {
         },
       },
     ]);
+    const kafkaThroughputObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-kafka-ingest",
+      groupedWriteAdmission: undefined,
+      kafkaIngestLanes: comparableRuntimeThroughputKafkaIngestLanes,
+      mutationCount: runtimeThroughputMutationCount,
+      throughputCases: comparableRuntimeThroughputCases,
+    };
+    const inconsistentCommitMeanBaseline = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaThroughputObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            maxCommitObservedMs: 10,
+            meanCommitObservedMs: 11,
+          },
+        ],
+      },
+    ]);
+    const impossibleCommitMaxBaseline = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaThroughputObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            maxCommitObservedMs: 101,
+          },
+        ],
+      },
+    ]);
+    const impossibleCommitMeanBaseline = buildBenchmarkBaseline("kafka-ingest", [
+      {
+        ...kafkaThroughputObservation,
+        throughputCases: [
+          {
+            ...comparableRuntimeThroughputCases[0],
+            aggregateRowsPerSecond: 100_000 / 79,
+            maxCommitObservedMs: 90,
+            meanCommitObservedMs: 80,
+            meanRowsPerSecond: 100_000 / 79,
+            meanTotalMs: 79,
+          },
+        ],
+      },
+    ]);
 
     expect(() => validateBenchmarkBaseline(negativeEventLoopDelayBaseline)).toThrow(
       "Benchmark artifact field baseline.tasks[0].runtimeMetrics.eventLoopDelay.maxMs must be a non-negative finite number.",
@@ -2246,6 +2334,15 @@ describe("benchmark baseline comparison", () => {
     );
     expect(() => validateBenchmarkBaseline(inconsistentHealthPollingBaseline)).toThrow(
       "Benchmark artifact field baseline.tasks[0].runtimeMetrics.healthPolling.totalMs must be greater than or equal to baseline.tasks[0].runtimeMetrics.healthPolling.maxMs.",
+    );
+    expect(() => validateBenchmarkBaseline(inconsistentCommitMeanBaseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases[0].meanCommitObservedMs must be less than or equal to maxCommitObservedMs.",
+    );
+    expect(() => validateBenchmarkBaseline(impossibleCommitMaxBaseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases[0].maxCommitObservedMs must be less than or equal to maxTotalMs.",
+    );
+    expect(() => validateBenchmarkBaseline(impossibleCommitMeanBaseline)).toThrow(
+      "Benchmark artifact field baseline.tasks[0].throughputCases[0].meanCommitObservedMs must be less than or equal to meanTotalMs.",
     );
   });
 
@@ -2722,6 +2819,40 @@ describe("benchmark baseline comparison", () => {
 
     expect(() => validateBenchmarkBaseline(baseline)).toThrow(
       "Benchmark artifact field baseline.thresholds must match code-owned profile thresholds.",
+    );
+  });
+
+  it("rejects stale extra baseline threshold keys", () => {
+    const baseline = {
+      ...buildBenchmarkBaseline("smoke", [observation]),
+      thresholds: {
+        ...defaultBenchmarkThresholds,
+        commitObservedMean: {
+          maxAbsoluteDeltaMs: 10,
+          maxRatio: 2,
+        },
+      },
+    };
+
+    expect(() => validateBenchmarkBaseline(baseline)).toThrow(
+      "Benchmark artifact field baseline.thresholds must contain exactly these keys: latencyMean, latencyP99, memoryRssTotalDelta, throughputAggregateRowsPerSecond.",
+    );
+  });
+
+  it("rejects stale extra nested baseline threshold keys", () => {
+    const baseline = {
+      ...buildBenchmarkBaseline("smoke", [observation]),
+      thresholds: {
+        ...defaultBenchmarkThresholds,
+        latencyMean: {
+          ...defaultBenchmarkThresholds.latencyMean,
+          staleKey: 123,
+        },
+      },
+    };
+
+    expect(() => validateBenchmarkBaseline(baseline)).toThrow(
+      "Benchmark artifact field baseline.thresholds.latencyMean must contain exactly these keys: maxAbsoluteDeltaMs, maxRatio.",
     );
   });
 
