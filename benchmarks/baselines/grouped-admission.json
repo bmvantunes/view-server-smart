@@ -521,7 +521,7 @@
         "writeBatchSize": 32
       },
       "latencySource": "vitest-output-json",
-      "memoryRssTotalDeltaBytes": 154271744,
+      "memoryRssTotalDeltaBytes": 421969920,
       "minimumSampleCount": 3,
       "mutationCount": 100576,
       "outputJsonPath": "packages/column-live-view-engine/.artifacts/grouped-write-fallback-100000rows-32mutations-broad-fallback.json",
