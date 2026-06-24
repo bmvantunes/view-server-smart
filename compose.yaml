@@ -31,3 +31,35 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+  kafka-london:
+    image: apache/kafka:4.1.0
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: "2"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://:9094,INTERNAL://:29094,CONTROLLER://:9095"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9094,INTERNAL://kafka-london:29094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "2@localhost:9095"
+      KAFKA_LOG_DIRS: "/tmp/view-server-kafka-london-logs"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_NUM_PARTITIONS: "3"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    tmpfs:
+      - /tmp/view-server-kafka-london-logs:size=1g
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9094 --list >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s

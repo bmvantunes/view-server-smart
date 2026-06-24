@@ -16,6 +16,8 @@ import {
 
 const kafkaBootstrapServers =
   process.env["VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS"] ?? "localhost:9092";
+const londonKafkaBootstrapServers =
+  process.env["VIEW_SERVER_KAFKA_LONDON_BOOTSTRAP_SERVERS"] ?? "localhost:9094";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -422,6 +424,309 @@ describe("@view-server/runtime Kafka ingress", () => {
           (runtime) => runtime.close.pipe(Effect.ignore),
         );
       }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.live("ingests multiple Kafka topics across logical regions independently", () =>
+    Effect.gen(function* () {
+      const regionalOrdersSourceTopic = yield* uniqueTopicName("regional-orders");
+      const usaTradesSourceTopic = yield* uniqueTopicName("usa-trades");
+      const consumerGroupId = yield* uniqueGroupId();
+      yield* createKafkaTopics(kafkaBootstrapServers, [
+        regionalOrdersSourceTopic,
+        usaTradesSourceTopic,
+      ]);
+      yield* createKafkaTopics(londonKafkaBootstrapServers, [regionalOrdersSourceTopic]);
+
+      const regions = {
+        usa: kafkaBootstrapServers,
+        london: londonKafkaBootstrapServers,
+      };
+      const regionalKafkaTopic = viewServer.kafkaTopic<typeof regions>();
+
+      yield* Effect.acquireUseRelease(
+        makeViewServerRuntime(viewServer, {
+          host: "127.0.0.1",
+          websocketPort: 0,
+          kafka: {
+            consumerGroupId,
+            regions,
+            topics: {
+              [regionalOrdersSourceTopic]: regionalKafkaTopic({
+                regions: ["usa", "london"],
+                value: kafka.json(IncomingOrder),
+                key: kafka.stringKey(),
+                viewServerTopic: "orders",
+                mapping: ({ key, value, region }) => {
+                  expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
+                  return {
+                    id: `${region}:${key}`,
+                    customerId: `${region}:${value.customerId}`,
+                    price: value.price,
+                  };
+                },
+              }),
+              [usaTradesSourceTopic]: regionalKafkaTopic({
+                regions: ["usa"],
+                value: kafka.json(IncomingTrade),
+                key: kafka.stringKey(),
+                viewServerTopic: "trades",
+                mapping: ({ key, value, region }) => {
+                  expectTypeOf(region).toEqualTypeOf<"usa">();
+                  return {
+                    id: key,
+                    symbol: value.symbol,
+                    quantity: value.quantity,
+                  };
+                },
+              }),
+            },
+          },
+        }),
+        (runtime) =>
+          Effect.gen(function* () {
+            yield* sendKafkaMessages(kafkaBootstrapServers, "view-server-kafka-usa-ingress-test", [
+              {
+                topic: regionalOrdersSourceTopic,
+                key: "regional-order-1",
+                value: JSON.stringify({
+                  customerId: "usa-customer-1",
+                  price: 10,
+                }),
+              },
+              {
+                topic: usaTradesSourceTopic,
+                key: "usa-trade-1",
+                value: JSON.stringify({
+                  symbol: "AAPL",
+                  quantity: 100,
+                }),
+              },
+              {
+                topic: regionalOrdersSourceTopic,
+                key: "regional-order-2",
+                value: JSON.stringify({
+                  customerId: "usa-customer-2",
+                  price: 30,
+                }),
+              },
+            ]);
+            yield* sendKafkaMessages(
+              londonKafkaBootstrapServers,
+              "view-server-kafka-london-ingress-test",
+              [
+                {
+                  topic: regionalOrdersSourceTopic,
+                  key: "regional-order-1",
+                  value: JSON.stringify({
+                    customerId: "london-customer-1",
+                    price: 20,
+                  }),
+                },
+              ],
+            );
+
+            const ordersSnapshot = yield* runtime.client
+              .snapshot("orders", {
+                select: ["id", "customerId", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: kafkaRestartPollSchedule,
+                  until: (snapshot) => snapshot.totalRows === 3,
+                }),
+              );
+            const tradesSnapshot = yield* runtime.client
+              .snapshot("trades", {
+                select: ["id", "symbol", "quantity"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: kafkaRestartPollSchedule,
+                  until: (snapshot) => snapshot.totalRows === 1,
+                }),
+              );
+            const health = yield* runtime.client.health().pipe(
+              Effect.repeat({
+                schedule: kafkaRestartPollSchedule,
+                until: (currentHealth) =>
+                  currentHealth.engine.topics.orders.rowCount === 3 &&
+                  currentHealth.engine.topics.trades.rowCount === 1 &&
+                  currentHealth.kafka?.regions["usa"]?.status === "connected" &&
+                  currentHealth.kafka?.regions["london"]?.status === "connected" &&
+                  currentHealth.kafka?.topics[regionalOrdersSourceTopic]?.status === "ready" &&
+                  currentHealth.kafka?.topics[regionalOrdersSourceTopic]?.regions["usa"]
+                    ?.assignedPartitions === 1 &&
+                  currentHealth.kafka?.topics[regionalOrdersSourceTopic]?.regions["usa"]
+                    ?.committedOffset === "2" &&
+                  currentHealth.kafka?.topics[regionalOrdersSourceTopic]?.regions["usa"]
+                    ?.consumerLagMessages === 0n &&
+                  currentHealth.kafka?.topics[regionalOrdersSourceTopic]?.regions["london"]
+                    ?.assignedPartitions === 1 &&
+                  currentHealth.kafka?.topics[regionalOrdersSourceTopic]?.regions["london"]
+                    ?.committedOffset === "1" &&
+                  currentHealth.kafka?.topics[regionalOrdersSourceTopic]?.regions["london"]
+                    ?.consumerLagMessages === 0n &&
+                  currentHealth.kafka?.topics[usaTradesSourceTopic]?.status === "ready" &&
+                  currentHealth.kafka?.topics[usaTradesSourceTopic]?.regions["usa"]
+                    ?.assignedPartitions === 1 &&
+                  currentHealth.kafka?.topics[usaTradesSourceTopic]?.regions["usa"]
+                    ?.committedOffset === "1" &&
+                  currentHealth.kafka?.topics[usaTradesSourceTopic]?.regions["usa"]
+                    ?.consumerLagMessages === 0n,
+              }),
+            );
+
+            expect({
+              status: health.status,
+              ordersSnapshot,
+              tradesSnapshot,
+              engineRows: {
+                orders: health.engine.topics.orders.rowCount,
+                trades: health.engine.topics.trades.rowCount,
+              },
+              kafka: health.kafka,
+            }).toStrictEqual({
+              status: "ready",
+              ordersSnapshot: {
+                status: "ready",
+                statusCode: "Ready",
+                rows: [
+                  {
+                    id: "london:regional-order-1",
+                    customerId: "london:london-customer-1",
+                    price: 20,
+                  },
+                  {
+                    id: "usa:regional-order-1",
+                    customerId: "usa:usa-customer-1",
+                    price: 10,
+                  },
+                  {
+                    id: "usa:regional-order-2",
+                    customerId: "usa:usa-customer-2",
+                    price: 30,
+                  },
+                ],
+                totalRows: 3,
+                version: expect.any(Number),
+              },
+              tradesSnapshot: {
+                status: "ready",
+                statusCode: "Ready",
+                rows: [
+                  {
+                    id: "usa-trade-1",
+                    symbol: "AAPL",
+                    quantity: 100,
+                  },
+                ],
+                totalRows: 1,
+                version: expect.any(Number),
+              },
+              engineRows: {
+                orders: 3,
+                trades: 1,
+              },
+              kafka: {
+                startFrom: {
+                  consumerGroupId,
+                  fallbackMode: "earliest",
+                  mode: "committed",
+                },
+                regions: nullRecord({
+                  london: {
+                    status: "connected",
+                    brokers: londonKafkaBootstrapServers,
+                    lastConnectedAt: expect.any(Number),
+                    lastError: null,
+                  },
+                  usa: {
+                    status: "connected",
+                    brokers: kafkaBootstrapServers,
+                    lastConnectedAt: expect.any(Number),
+                    lastError: null,
+                  },
+                }),
+                topics: nullRecord({
+                  [regionalOrdersSourceTopic]: {
+                    status: "ready",
+                    sourceTopic: regionalOrdersSourceTopic,
+                    viewServerTopic: "orders",
+                    regions: nullRecord({
+                      london: {
+                        connected: true,
+                        assignedPartitions: 1,
+                        messagesPerSecond: expect.any(Number),
+                        bytesPerSecond: expect.any(Number),
+                        decodedMessagesPerSecond: expect.any(Number),
+                        decodeFailuresPerSecond: 0,
+                        mappingFailuresPerSecond: 0,
+                        publishFailuresPerSecond: 0,
+                        commitFailuresPerSecond: 0,
+                        processingFailuresPerSecond: 0,
+                        lastMessageAt: expect.any(Number),
+                        lastCommitAt: expect.any(Number),
+                        consumerLagMessages: 0n,
+                        lagSampledAt: expect.any(Number),
+                        committedOffset: "1",
+                        lastError: null,
+                      },
+                      usa: {
+                        connected: true,
+                        assignedPartitions: 1,
+                        messagesPerSecond: expect.any(Number),
+                        bytesPerSecond: expect.any(Number),
+                        decodedMessagesPerSecond: expect.any(Number),
+                        decodeFailuresPerSecond: 0,
+                        mappingFailuresPerSecond: 0,
+                        publishFailuresPerSecond: 0,
+                        commitFailuresPerSecond: 0,
+                        processingFailuresPerSecond: 0,
+                        lastMessageAt: expect.any(Number),
+                        lastCommitAt: expect.any(Number),
+                        consumerLagMessages: 0n,
+                        lagSampledAt: expect.any(Number),
+                        committedOffset: "2",
+                        lastError: null,
+                      },
+                    }),
+                  },
+                  [usaTradesSourceTopic]: {
+                    status: "ready",
+                    sourceTopic: usaTradesSourceTopic,
+                    viewServerTopic: "trades",
+                    regions: nullRecord({
+                      usa: {
+                        connected: true,
+                        assignedPartitions: 1,
+                        messagesPerSecond: expect.any(Number),
+                        bytesPerSecond: expect.any(Number),
+                        decodedMessagesPerSecond: expect.any(Number),
+                        decodeFailuresPerSecond: 0,
+                        mappingFailuresPerSecond: 0,
+                        publishFailuresPerSecond: 0,
+                        commitFailuresPerSecond: 0,
+                        processingFailuresPerSecond: 0,
+                        lastMessageAt: expect.any(Number),
+                        lastCommitAt: expect.any(Number),
+                        consumerLagMessages: 0n,
+                        lagSampledAt: expect.any(Number),
+                        committedOffset: "1",
+                        lastError: null,
+                      },
+                    }),
+                  },
+                }),
+              },
+            });
+          }),
+        (runtime) => runtime.close.pipe(Effect.ignore),
+      );
+    }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
   it.live("preserves high-precision Kafka JSON values through real Kafka ingestion", () =>
