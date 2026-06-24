@@ -58,8 +58,9 @@ optimization wins filtered/sorted queries but silently taxes ingestion. Keep thi
 not compare it against runs collected while another benchmark is active.
 Raw write cases run with exact sample and mutation counts. The profile keeps mean latency tighter
 than smoke for millisecond-scale work, but keeps a small absolute window for sub-millisecond cases so
-GitHub runner jitter does not fail healthy 0.xms operations. p99 remains a wider tail-noise guard
-because with exact local samples it behaves like max latency and is sensitive to scheduler/GC spikes.
+GitHub runner jitter does not fail healthy 0.xms operations. p99 remains a wide tail-noise guard
+because with exact local samples it behaves like max latency and is sensitive to scheduler/GC spikes;
+use repeated local runs before treating p99-only movement in this profile as a product regression.
 
 WebSocket firehose smoke has a focused runtime transport gate:
 
