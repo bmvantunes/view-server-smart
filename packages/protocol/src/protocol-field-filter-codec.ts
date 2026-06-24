@@ -1,8 +1,8 @@
 import { viewServerSchemaFieldMetadata, type ViewServerRuntimeError } from "@view-server/config";
 import { Effect, Schema } from "effect";
 import {
-  decodeNamedJsonFieldValue,
-  encodeNamedJsonFieldValue,
+  decodeTopicNamedJsonFieldValue,
+  encodeTopicNamedJsonFieldValue,
   type JsonFieldSchema,
 } from "./protocol-json-field-codec";
 
@@ -34,32 +34,11 @@ const invalidQuery = (topic: string, message: string): ViewServerRuntimeError =>
   topic,
 });
 
-const encodeFilterJsonFieldValue = Effect.fn("ViewServerProtocol.field.encode")(function* (
-  topic: string,
-  field: string,
-  schema: JsonFieldSchema,
-  value: unknown,
-) {
-  return yield* encodeNamedJsonFieldValue(schema, value, {
-    field,
-    invalid: (message) => invalidQuery(topic, message),
-    invalidPrefix: "Invalid filter for",
-    notJsonSafePrefix: "Filter",
-  });
-});
-
-const decodeFilterJsonFieldValue = Effect.fn("ViewServerProtocol.field.decode")(function* (
-  topic: string,
-  field: string,
-  schema: JsonFieldSchema,
-  value: unknown,
-) {
-  return yield* decodeNamedJsonFieldValue(schema, value, {
-    field,
-    invalid: (message) => invalidQuery(topic, message),
-    invalidPrefix: "Invalid filter for",
-  });
-});
+const filterJsonFieldContext = {
+  invalid: invalidQuery,
+  invalidPrefix: "Invalid filter for",
+  notJsonSafePrefix: "Filter",
+};
 
 const encodeStringFilterValue = Effect.fn("ViewServerProtocol.filter.string.encode")(function* (
   topic: string,
@@ -116,12 +95,18 @@ const encodeOperatorFilterValue = Effect.fn("ViewServerProtocol.filter.operator.
   for (const [operator, operatorValue] of Object.entries(value)) {
     if (operator === "in" && Array.isArray(operatorValue)) {
       output[operator] = yield* Effect.forEach(operatorValue, (entry) =>
-        encodeFilterJsonFieldValue(topic, field, schema, entry),
+        encodeTopicNamedJsonFieldValue(topic, field, schema, entry, filterJsonFieldContext),
       );
     } else if (operator === "startsWith") {
       output[operator] = yield* encodeStringFilterValue(topic, field, schema, operatorValue);
     } else {
-      output[operator] = yield* encodeFilterJsonFieldValue(topic, field, schema, operatorValue);
+      output[operator] = yield* encodeTopicNamedJsonFieldValue(
+        topic,
+        field,
+        schema,
+        operatorValue,
+        filterJsonFieldContext,
+      );
     }
   }
   return output;
@@ -138,12 +123,18 @@ const decodeOperatorFilterValue = Effect.fn("ViewServerProtocol.filter.operator.
   for (const [operator, operatorValue] of Object.entries(value)) {
     if (operator === "in" && Array.isArray(operatorValue)) {
       output[operator] = yield* Effect.forEach(operatorValue, (entry) =>
-        decodeFilterJsonFieldValue(topic, field, schema, entry),
+        decodeTopicNamedJsonFieldValue(topic, field, schema, entry, filterJsonFieldContext),
       );
     } else if (operator === "startsWith") {
       output[operator] = yield* decodeStringFilterValue(topic, field, schema, operatorValue);
     } else {
-      output[operator] = yield* decodeFilterJsonFieldValue(topic, field, schema, operatorValue);
+      output[operator] = yield* decodeTopicNamedJsonFieldValue(
+        topic,
+        field,
+        schema,
+        operatorValue,
+        filterJsonFieldContext,
+      );
     }
   }
   return output;
@@ -156,14 +147,23 @@ export const encodeFilterValue = Effect.fn("ViewServerProtocol.filter.encode")(f
   value: unknown,
 ) {
   if (!isFilterObject(value)) {
-    return yield* encodeFilterJsonFieldValue(topic, field, schema, value);
+    return yield* encodeTopicNamedJsonFieldValue(
+      topic,
+      field,
+      schema,
+      value,
+      filterJsonFieldContext,
+    );
   }
   return yield* Effect.matchEffect(encodeOperatorFilterValue(topic, field, schema, value), {
     onFailure: (operatorError) =>
-      Effect.matchEffect(encodeFilterJsonFieldValue(topic, field, schema, value), {
-        onFailure: () => Effect.fail(operatorError),
-        onSuccess: Effect.succeed,
-      }),
+      Effect.matchEffect(
+        encodeTopicNamedJsonFieldValue(topic, field, schema, value, filterJsonFieldContext),
+        {
+          onFailure: () => Effect.fail(operatorError),
+          onSuccess: Effect.succeed,
+        },
+      ),
     onSuccess: Effect.succeed,
   });
 });
@@ -175,14 +175,23 @@ export const decodeFilterValue = Effect.fn("ViewServerProtocol.filter.decode")(f
   value: unknown,
 ) {
   if (!isFilterObject(value)) {
-    return yield* decodeFilterJsonFieldValue(topic, field, schema, value);
+    return yield* decodeTopicNamedJsonFieldValue(
+      topic,
+      field,
+      schema,
+      value,
+      filterJsonFieldContext,
+    );
   }
   return yield* Effect.matchEffect(decodeOperatorFilterValue(topic, field, schema, value), {
     onFailure: (operatorError) =>
-      Effect.matchEffect(decodeFilterJsonFieldValue(topic, field, schema, value), {
-        onFailure: () => Effect.fail(operatorError),
-        onSuccess: Effect.succeed,
-      }),
+      Effect.matchEffect(
+        decodeTopicNamedJsonFieldValue(topic, field, schema, value, filterJsonFieldContext),
+        {
+          onFailure: () => Effect.fail(operatorError),
+          onSuccess: Effect.succeed,
+        },
+      ),
     onSuccess: Effect.succeed,
   });
 });
