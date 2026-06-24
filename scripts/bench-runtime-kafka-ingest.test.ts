@@ -339,13 +339,20 @@ describe("Kafka ingest benchmark wrapper", () => {
 
   it("cleans Docker when benchmark process spawning throws after startup", async () => {
     const fakeSpawn = createFakeSpawn();
+    let spawnIndex = 0;
+    const throwingSpawn = () => {
+      throw new Error("cannot spawn benchmark");
+    };
+    const spawnSteps = [
+      fakeSpawn.spawnProcess,
+      fakeSpawn.spawnProcess,
+      fakeSpawn.spawnProcess,
+      fakeSpawn.spawnProcess,
+      throwingSpawn,
+      fakeSpawn.spawnProcess,
+    ];
     const runner = createRunner(fakeSpawn, {
-      spawnProcess: (command, args, options) => {
-        if (command === "vp" && args[0] === "test") {
-          throw new Error("cannot spawn benchmark");
-        }
-        return fakeSpawn.spawnProcess(command, args, options);
-      },
+      spawnProcess: (command, args, options) => spawnSteps[spawnIndex++](command, args, options),
     });
 
     const exitCodePromise = runner.runMain();
