@@ -11,6 +11,7 @@ import {
   groupedOrderNeutralBenchmarkThresholds,
   kafkaIngestBenchmarkThresholds,
   kafkaSustainedFirehoseBenchmarkThresholds,
+  rawReadWriteBenchmarkThresholds,
   readBenchmarkBaseline,
   readBenchmarkObservation,
   validateBenchmarkBaseline,
@@ -321,12 +322,14 @@ describe("benchmark baseline comparison", () => {
       groupedOrderNeutral: benchmarkThresholdsForProfile("grouped-order-neutral"),
       kafkaIngest: benchmarkThresholdsForProfile("kafka-ingest"),
       kafkaSustainedFirehose: benchmarkThresholdsForProfile("kafka-sustained-firehose"),
+      rawReadWrite: benchmarkThresholdsForProfile("raw-read-write"),
       smoke: benchmarkThresholdsForProfile("smoke"),
       websocketFirehose: benchmarkThresholdsForProfile("websocket-firehose"),
       kafkaIngestBaseline: buildBenchmarkBaseline("kafka-ingest", [observation]).thresholds,
       kafkaSustainedFirehoseBaseline: buildBenchmarkBaseline("kafka-sustained-firehose", [
         observation,
       ]).thresholds,
+      rawReadWriteBaseline: buildBenchmarkBaseline("raw-read-write", [observation]).thresholds,
       smokeBaseline: buildBenchmarkBaseline("smoke", [observation]).thresholds,
       websocketFirehoseBaseline: buildBenchmarkBaseline("websocket-firehose", [observation])
         .thresholds,
@@ -336,10 +339,12 @@ describe("benchmark baseline comparison", () => {
       groupedOrderNeutral: groupedOrderNeutralBenchmarkThresholds,
       kafkaIngest: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehose: kafkaSustainedFirehoseBenchmarkThresholds,
+      rawReadWrite: rawReadWriteBenchmarkThresholds,
       smoke: defaultBenchmarkThresholds,
       websocketFirehose: websocketFirehoseBenchmarkThresholds,
       kafkaIngestBaseline: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehoseBaseline: kafkaSustainedFirehoseBenchmarkThresholds,
+      rawReadWriteBaseline: rawReadWriteBenchmarkThresholds,
       smokeBaseline: defaultBenchmarkThresholds,
       websocketFirehoseBaseline: websocketFirehoseBenchmarkThresholds,
       orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
@@ -2578,6 +2583,41 @@ describe("benchmark baseline comparison", () => {
       ok: false,
       regressions: [
         "task a / src/example.bench.ts > example benchmark group / case a: sampleCount must be at least 5 but was 1.",
+      ],
+    });
+  });
+
+  it("requires exact raw write sample and mutation counts", () => {
+    const rawWriteObservation = {
+      ...observation,
+      benchmarks: [
+        {
+          ...observation.benchmarks[0],
+          sampleCount: 10,
+        },
+      ],
+      benchmarkScope: "engine-raw-write",
+      minimumSampleCount: 10,
+    };
+    const baseline = buildBenchmarkBaseline("raw-read-write", [rawWriteObservation]);
+    const changedRawWriteShape = buildBenchmarkBaseline("raw-read-write", [
+      {
+        ...rawWriteObservation,
+        benchmarks: [
+          {
+            ...rawWriteObservation.benchmarks[0],
+            sampleCount: 11,
+          },
+        ],
+        mutationCount: rawWriteObservation.mutationCount + 1,
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, changedRawWriteShape)).toStrictEqual({
+      ok: false,
+      regressions: [
+        "task a: mutationCount changed from 100 to 101.",
+        "task a / src/example.bench.ts > example benchmark group / case a: sampleCount changed from 10 to 11.",
       ],
     });
   });

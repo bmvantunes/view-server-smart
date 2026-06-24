@@ -40,6 +40,26 @@ This profile runs `raw-live-fanout` across same-window, ten-window, unique-windo
 subscription sets. It exists to catch duplicated materialization/fanout regressions separately from
 the broader smoke gate while still using Vitest benchmark output and committed baselines.
 
+Raw read/write performance has a focused engine gate:
+
+```bash
+pnpm run bench:baseline:raw-read-write
+```
+
+Refresh it only when a raw read/write performance change is intentionally accepted:
+
+```bash
+pnpm run bench:baseline:raw-read-write:update
+```
+
+This profile is localhost CPU/GC engine stress. It runs 100k-row raw snapshots, predicate-index
+reads, base writes, and indexed writes. It exists to catch the common failure mode where a read-path
+optimization wins filtered/sorted queries but silently taxes ingestion. Keep this gate serial and do
+not compare it against runs collected while another benchmark is active.
+Raw write cases run with exact sample and mutation counts. The profile keeps mean latency tighter
+than smoke; p99 remains a wider tail-noise guard because with exact local samples it behaves like max
+latency and is sensitive to scheduler/GC spikes.
+
 WebSocket firehose smoke has a focused runtime transport gate:
 
 ```bash

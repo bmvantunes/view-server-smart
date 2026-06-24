@@ -7,6 +7,8 @@
     "bench:baseline": "pnpm run bench:baseline:smoke",
     "bench:baseline:active-query-sharing": "node scripts/run-benchmark-baseline.mjs --profile=active-query-sharing",
     "bench:baseline:active-query-sharing:update": "node scripts/run-benchmark-baseline.mjs --profile=active-query-sharing --update-baseline",
+    "bench:baseline:raw-read-write": "node scripts/run-benchmark-baseline.mjs --profile=raw-read-write",
+    "bench:baseline:raw-read-write:update": "node scripts/run-benchmark-baseline.mjs --profile=raw-read-write --update-baseline",
     "bench:baseline:grouped-admission": "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission",
     "bench:baseline:grouped-admission:update": "node scripts/run-benchmark-baseline.mjs --profile=grouped-admission --update-baseline",
     "bench:baseline:grouped-order-neutral": "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral",
