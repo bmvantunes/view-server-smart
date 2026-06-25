@@ -3,16 +3,18 @@ import type {
   DecodableTopicDefinitions,
 } from "@view-server/column-live-view-engine";
 import type {
-  ExactLiveQueryInput,
+  ExactLiveQueryInputForTopic,
   GroupedQuery,
   LiveQueryRow,
   LiveQueryResult,
   RawQuery,
   TopicRow,
+  ViewServerConfig,
   ViewServerHealth,
   ViewServerRuntimeClient,
   ViewServerRuntimeError,
 } from "@view-server/config";
+import { validateLiveQuerySourceRoute } from "@view-server/config";
 import { Effect } from "effect";
 import type { AtomRef } from "effect/unstable/reactivity";
 import {
@@ -23,7 +25,7 @@ import {
   type RuntimeCoreTransportHealth,
 } from "./health";
 import type * as Duration from "effect/Duration";
-import { engineErrorToRuntimeError } from "./runtime-error";
+import { engineErrorToRuntimeError, invalidRuntimeQueryError } from "./runtime-error";
 
 export type RuntimeCoreClientInstance<Topics extends DecodableTopicDefinitions> = {
   readonly client: ViewServerRuntimeClient<Topics>;
@@ -34,6 +36,7 @@ export type RuntimeCoreClientInstance<Topics extends DecodableTopicDefinitions> 
 
 export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.make")(
   <const Topics extends DecodableTopicDefinitions>(
+    config: ViewServerConfig<Topics>,
     engine: ColumnLiveViewEngine<Topics>,
     health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
     transportHealth: RuntimeCoreTransportHealth<Topics>,
@@ -99,14 +102,20 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
           | GroupedQuery<TopicRow<Topics, Topic>>,
       >(
         topic: Topic,
-        query: ExactLiveQueryInput<TopicRow<Topics, Topic>, Query>,
+        query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
       ): Effect.Effect<
         LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
         ViewServerRuntimeError
       > =>
-        engine
-          .snapshot<Topic, Query>(topic, query)
-          .pipe(Effect.mapError(engineErrorToRuntimeError));
+        Effect.suspend(() => {
+          const routeError = validateLiveQuerySourceRoute(config.topics, topic, query);
+          if (routeError !== undefined) {
+            return Effect.fail(invalidRuntimeQueryError(topic, routeError));
+          }
+          return engine
+            .snapshot<Topic, Query>(topic, query)
+            .pipe(Effect.mapError(engineErrorToRuntimeError));
+        });
       return {
         client: {
           publish: (topic, row) =>

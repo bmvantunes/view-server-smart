@@ -2,6 +2,7 @@ import { describe, expectTypeOf, it } from "@effect/vitest";
 import type { ViewServerLiveClient } from "@view-server/client";
 import {
   defineViewServerConfig,
+  grpc,
   type LiveQueryResult,
   type ViewServerRuntimeError,
 } from "@view-server/config";
@@ -36,9 +37,22 @@ const viewServer = defineViewServerConfig({
   },
 });
 
+const leasedViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["region", "status"],
+      }),
+    },
+  },
+});
+
 const react = createViewServerReact(viewServer);
 const { ViewServerProvider, useLiveQuery, useViewServerHealth, useViewServerHealthSummary } = react;
 const ViewServerClientProvider = react[ViewServerReactClientProvider];
+const leasedReact = createViewServerReact(leasedViewServer);
 
 type TestInMemoryOptions = ViewServerInMemoryOptions<typeof viewServer.topics>;
 
@@ -227,6 +241,64 @@ describe("React type contracts", () => {
     };
     // @ts-expect-error numeric fields do not support string filters.
     useLiveQuery("orders", numericStringFilterQuery);
+  });
+
+  it("requires leased gRPC route predicates in React hooks", () => {
+    const routedRows = leasedReact.useLiveQuery("orders", {
+      where: {
+        region: { eq: "usa" },
+        status: { eq: "open" },
+        customerId: { startsWith: "customer-" },
+      },
+      orderBy: [{ field: "updatedAt", direction: "desc" }],
+      select: ["id", "customerId", "price"],
+      limit: 25,
+    });
+
+    expectTypeOf(routedRows).toEqualTypeOf<
+      LiveQueryResult<{
+        readonly id: string;
+        readonly customerId: string;
+        readonly price: number;
+      }>
+    >();
+
+    const missingRouteQuery = {
+      where: {
+        region: { eq: "usa" },
+      },
+      select: ["id"],
+    } satisfies {
+      readonly where: {
+        readonly region: {
+          readonly eq: "usa";
+        };
+      };
+      readonly select: readonly ["id"];
+    };
+    const invalidRouteOperatorQuery = {
+      where: {
+        region: { eq: "usa" },
+        status: { in: ["open"] },
+      },
+      select: ["id"],
+    } satisfies {
+      readonly where: {
+        readonly region: {
+          readonly eq: "usa";
+        };
+        readonly status: {
+          readonly in: readonly ["open"];
+        };
+      };
+      readonly select: readonly ["id"];
+    };
+
+    // @ts-expect-error leased gRPC queries require every routeBy field.
+    leasedReact.useLiveQuery("orders", missingRouteQuery);
+
+    // @ts-expect-error leased gRPC route filters must be exact eq predicates.
+    leasedReact.useLiveQuery("orders", invalidRouteOperatorQuery);
   });
 
   it("keeps health and in-memory client keyed by configured topics", () => {

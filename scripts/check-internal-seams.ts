@@ -1499,6 +1499,7 @@ const approvedPublicViewServerSpecifiers = new Set([
   "@view-server/client/remote",
   "@view-server/column-live-view-engine",
   "@view-server/config",
+  "@view-server/config/grpc",
   "@view-server/config/health",
   "@view-server/config/kafka",
   "@view-server/config/live-protocol",

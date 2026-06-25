@@ -1,6 +1,6 @@
 import type {
   DeltaEvent,
-  ExactLiveQueryInput,
+  ExactLiveQueryInputForTopic,
   GroupedQuery,
   LiveQuery,
   LiveQueryRow,
@@ -120,7 +120,7 @@ export type ViewServerLiveClient<Topics extends TopicDefinitions> = {
       const Query extends RawQuery<TopicRow<Topics, Topic>> | GroupedQuery<TopicRow<Topics, Topic>>,
     >(
       topic: Topic,
-      query: ExactLiveQueryInput<TopicRow<Topics, Topic>, Query>,
+      query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
     ): Effect.Effect<
       ViewServerLiveSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
       ViewServerRuntimeError | ViewServerTransportError

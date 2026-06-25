@@ -1,5 +1,6 @@
 import type { Schema } from "effect";
 import type * as BigDecimal from "effect/BigDecimal";
+import type { TopicSourceDefinition } from "./source-contract";
 
 export type TopicName = string;
 export type SortDirection = "asc" | "desc";
@@ -37,12 +38,21 @@ export type NumericFieldKey<Row> = Extract<
 
 export type FieldKey<Row> = Extract<keyof Row, string>;
 
-export type TopicDefinition<S extends RowSchema, Key extends string> = {
+export type TopicDefinition<
+  S extends RowSchema,
+  Key extends string,
+  Source extends TopicSourceDefinition | undefined = undefined,
+> = {
   readonly schema: S;
   readonly key: Key;
-};
+} & (Source extends TopicSourceDefinition
+  ? { readonly source: Source }
+  : { readonly source?: undefined });
 
-export type TopicDefinitions = Record<string, TopicDefinition<RowSchema, string>>;
+export type TopicDefinitions = Record<
+  string,
+  TopicDefinition<RowSchema, string, TopicSourceDefinition | undefined>
+>;
 
 export type TopicSchema<Topics, Topic extends keyof Topics> = Topics[Topic] extends {
   readonly schema: infer S extends RowSchema;

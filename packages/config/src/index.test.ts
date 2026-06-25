@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import { create, toBinary } from "@bufbuild/protobuf";
-import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
-import type { GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import { FieldDescriptorProto_Type, FileDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
 import * as BigDecimal from "effect/BigDecimal";
@@ -10,11 +10,14 @@ import * as HashMap from "effect/HashMap";
 import * as HashSet from "effect/HashSet";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-import { Config, Effect, Exit, Schema, SchemaGetter, SchemaTransformation } from "effect";
+import { Config, Effect, Exit, Schema, SchemaGetter, SchemaTransformation, Stream } from "effect";
 import {
   decodeKafkaCodec,
   decodeKafkaTopicMessage,
+  defineKafkaTopic,
+  defineGrpcFeed,
   defineViewServerConfig,
+  grpc,
   kafka,
   kafkaErrorIsMapping,
   VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
@@ -26,6 +29,8 @@ import {
   viewServerHealthSummaryFromHealth,
   viewServerHealthSummaryRowFromHealth,
   viewServerHealthTopicRowsFromHealth,
+  validateLiveQuerySourceRoute,
+  type GrpcClientValue,
   type KafkaCodec,
   type KafkaMappingInput,
   type KafkaMessageMetadata,
@@ -37,6 +42,7 @@ import {
   type KafkaTopicRegionHealth,
   type KafkaTopicDefinition,
   type ExactGroupedQuery,
+  type ExactLiveQueryInputForTopic,
   type ExactRawQuery,
   type GroupedQuery,
   type LiveQueryResult,
@@ -47,6 +53,7 @@ import {
   type SnapshotEvent,
   type StatusEvent,
   type TopicRuntimeHealth,
+  type TopicRouteBy,
   type TopicRow,
   type ValidateLiveQuery,
   type ViewServerBackpressureError,
@@ -1712,6 +1719,30 @@ const testProtoFile = fileDesc(
             ],
           },
         ],
+        service: [
+          {
+            name: "OrdersService",
+            method: [
+              {
+                name: "StreamOrders",
+                inputType: ".viewserver.test.OrderKey",
+                outputType: ".viewserver.test.OrderValue",
+                serverStreaming: true,
+              },
+              {
+                name: "StreamTrades",
+                inputType: ".viewserver.test.OrderKey",
+                outputType: ".viewserver.test.TradeValue",
+                serverStreaming: true,
+              },
+              {
+                name: "GetOrder",
+                inputType: ".viewserver.test.OrderKey",
+                outputType: ".viewserver.test.OrderValue",
+              },
+            ],
+          },
+        ],
       }),
     ),
   ),
@@ -1720,6 +1751,30 @@ const testProtoFile = fileDesc(
 const ordersValueSchema = messageDesc<OrdersValueMessage>(testProtoFile, 0);
 const ordersKeySchema = messageDesc<OrdersKeyMessage>(testProtoFile, 1);
 const tradesValueSchema = messageDesc<TradesValueMessage>(testProtoFile, 2);
+const ordersService = serviceDesc<{
+  readonly streamOrders: {
+    readonly input: typeof ordersKeySchema;
+    readonly output: typeof ordersValueSchema;
+    readonly methodKind: "server_streaming";
+  };
+  readonly streamTrades: {
+    readonly input: typeof ordersKeySchema;
+    readonly output: typeof tradesValueSchema;
+    readonly methodKind: "server_streaming";
+  };
+  readonly getOrder: {
+    readonly input: typeof ordersKeySchema;
+    readonly output: typeof ordersValueSchema;
+    readonly methodKind: "unary";
+  };
+}>(testProtoFile, 0);
+const tradesOnlyService = serviceDesc<{
+  readonly streamTrades: {
+    readonly input: typeof ordersKeySchema;
+    readonly output: typeof tradesValueSchema;
+    readonly methodKind: "server_streaming";
+  };
+}>(testProtoFile, 0);
 
 declare const generatedOrdersValueSchema: GenMessage<
   Message<"viewserver.test.OrderValue"> & {
@@ -1834,18 +1889,14 @@ type LiveQueryCall<Topics extends object> = {
     const Query extends GroupedQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactGroupedQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;
   <
     Topic extends Extract<keyof Topics, string>,
     const Query extends RawQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactRawQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>;
 };
 
@@ -1860,6 +1911,704 @@ const ordersKeyKafkaCodec = kafka.protobuf(ordersKeySchema);
 const tradesValueKafkaCodec = kafka.protobuf(tradesValueSchema);
 
 describe("defineViewServerConfig", () => {
+  it("types gRPC leased topic route metadata", () => {
+    const grpcViewServer = defineViewServerConfig({
+      topics: {
+        orders: {
+          schema: Order,
+          key: "id",
+          source: grpc.leased({
+            routeBy: ["region", "status"],
+          }),
+        },
+        trades: {
+          schema: Trade,
+          key: "id",
+          source: grpc.materialized(),
+        },
+        positions: {
+          schema: Position,
+          key: "id",
+        },
+      },
+    });
+    expectTypeOf<TopicRouteBy<typeof grpcViewServer.topics, "orders">>().toEqualTypeOf<
+      "region" | "status"
+    >();
+    expectTypeOf<TopicRouteBy<typeof grpcViewServer.topics, "trades">>().toEqualTypeOf<never>();
+
+    defineViewServerConfig({
+      topics: {
+        orders: {
+          schema: Order,
+          key: "id",
+          // @ts-expect-error routeBy fields must exist on the target topic row.
+          source: grpc.leased({
+            routeBy: ["strategyId"],
+          }),
+        },
+      },
+    });
+  });
+
+  it("requires exact equality predicates for leased gRPC route fields", () => {
+    const grpcViewServer = defineViewServerConfig({
+      topics: {
+        orders: {
+          schema: Order,
+          key: "id",
+          source: grpc.leased({
+            routeBy: ["region", "status"],
+          }),
+        },
+      },
+    });
+    const grpcRouteValidationViewServer = defineViewServerConfig({
+      topics: {
+        orders: {
+          schema: Order,
+          key: "id",
+          source: grpc.leased({
+            routeBy: ["region", "status"],
+          }),
+        },
+        trades: {
+          schema: Trade,
+          key: "id",
+          source: grpc.materialized(),
+        },
+        positions: {
+          schema: Position,
+          key: "id",
+        },
+      },
+    });
+    const assertGrpcRouteQueryTypes = (
+      useLiveQuery: LiveQueryCall<typeof grpcViewServer.topics>,
+    ) => {
+      const validRouteQuery = useLiveQuery("orders", {
+        where: {
+          region: { eq: "usa" },
+          status: { eq: "open" },
+          price: { gte: 10 },
+        },
+        orderBy: [{ field: "updatedAt", direction: "desc" }],
+        select: ["id", "price", "updatedAt"],
+        limit: 50,
+      });
+
+      expectTypeOf(validRouteQuery).toEqualTypeOf<
+        LiveQueryResult<{
+          readonly id: string;
+          readonly price: number;
+          readonly updatedAt: number;
+        }>
+      >();
+
+      const missingRouteFieldQuery = {
+        where: {
+          region: { eq: "usa" },
+        },
+        select: ["id"],
+      } satisfies {
+        readonly where: {
+          readonly region: {
+            readonly eq: "usa";
+          };
+        };
+        readonly select: readonly ["id"];
+      };
+      // @ts-expect-error leased gRPC topics require every routeBy field.
+      useLiveQuery("orders", missingRouteFieldQuery);
+
+      const routeInOperatorQuery = {
+        where: {
+          region: { eq: "usa" },
+          status: { in: ["open", "closed"] },
+        },
+        select: ["id"],
+      } satisfies {
+        readonly where: {
+          readonly region: {
+            readonly eq: "usa";
+          };
+          readonly status: {
+            readonly in: readonly ["open", "closed"];
+          };
+        };
+        readonly select: readonly ["id"];
+      };
+      // @ts-expect-error leased gRPC route filters must be exact eq predicates.
+      useLiveQuery("orders", routeInOperatorQuery);
+
+      const routeShorthandQuery = {
+        where: {
+          region: "usa",
+          status: { eq: "open" },
+        },
+        select: ["id"],
+      } satisfies {
+        readonly where: {
+          readonly region: "usa";
+          readonly status: {
+            readonly eq: "open";
+          };
+        };
+        readonly select: readonly ["id"];
+      };
+      // @ts-expect-error leased gRPC route filters must not use shorthand equality.
+      useLiveQuery("orders", routeShorthandQuery);
+
+      const routeExtraOperatorQuery = {
+        where: {
+          region: {
+            eq: "usa",
+            neq: "london",
+          },
+          status: { eq: "open" },
+        },
+        select: ["id"],
+      } satisfies {
+        readonly where: {
+          readonly region: {
+            readonly eq: "usa";
+            readonly neq: "london";
+          };
+          readonly status: {
+            readonly eq: "open";
+          };
+        };
+        readonly select: readonly ["id"];
+      };
+      // @ts-expect-error leased gRPC route filters must not include extra operators.
+      useLiveQuery("orders", routeExtraOperatorQuery);
+    };
+    expectTypeOf(assertGrpcRouteQueryTypes).toBeFunction();
+    expect(validateLiveQuerySourceRoute(grpcViewServer.topics, "missing", {})).toBeUndefined();
+    expect(
+      validateLiveQuerySourceRoute(grpcRouteValidationViewServer.topics, "positions", {}),
+    ).toBeUndefined();
+    expect(
+      validateLiveQuerySourceRoute(grpcRouteValidationViewServer.topics, "trades", {}),
+    ).toBeUndefined();
+    expect(validateLiveQuerySourceRoute(grpcViewServer.topics, "orders", null)).toBe(
+      "Leased topic orders requires a query object.",
+    );
+    expect(validateLiveQuerySourceRoute(grpcViewServer.topics, "orders", {})).toBe(
+      "Leased topic orders requires exact equality filters for route fields: region, status.",
+    );
+    expect(
+      validateLiveQuerySourceRoute(grpcViewServer.topics, "orders", {
+        where: {
+          region: { eq: "usa" },
+        },
+      }),
+    ).toBe("Leased topic orders route field status must use an exact eq filter.");
+    expect(
+      validateLiveQuerySourceRoute(grpcViewServer.topics, "orders", {
+        where: {
+          region: { eq: "usa" },
+          status: { eq: "open", neq: "closed" },
+        },
+      }),
+    ).toBe("Leased topic orders route field status must use an exact eq filter.");
+    expect(
+      validateLiveQuerySourceRoute(grpcViewServer.topics, "orders", {
+        where: {
+          region: { eq: "usa" },
+          status: { neq: "closed" },
+        },
+      }),
+    ).toBe("Leased topic orders route field status must use an exact eq filter.");
+    expect(
+      validateLiveQuerySourceRoute(grpcViewServer.topics, "orders", {
+        where: {
+          region: { eq: "usa" },
+          status: { eq: "open" },
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      validateLiveQuerySourceRoute(
+        {
+          malformed: {
+            schema: Order,
+            key: "id",
+            source: { kind: "grpc", lifecycle: "leased", routeBy: [] },
+          },
+        },
+        "malformed",
+        {},
+      ),
+    ).toBe("Leased topic malformed has invalid route metadata.");
+    expect(
+      validateLiveQuerySourceRoute(
+        {
+          malformed: {
+            schema: Order,
+            key: "id",
+            source: { kind: "grpc", lifecycle: "leased", routeBy: ["region", 1] },
+          },
+        },
+        "malformed",
+        {},
+      ),
+    ).toBe("Leased topic malformed has invalid route metadata.");
+  });
+
+  it("types gRPC clients and feed mapping contracts", () => {
+    const grpcViewServer = defineViewServerConfig({
+      topics: {
+        orders: {
+          schema: Order,
+          key: "id",
+          source: grpc.leased({
+            routeBy: ["region", "status"],
+          }),
+        },
+        trades: {
+          schema: Trade,
+          key: "id",
+          source: grpc.materialized(),
+        },
+        positions: {
+          schema: Position,
+          key: "id",
+        },
+      },
+    });
+    const clients = {
+      orders: grpc.connectClient({
+        service: ordersService,
+        baseUrl: "https://orders.example.test",
+      }),
+      trades: grpc.connectClient({
+        service: tradesOnlyService,
+        baseUrl: "https://trades.example.test",
+      }),
+    };
+    const standaloneFeed = defineGrpcFeed<typeof grpcViewServer.topics, typeof clients>();
+    const feed = grpcViewServer.grpcFeed<typeof clients>();
+    expectTypeOf(standaloneFeed.leasedFeed).toBeFunction();
+    const leasedOrders = feed.leasedFeed({
+      topic: "orders",
+      client: "orders",
+      method: "streamOrders",
+      routeBy: ["region", "status"],
+      request: ({ region, status }) => {
+        expectTypeOf(region).toEqualTypeOf<string>();
+        expectTypeOf(status).toEqualTypeOf<"open" | "closed" | "cancelled">();
+        return { orderId: `${region}:${status}` };
+      },
+      acquire: ({ client, request, route, session }) => {
+        expectTypeOf(client).toEqualTypeOf<GrpcClientValue<(typeof clients)["orders"]>>();
+        expectTypeOf(client.streamOrders).toBeFunction();
+        expectTypeOf(request.orderId).toEqualTypeOf<string | undefined>();
+        expectTypeOf(route).toEqualTypeOf<{
+          readonly region: string;
+          readonly status: "open" | "closed" | "cancelled";
+        }>();
+        expectTypeOf(session.forwardedHeaders).toEqualTypeOf<Readonly<Record<string, string>>>();
+        return Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: "customer-1",
+          status: "open",
+          price: 10,
+          updatedAt: 1,
+        });
+      },
+      release: ({ client, request, route, session }) => {
+        expectTypeOf(client).toEqualTypeOf<GrpcClientValue<(typeof clients)["orders"]>>();
+        expectTypeOf(request.orderId).toEqualTypeOf<string | undefined>();
+        expectTypeOf(route).toEqualTypeOf<{
+          readonly region: string;
+          readonly status: "open" | "closed" | "cancelled";
+        }>();
+        expectTypeOf(session.systemHeaders).toEqualTypeOf<Readonly<Record<string, string>>>();
+        return Effect.void;
+      },
+      map: ({ value, route, schema }) => {
+        expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
+        expectTypeOf(route.region).toEqualTypeOf<string>();
+        expectTypeOf(schema).toEqualTypeOf<typeof Order>();
+        return {
+          id: `${route.region}:${value.customerId}`,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: route.region,
+          updatedAt: value.updatedAt,
+        };
+      },
+    });
+    const materializedTrades = feed.materializedFeed({
+      topic: "trades",
+      client: "orders",
+      method: "streamTrades",
+      request: () => ({ orderId: "all-trades" }),
+      acquire: ({ client, route }) => {
+        expectTypeOf(client).toEqualTypeOf<GrpcClientValue<(typeof clients)["orders"]>>();
+        expectTypeOf(route).toEqualTypeOf<undefined>();
+        return Stream.make({
+          $typeName: "viewserver.test.TradeValue",
+          symbol: "AAPL",
+          quantity: 1,
+          price: 10,
+        });
+      },
+      release: ({ request, route }) => {
+        expectTypeOf(request.orderId).toEqualTypeOf<string | undefined>();
+        expectTypeOf(route).toEqualTypeOf<undefined>();
+        return Effect.void;
+      },
+      map: ({ value }) => ({
+        id: value.symbol,
+        symbol: value.symbol,
+        quantity: value.quantity,
+        price: value.price,
+        region: "usa",
+      }),
+    });
+
+    expect(leasedOrders.lifecycle).toBe("leased");
+    expect(materializedTrades.lifecycle).toBe("materialized");
+    expectTypeOf(ordersService).toEqualTypeOf<
+      GenService<{
+        readonly streamOrders: {
+          readonly input: typeof ordersKeySchema;
+          readonly output: typeof ordersValueSchema;
+          readonly methodKind: "server_streaming";
+        };
+        readonly streamTrades: {
+          readonly input: typeof ordersKeySchema;
+          readonly output: typeof tradesValueSchema;
+          readonly methodKind: "server_streaming";
+        };
+        readonly getOrder: {
+          readonly input: typeof ordersKeySchema;
+          readonly output: typeof ordersValueSchema;
+          readonly methodKind: "unary";
+        };
+      }>
+    >();
+
+    const openOrderStatus = "open" as const;
+
+    const invalidManualRuntimeFeedDefinition: typeof leasedOrders = {
+      _tag: "GrpcLeasedFeedDefinition",
+      lifecycle: "leased",
+      topic: "orders",
+      client: "orders",
+      method: "streamOrders",
+      routeBy: ["region", "status"],
+      request: ({ region, status }) => ({ orderId: `${region}:${status}` }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: "customer-1",
+          status: "open",
+          price: 10,
+          updatedAt: 1,
+        }),
+      // @ts-expect-error runtime feed definitions require helper-branded maps, so manual objects cannot bypass map exactness.
+      map: () => ({
+        id: "order-1",
+        customerId: "customer-1",
+        status: openOrderStatus,
+        price: 10,
+        region: "usa",
+        updatedAt: 1,
+        ze: true,
+      }),
+    };
+    expectTypeOf(invalidManualRuntimeFeedDefinition).not.toBeNever();
+
+    const invalidSpreadRuntimeFeedDefinition: typeof leasedOrders = {
+      ...leasedOrders,
+      // @ts-expect-error spread feeds cannot replace helper-branded exact maps with a broader function.
+      map: () => ({
+        id: "order-1",
+        customerId: "customer-1",
+        status: openOrderStatus,
+        price: 10,
+        region: "usa",
+        updatedAt: 1,
+        ze: true,
+      }),
+    };
+    expectTypeOf(invalidSpreadRuntimeFeedDefinition).not.toBeNever();
+
+    feed.materializedFeed({
+      topic: "trades",
+      client: "trades",
+      // @ts-expect-error gRPC feed methods must belong to the selected client.
+      method: "streamOrders",
+      request: () => ({ orderId: "all-trades" }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.TradeValue",
+          symbol: "AAPL",
+          quantity: 1,
+          price: 10,
+        }),
+      map: ({ value }) => ({
+        id: value.symbol,
+        symbol: value.symbol,
+        quantity: value.quantity,
+        price: value.price,
+        region: "usa",
+      }),
+    });
+
+    feed.materializedFeed({
+      // @ts-expect-error materialized feeds can only target topics declared with grpc.materialized().
+      topic: "orders",
+      client: "orders",
+      method: "streamTrades",
+      request: () => ({ orderId: "all-trades" }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.TradeValue",
+          symbol: "AAPL",
+          quantity: 1,
+          price: 10,
+        }),
+      map: ({ value }) => ({
+        id: value.symbol,
+        symbol: value.symbol,
+        quantity: value.quantity,
+        price: value.price,
+        region: "usa",
+      }),
+    });
+
+    feed.materializedFeed({
+      // @ts-expect-error materialized feeds can only target topics explicitly marked as gRPC materialized.
+      topic: "positions",
+      client: "orders",
+      method: "streamTrades",
+      request: () => ({ orderId: "positions" }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.TradeValue",
+          symbol: "AAPL",
+          quantity: 1,
+          price: 10,
+        }),
+      map: ({ value }) => ({
+        id: value.symbol,
+        symbol: value.symbol,
+        quantity: value.quantity,
+        price: value.price,
+        region: "usa",
+      }),
+    });
+
+    feed.leasedFeed({
+      topic: "orders",
+      client: "orders",
+      // @ts-expect-error gRPC feeds must use server-streaming methods.
+      method: "getOrder",
+      routeBy: ["region", "status"],
+      request: ({ region, status }) => ({ orderId: `${region}:${status}` }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: "customer-1",
+          status: "open",
+          price: 10,
+          updatedAt: 1,
+        }),
+      map: () => ({
+        id: "order-1",
+        customerId: "customer-1",
+        status: openOrderStatus,
+        price: 10,
+        region: "usa",
+        updatedAt: 1,
+      }),
+    });
+
+    feed.leasedFeed({
+      topic: "orders",
+      client: "orders",
+      method: "streamOrders",
+      // @ts-expect-error leased feed routeBy must match the configured topic route tuple.
+      routeBy: ["region"],
+      request: ({ region }) => ({ orderId: region }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: "customer-1",
+          status: "open",
+          price: 10,
+          updatedAt: 1,
+        }),
+      map: ({ value }) => ({
+        id: value.customerId,
+        customerId: value.customerId,
+        status: value.status,
+        price: value.price,
+        region: "usa",
+        updatedAt: value.updatedAt,
+      }),
+    });
+
+    feed.leasedFeed({
+      topic: "orders",
+      client: "orders",
+      method: "streamOrders",
+      routeBy: ["region", "status"],
+      request: ({ region, status }) => ({ orderId: `${region}:${status}` }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: "customer-1",
+          status: "open",
+          price: 10,
+          updatedAt: 1,
+        }),
+      // @ts-expect-error gRPC feed mappings must not return fields outside the topic schema.
+      map: ({ value }) => ({
+        id: value.customerId,
+        customerId: value.customerId,
+        status: value.status,
+        price: value.price,
+        region: "usa",
+        updatedAt: value.updatedAt,
+        ze: true,
+      }),
+    });
+
+    feed.leasedFeed({
+      topic: "orders",
+      client: "orders",
+      method: "streamOrders",
+      routeBy: ["region", "status"],
+      request: ({ region, status }) => ({ orderId: `${region}:${status}` }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: "customer-1",
+          status: "open",
+          price: 10,
+          updatedAt: 1,
+        }),
+      // @ts-expect-error gRPC feed mappings must return every topic field.
+      map: ({ value }) => ({
+        id: value.customerId,
+        customerId: value.customerId,
+        status: value.status,
+        price: value.price,
+        region: "usa",
+      }),
+    });
+
+    const grpcOwnedKafkaTopic = grpcViewServer.kafkaTopic<typeof kafkaRegions>();
+    expect(() =>
+      grpcOwnedKafkaTopic({
+        regions: ["usa"],
+        value: tradesValueKafkaCodec,
+        key: kafka.stringKey(),
+        // @ts-expect-error Kafka runtime topics cannot publish into gRPC-owned leased topics.
+        viewServerTopic: "orders",
+        mapping: ({ key, value }) => ({
+          id: key,
+          accountId: "account-1",
+          symbol: value.symbol,
+          active: true,
+          quantity: BigInt(value.quantity),
+          optionalQuantity: undefined,
+          price: BigDecimal.fromStringUnsafe(String(value.price)),
+          notional: value.price * value.quantity,
+          optionalNotional: undefined,
+        }),
+      }),
+    ).toThrow("Kafka source cannot publish into gRPC-owned View Server topic: orders");
+    expect(() =>
+      grpcOwnedKafkaTopic({
+        regions: ["usa"],
+        value: tradesValueKafkaCodec,
+        key: kafka.stringKey(),
+        // @ts-expect-error Kafka runtime topics cannot publish into gRPC-owned materialized topics.
+        viewServerTopic: "trades",
+        mapping: ({ key, value }) => ({
+          id: key,
+          accountId: "account-1",
+          symbol: value.symbol,
+          active: true,
+          quantity: BigInt(value.quantity),
+          optionalQuantity: undefined,
+          price: BigDecimal.fromStringUnsafe(String(value.price)),
+          notional: value.price * value.quantity,
+          optionalNotional: undefined,
+        }),
+      }),
+    ).toThrow("Kafka source cannot publish into gRPC-owned View Server topic: trades");
+    expect(() =>
+      grpcOwnedKafkaTopic({
+        regions: ["usa"],
+        value: tradesValueKafkaCodec,
+        key: kafka.stringKey(),
+        // @ts-expect-error hostile JS callers can still target missing View Server topics.
+        viewServerTopic: "missing",
+        mapping: ({ key, value }) => ({
+          id: key,
+          accountId: "account-1",
+          symbol: value.symbol,
+          active: true,
+          quantity: BigInt(value.quantity),
+          optionalQuantity: undefined,
+          price: BigDecimal.fromStringUnsafe(String(value.price)),
+          notional: value.price * value.quantity,
+          optionalNotional: undefined,
+        }),
+      }),
+    ).toThrow();
+    const malformedSourceKafkaTopic = defineKafkaTopic({
+      malformed: {
+        schema: Position,
+        source: { kind: 1 },
+      },
+    })<typeof kafkaRegions>();
+    const malformedSourceTopic = malformedSourceKafkaTopic({
+      regions: ["usa"],
+      value: tradesValueKafkaCodec,
+      key: kafka.stringKey(),
+      viewServerTopic: "malformed",
+      mapping: ({ key, value }) => ({
+        id: key,
+        accountId: "account-1",
+        symbol: value.symbol,
+        active: true,
+        quantity: BigInt(value.quantity),
+        optionalQuantity: undefined,
+        price: BigDecimal.fromStringUnsafe(String(value.price)),
+        notional: value.price * value.quantity,
+        optionalNotional: undefined,
+      }),
+    });
+    expect(malformedSourceTopic.viewServerTopic).toBe("malformed");
+    const kafkaPositionTopic = grpcOwnedKafkaTopic({
+      regions: ["usa"],
+      value: tradesValueKafkaCodec,
+      key: kafka.stringKey(),
+      viewServerTopic: "positions",
+      mapping: ({ key, value }) => ({
+        id: key,
+        accountId: "account-1",
+        symbol: value.symbol,
+        active: true,
+        quantity: BigInt(value.quantity),
+        optionalQuantity: undefined,
+        price: BigDecimal.fromStringUnsafe(String(value.price)),
+        notional: value.price * value.quantity,
+        optionalNotional: undefined,
+      }),
+    });
+    expect(kafkaPositionTopic.viewServerTopic).toBe("positions");
+  });
+
   it("derives schema field metadata for query validation", () => {
     expect(viewServerSchemaFieldMetadata(Schema.Number)).toStrictEqual({
       isNumeric: true,
@@ -4509,7 +5258,12 @@ describe("defineViewServerConfig", () => {
   );
 
   it("does not expose executable React or runtime placeholders from config", () => {
-    expect(Object.keys(viewServer)).toStrictEqual(["topics", "defineRuntimeOptions", "kafkaTopic"]);
+    expect(Object.keys(viewServer)).toStrictEqual([
+      "topics",
+      "defineRuntimeOptions",
+      "kafkaTopic",
+      "grpcFeed",
+    ]);
   });
 });
 

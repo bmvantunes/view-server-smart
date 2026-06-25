@@ -1,5 +1,10 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
-import { defineViewServerConfig, kafka, type ViewServerRuntimeError } from "@view-server/config";
+import {
+  defineViewServerConfig,
+  grpc,
+  kafka,
+  type ViewServerRuntimeError,
+} from "@view-server/config";
 import type { Config, Effect } from "effect";
 import { Schema } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
@@ -25,7 +30,20 @@ const viewServer = defineViewServerConfig({
   },
 });
 
+const leasedViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["id"],
+      }),
+    },
+  },
+});
+
 const runtimeEffect = makeViewServerRuntime(viewServer);
+const leasedRuntimeEffect = makeViewServerRuntime(leasedViewServer);
 const runtimeWithGroupedAdmissionLimits = makeViewServerRuntime(viewServer, {
   groupedIncrementalAdmissionLimits: {
     maxGroups: 1,
@@ -33,6 +51,7 @@ const runtimeWithGroupedAdmissionLimits = makeViewServerRuntime(viewServer, {
 });
 const runEffect = runViewServerRuntime(viewServer);
 declare const runtime: Effect.Success<typeof runtimeEffect>;
+declare const leasedRuntime: Effect.Success<typeof leasedRuntimeEffect>;
 
 const usaKafkaRegions = {
   usa: "localhost:9092",
@@ -82,9 +101,49 @@ describe("runtime type contracts", () => {
     const subscribe = runtime.liveClient.subscribe("orders", {
       select: ["id", "price"],
     });
+    const leasedSnapshot = leasedRuntime.client.snapshot("orders", {
+      where: {
+        id: { eq: "order-1" },
+      },
+      select: ["id", "price"],
+    });
+    const leasedSubscribe = leasedRuntime.liveClient.subscribe("orders", {
+      where: {
+        id: { eq: "order-1" },
+      },
+      select: ["id"],
+    });
 
     expectTypeOf<Effect.Error<typeof publish>>().toEqualTypeOf<ViewServerRuntimeError>();
     expectTypeOf(subscribe).not.toBeAny();
+    expectTypeOf(leasedSnapshot).not.toBeAny();
+    expectTypeOf(leasedSubscribe).not.toBeAny();
+
+    const missingRouteQuery = {
+      select: ["id"],
+    } satisfies {
+      readonly select: readonly ["id"];
+    };
+    const shorthandRouteQuery = {
+      where: {
+        id: "order-1",
+      },
+      select: ["id"],
+    } satisfies {
+      readonly where: {
+        readonly id: "order-1";
+      };
+      readonly select: readonly ["id"];
+    };
+    // @ts-expect-error leased gRPC snapshots require exact eq route filters.
+    const invalidLeasedSnapshot = leasedRuntime.client.snapshot("orders", missingRouteQuery);
+    const invalidLeasedSubscribe = leasedRuntime.liveClient.subscribe(
+      "orders",
+      // @ts-expect-error leased gRPC route filters must be exact eq predicates.
+      shorthandRouteQuery,
+    );
+    expectTypeOf(invalidLeasedSnapshot).not.toBeAny();
+    expectTypeOf(invalidLeasedSubscribe).not.toBeAny();
 
     const invalidPublish = runtime.client.publish("orders", {
       id: "order-1",

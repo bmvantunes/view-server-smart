@@ -1,7 +1,7 @@
 import type { Config, Effect } from "effect";
 import type { ViewServerHealth } from "./health-contract";
+import type { ExactLiveQueryInputForTopic } from "./source-query-contract";
 import type {
-  ExactLiveQueryInput,
   ExactPatch,
   GroupedQuery,
   LiveQueryRow,
@@ -51,7 +51,7 @@ type RuntimeSnapshot<Topics extends object> = <
   const Query extends RawQuery<TopicRow<Topics, Topic>> | GroupedQuery<TopicRow<Topics, Topic>>,
 >(
   topic: Topic,
-  query: ExactLiveQueryInput<TopicRow<Topics, Topic>, Query>,
+  query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
 ) => Effect.Effect<
   LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
   ViewServerRuntimeError

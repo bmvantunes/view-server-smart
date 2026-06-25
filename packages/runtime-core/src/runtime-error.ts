@@ -47,3 +47,13 @@ export const engineErrorToRuntimeError = (error: EngineRuntimeError): ViewServer
     }
   }
 };
+
+export const invalidRuntimeQueryError = (
+  topic: string,
+  message: string,
+): ViewServerRuntimeError => ({
+  _tag: "ViewServerRuntimeError",
+  code: "InvalidQuery",
+  topic,
+  message,
+});

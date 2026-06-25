@@ -12,11 +12,12 @@ import {
   runAllFinalizers,
 } from "@view-server/effect-utils";
 import type {
-  ExactLiveQueryInput,
+  ExactLiveQueryInputForTopic,
   GroupedQuery,
   LiveQueryRow,
   RawQuery,
   TopicRow,
+  ViewServerConfig,
   ViewServerHealth,
   ViewServerHealthSummaryRow,
   ViewServerHealthTopicRow,
@@ -26,12 +27,13 @@ import type {
 import {
   VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
   VIEW_SERVER_HEALTH_TOPIC,
+  validateLiveQuerySourceRoute,
   viewServerHealthSummaryRowFromHealth,
   viewServerHealthTopicRowsFromHealth,
 } from "@view-server/config";
 import { Cause, Clock, Effect, Exit, Queue, Scope, Semaphore, Stream } from "effect";
 import type { AtomRef } from "effect/unstable/reactivity";
-import { engineErrorToRuntimeError } from "./runtime-error";
+import { engineErrorToRuntimeError, invalidRuntimeQueryError } from "./runtime-error";
 
 const runtimeClosedError: ViewServerRuntimeError = {
   _tag: "ViewServerRuntimeError",
@@ -67,6 +69,7 @@ const runtimeHealthBackpressureStatus = <Topic extends string>(
 
 export const makeRuntimeCoreLiveClient = Effect.fn("ViewServerRuntimeCore.liveClient.make")(
   <const Topics extends DecodableTopicDefinitions>(
+    config: ViewServerConfig<Topics>,
     engine: ColumnLiveViewEngine<Topics>,
     health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
     refreshHealth: Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>,
@@ -79,7 +82,7 @@ export const makeRuntimeCoreLiveClient = Effect.fn("ViewServerRuntimeCore.liveCl
           | GroupedQuery<TopicRow<Topics, Topic>>,
       >(
         topic: Topic,
-        query: ExactLiveQueryInput<TopicRow<Topics, Topic>, Query>,
+        query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
       ): Effect.Effect<
         ViewServerLiveSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
         ViewServerRuntimeError | ViewServerTransportError
@@ -91,42 +94,54 @@ export const makeRuntimeCoreLiveClient = Effect.fn("ViewServerRuntimeCore.liveCl
           | GroupedQuery<TopicRow<Topics, Topic>>,
       >(
         topic: Topic,
-        query: ExactLiveQueryInput<TopicRow<Topics, Topic>, Query>,
+        query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
       ): Effect.Effect<
         ViewServerLiveSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
         ViewServerRuntimeError | ViewServerTransportError
       > {
-        const closeRefresh = ignoreRuntimeHealthRefreshFailure(refreshHealth);
-        return engine.subscribe<Topic, Query>(topic, query).pipe(
-          Effect.mapError(engineErrorToRuntimeError),
-          Effect.flatMap((subscription) =>
-            refreshHealth.pipe(
-              Effect.as({
-                events: subscription.events,
-                close: () => subscription.close().pipe(Effect.andThen(closeRefresh)),
-              }),
-              Effect.onError(() => subscription.close().pipe(ignoreLiveSubscriptionCloseFailure)),
+        return Effect.suspend(() => {
+          const closeRefresh = ignoreRuntimeHealthRefreshFailure(refreshHealth);
+          const routeError = validateLiveQuerySourceRoute(config.topics, topic, query);
+          if (routeError !== undefined) {
+            return Effect.fail(invalidRuntimeQueryError(topic, routeError));
+          }
+          return engine.subscribe<Topic, Query>(topic, query).pipe(
+            Effect.mapError(engineErrorToRuntimeError),
+            Effect.flatMap((subscription) =>
+              refreshHealth.pipe(
+                Effect.as({
+                  events: subscription.events,
+                  close: () => subscription.close().pipe(Effect.andThen(closeRefresh)),
+                }),
+                Effect.onError(() => subscription.close().pipe(ignoreLiveSubscriptionCloseFailure)),
+              ),
             ),
-          ),
-        );
+          );
+        });
       }
       const subscribeRuntime: ViewServerRuntimeLiveClient<Topics>["subscribeRuntime"] = (
         topic,
         query,
       ) => {
-        const closeRefresh = ignoreRuntimeHealthRefreshFailure(refreshHealth);
-        return engine.subscribeRuntime(topic, query).pipe(
-          Effect.mapError(engineErrorToRuntimeError),
-          Effect.flatMap((subscription) =>
-            refreshHealth.pipe(
-              Effect.as({
-                events: subscription.events,
-                close: () => subscription.close().pipe(Effect.andThen(closeRefresh)),
-              }),
-              Effect.onError(() => subscription.close().pipe(ignoreLiveSubscriptionCloseFailure)),
+        return Effect.suspend(() => {
+          const closeRefresh = ignoreRuntimeHealthRefreshFailure(refreshHealth);
+          const routeError = validateLiveQuerySourceRoute(config.topics, topic, query);
+          if (routeError !== undefined) {
+            return Effect.fail(invalidRuntimeQueryError(topic, routeError));
+          }
+          return engine.subscribeRuntime(topic, query).pipe(
+            Effect.mapError(engineErrorToRuntimeError),
+            Effect.flatMap((subscription) =>
+              refreshHealth.pipe(
+                Effect.as({
+                  events: subscription.events,
+                  close: () => subscription.close().pipe(Effect.andThen(closeRefresh)),
+                }),
+                Effect.onError(() => subscription.close().pipe(ignoreLiveSubscriptionCloseFailure)),
+              ),
             ),
-          ),
-        );
+          );
+        });
       };
       type ActiveHealthSubscription = {
         close: Effect.Effect<void>;

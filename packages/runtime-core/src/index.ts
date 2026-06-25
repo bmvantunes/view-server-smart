@@ -78,6 +78,7 @@ export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefi
       healthFromEngine(engineHealth, transportHealth, healthOverlay, nowMillis),
     );
     const runtimeClient = yield* makeRuntimeCoreClient<Topics>(
+      config,
       engine,
       health,
       transportHealth,
@@ -85,6 +86,7 @@ export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefi
       input.healthRefreshCadence,
     );
     const liveClient = yield* makeRuntimeCoreLiveClient<Topics>(
+      config,
       engine,
       health,
       runtimeClient.refreshHealth,

@@ -26,6 +26,7 @@ import { createViewServerWebSocketServer } from "@view-server/server";
 import type { ViewServerHealthHttpJson, ViewServerWebSocketServer } from "@view-server/server";
 import * as configPackage from "@view-server/config";
 import * as healthPackage from "@view-server/config/health";
+import * as grpcPackage from "@view-server/config/grpc";
 import * as kafkaPackage from "@view-server/config/kafka";
 import * as liveProtocolPackage from "@view-server/config/live-protocol";
 import * as queryPackage from "@view-server/config/query";
@@ -90,6 +91,7 @@ const approvedPackageExports = [
   "@view-server/client/remote",
   "@view-server/column-live-view-engine",
   "@view-server/config",
+  "@view-server/config/grpc",
   "@view-server/config/health",
   "@view-server/config/kafka",
   "@view-server/config/live-protocol",
@@ -202,6 +204,12 @@ const forbiddenPackageDeepImports = [
   "@view-server/column-live-view-engine/topic-store-state",
   "@view-server/config/src/index",
   "@view-server/config/dist/index.js",
+  "@view-server/config/src/grpc-contract",
+  "@view-server/config/src/source-contract",
+  "@view-server/config/src/source-query-contract",
+  "@view-server/config/dist/grpc-contract.js",
+  "@view-server/config/dist/source-contract.js",
+  "@view-server/config/dist/source-query-contract.js",
   "@view-server/config/dist/topic-contract.js",
   "@view-server/config/src/topic-contract",
   "@view-server/config/query/raw-query-contract",
@@ -242,12 +250,21 @@ for (const specifier of forbiddenPackageDeepImports) {
 
 requireExport("@view-server/config", configPackage, "defineViewServerConfig");
 requireExport("@view-server/config", configPackage, "defineKafkaTopic");
+requireExport("@view-server/config", configPackage, "defineGrpcFeed");
+requireExport("@view-server/config", configPackage, "grpc");
 requireExport("@view-server/config", configPackage, "kafka");
 requireModule("@view-server/config/query", queryPackage);
+requireModule("@view-server/config/grpc", grpcPackage);
 requireModule("@view-server/config/health", healthPackage);
 requireModule("@view-server/config/live-protocol", liveProtocolPackage);
+rejectExport("@view-server/config/query", queryPackage, "grpc");
+rejectExport("@view-server/config/query", queryPackage, "defineGrpcFeed");
+rejectExport("@view-server/config/query", queryPackage, "GrpcTopicSource");
+rejectExport("@view-server/config/query", queryPackage, "GrpcLeasedTopicSource");
 requireExport("@view-server/config/kafka", kafkaPackage, "defineKafkaTopic");
 requireExport("@view-server/config/kafka", kafkaPackage, "kafka");
+requireExport("@view-server/config/grpc", grpcPackage, "grpc");
+requireExport("@view-server/config/grpc", grpcPackage, "defineGrpcFeed");
 requireExport("@view-server/config/runtime", runtimePackage, "runtimeConfig");
 requireExport("@view-server/config/runtime", runtimePackage, "runtimeEnvironmentConfig");
 requireExport("@view-server/client", clientPackage, "stableQueryKey");

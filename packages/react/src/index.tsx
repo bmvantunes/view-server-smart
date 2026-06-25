@@ -10,9 +10,7 @@ import {
 } from "@view-server/client";
 import { makeViewServerClient, type ViewServerClientOptions } from "@view-server/client/remote";
 import type {
-  ExactGroupedQuery,
-  ExactLiveQuery,
-  ExactRawQuery,
+  ExactLiveQueryInputForTopic,
   GroupedQuery,
   GroupedResult,
   LiveQueryResult,
@@ -21,7 +19,6 @@ import type {
   RawQuery,
   TopicDefinitions,
   TopicRow,
-  ValidateLiveQuery,
   ViewServerConfig,
   ViewServerHealthConnectionStatus,
   ViewServerHealthDetails,
@@ -65,18 +62,14 @@ export type UseLiveQueryHook<Topics extends TopicDefinitions> = {
     const Query extends RawQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactRawQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): LiveQueryResult<PickRawFields<TopicRow<Topics, Topic>, Query>>;
   <
     Topic extends Extract<keyof Topics, string>,
     const Query extends GroupedQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactGroupedQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): LiveQueryResult<GroupedResult<TopicRow<Topics, Topic>, Query>>;
 };
 
@@ -171,27 +164,21 @@ export const createViewServerReact = <const Topics extends TopicDefinitions>(
     const Query extends RawQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactRawQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): LiveQueryResult<PickRawFields<TopicRow<Topics, Topic>, Query>>;
   function useLiveQuery<
     Topic extends Extract<keyof Topics, string>,
     const Query extends GroupedQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactGroupedQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): LiveQueryResult<GroupedResult<TopicRow<Topics, Topic>, Query>>;
   function useLiveQuery<
     Topic extends Extract<keyof Topics, string>,
     const Query extends RawQuery<TopicRow<Topics, Topic>> | GroupedQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactLiveQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>> {
     const client = useClient();
     type Row = LiveQueryRow<TopicRow<Topics, Topic>, Query>;

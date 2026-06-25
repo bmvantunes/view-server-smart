@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
 import {
   defineViewServerConfig,
+  grpc,
   VIEW_SERVER_HEALTH_SUMMARY_TOPIC,
   VIEW_SERVER_HEALTH_TOPIC,
 } from "@view-server/config";
@@ -30,7 +31,38 @@ const viewServer = defineViewServerConfig({
   },
 });
 
+const leasedViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["id"],
+      }),
+    },
+  },
+});
+
+const mixedSourceViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["id"],
+      }),
+    },
+    positions: {
+      schema: Order,
+      key: "id",
+    },
+  },
+});
+
 declare const client: ViewServerLiveClient<typeof viewServer.topics>;
+declare const leasedClient: ViewServerLiveClient<typeof leasedViewServer.topics>;
+declare const mixedSourceClient: ViewServerLiveClient<typeof mixedSourceViewServer.topics>;
+declare const mixedSourceTopic: "orders" | "positions";
 
 describe("client type contracts", () => {
   it("preserves selected row types through live subscriptions", () => {
@@ -61,6 +93,74 @@ describe("client type contracts", () => {
 
     expectTypeOf(undefinedSelectedField).not.toBeAny();
     expectTypeOf(nullSelectedField).not.toBeAny();
+  });
+
+  it("requires leased gRPC route predicates in live subscriptions", () => {
+    const routedSubscription = leasedClient.subscribe("orders", {
+      where: {
+        id: { eq: "order-1" },
+      },
+      select: ["id", "price"],
+    });
+    const missingRouteQuery = {
+      select: ["id"],
+    } satisfies {
+      readonly select: readonly ["id"];
+    };
+    const shorthandRouteQuery = {
+      where: {
+        id: "order-1",
+      },
+      select: ["id"],
+    } satisfies {
+      readonly where: {
+        readonly id: "order-1";
+      };
+      readonly select: readonly ["id"];
+    };
+    // @ts-expect-error leased gRPC subscriptions require exact eq route filters.
+    const missingRouteSubscription = leasedClient.subscribe("orders", missingRouteQuery);
+    // @ts-expect-error leased gRPC route filters must not use shorthand equality.
+    const shorthandRouteSubscription = leasedClient.subscribe("orders", shorthandRouteQuery);
+
+    expectTypeOf<Effect.Success<typeof routedSubscription>>().toEqualTypeOf<
+      ViewServerLiveSubscription<{
+        readonly id: string;
+        readonly price: number;
+      }>
+    >();
+    expectTypeOf(missingRouteSubscription).not.toBeAny();
+    expectTypeOf(shorthandRouteSubscription).not.toBeAny();
+  });
+
+  it("keeps leased gRPC route predicates when the topic is a union", () => {
+    const routedUnionSubscription = mixedSourceClient.subscribe(mixedSourceTopic, {
+      where: {
+        id: { eq: "order-1" },
+      },
+      select: ["id"],
+    });
+    const missingRouteQuery = {
+      select: ["id"],
+    } satisfies {
+      readonly select: readonly ["id"];
+    };
+
+    const missingRouteSubscription = mixedSourceClient.subscribe(
+      mixedSourceTopic,
+      // @ts-expect-error dynamic topic unions that include a leased topic still require route filters.
+      missingRouteQuery,
+    );
+
+    expectTypeOf<Effect.Success<typeof routedUnionSubscription>>().toEqualTypeOf<
+      ViewServerLiveSubscription<{
+        readonly id: string;
+      }>
+    >();
+    expectTypeOf<Effect.Error<typeof routedUnionSubscription>>().toEqualTypeOf<
+      ViewServerRuntimeError | ViewServerTransportError
+    >();
+    expectTypeOf(missingRouteSubscription).not.toBeAny();
   });
 
   it("exposes health as a read-only ref", () => {

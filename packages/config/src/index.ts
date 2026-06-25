@@ -6,7 +6,22 @@ import {
   type RuntimeOptionsCandidate,
   type RuntimeOptionsDefinition,
 } from "./kafka-contract";
-import type { RowFromSchema, RowSchema, StringFieldKey, TopicDefinition } from "./topic-contract";
+import type {
+  GrpcFeedHelper,
+  GrpcLeasedTopicSource,
+  GrpcRuntimeClients,
+  GrpcTopicSource,
+} from "./grpc-contract";
+import { defineGrpcFeed } from "./grpc-contract";
+import type { TopicSourceDefinition } from "./source-contract";
+import type {
+  FieldKey,
+  RowFromSchema,
+  RowSchema,
+  StringFieldKey,
+  TopicDefinition,
+  TopicDefinitions,
+} from "./topic-contract";
 import { viewServerUnsupportedRuntimeFieldDomain } from "./schema-field-metadata";
 
 export type {
@@ -110,6 +125,34 @@ export {
   kafka,
   kafkaErrorIsMapping,
 } from "./kafka-contract";
+export { grpc } from "./grpc-contract";
+export type {
+  GrpcConnectClientDefinition,
+  GrpcClientValue,
+  GrpcFeedAcquireInput,
+  GrpcFeedHelper,
+  GrpcFeedMapInput,
+  GrpcFeedReleaseInput,
+  GrpcFeedSession,
+  GrpcHelper,
+  GrpcLeasedTopicSource,
+  GrpcMaterializedTopicSource,
+  GrpcMethodRequest,
+  GrpcMethodValue,
+  GrpcRuntimeClients,
+  GrpcRuntimeValue,
+  GrpcServerStreamingMethodName,
+  GrpcTopicSource,
+  GrpcTopicSourceLifecycle,
+} from "./grpc-contract";
+export { defineGrpcFeed } from "./grpc-contract";
+export type {
+  ExactLeasedRouteQuery,
+  ExactLiveQueryInputForTopic,
+  TopicRouteBy,
+} from "./source-query-contract";
+export { validateLiveQuerySourceRoute } from "./source-query-contract";
+export type { TopicSourceDefinition } from "./source-contract";
 export type {
   KafkaBytesCodec,
   KafkaDecodedTopicMessage,
@@ -147,27 +190,53 @@ type ViewServerConfigTopicShape = Record<
   {
     readonly schema: RowSchema;
     readonly key: string;
+    readonly source?: TopicSourceDefinition;
   }
 >;
 
-export type ViewServerConfig<Topics extends ViewServerConfigTopicShape> = {
+export type ViewServerConfig<Topics extends TopicDefinitions> = {
   readonly topics: Topics & ValidateTopicDefinitions<Topics>;
   readonly defineRuntimeOptions: <const Options extends RuntimeOptionsCandidate>(
     options: ExactRuntimeOptions<Topics, Options>,
   ) => RuntimeOptionsDefinition<Topics, Options>;
   readonly kafkaTopic: KafkaTopicHelper<Topics>;
+  readonly grpcFeed: <const Clients extends GrpcRuntimeClients>() => GrpcFeedHelper<
+    Topics,
+    Clients
+  >;
 };
 
-type ValidateTopicDefinitions<Topics extends ViewServerConfigTopicShape> = {
+type ValidateTopicDefinitions<Topics extends TopicDefinitions> = {
   readonly [Topic in keyof Topics]: Topic extends ViewServerSystemTopicName
     ? never
     : Topics[Topic] extends {
           readonly schema: infer S extends RowSchema;
           readonly key: infer Key extends string;
         }
-      ? TopicDefinition<S, Key & StringFieldKey<RowFromSchema<S>>>
+      ? Topics[Topic] extends { readonly source: infer Source }
+        ? TopicDefinition<
+            S,
+            Key & StringFieldKey<RowFromSchema<S>>,
+            ValidateTopicSource<RowFromSchema<S>, Source>
+          >
+        : TopicDefinition<S, Key & StringFieldKey<RowFromSchema<S>>>
       : never;
 };
+
+type ValidateGrpcLeasedRouteBy<Row, Source> =
+  Source extends GrpcLeasedTopicSource<infer RouteBy>
+    ? GrpcLeasedTopicSource<{
+        readonly [Index in keyof RouteBy]: RouteBy[Index] extends FieldKey<Row>
+          ? RouteBy[Index]
+          : never;
+      }>
+    : Source;
+
+type ValidateTopicSource<Row, Source> = Source extends GrpcTopicSource
+  ? ValidateGrpcLeasedRouteBy<Row, Source>
+  : Source extends undefined
+    ? undefined
+    : never;
 
 export type DefineViewServerConfigInput<Topics extends ViewServerConfigTopicShape> = {
   readonly topics: Topics & ValidateTopicDefinitions<Topics>;
@@ -179,6 +248,7 @@ export const defineViewServerConfig = <
     {
       readonly schema: RowSchema;
       readonly key: string;
+      readonly source?: TopicSourceDefinition;
     }
   >,
 >(
@@ -207,5 +277,6 @@ export const defineViewServerConfig = <
     topics: input.topics,
     defineRuntimeOptions: (options) => options,
     kafkaTopic: defineKafkaTopic<Topics>(input.topics),
+    grpcFeed: <const Clients extends GrpcRuntimeClients>() => defineGrpcFeed<Topics, Clients>(),
   };
 };

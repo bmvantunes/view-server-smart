@@ -1,8 +1,6 @@
 import { BrowserSocket } from "@effect/platform-browser";
 import type {
-  ExactGroupedQuery,
-  ExactLiveQuery,
-  ExactRawQuery,
+  ExactLiveQueryInputForTopic,
   GroupedQuery,
   GroupedResult,
   LiveQueryRow,
@@ -10,7 +8,6 @@ import type {
   RawQuery,
   TopicDefinitions,
   TopicRow,
-  ValidateLiveQuery,
   ViewServerConfig,
   ViewServerHealthSummaryRow,
   ViewServerHealthTopicRow,
@@ -229,9 +226,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     const Query extends GroupedQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactGroupedQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): Effect.Effect<
     ViewServerLiveSubscription<GroupedResult<TopicRow<Topics, Topic>, Query>>,
     ViewServerRemoteClientError
@@ -241,9 +236,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     const Query extends RawQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactRawQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): Effect.Effect<
     ViewServerLiveSubscription<PickRawFields<TopicRow<Topics, Topic>, Query>>,
     ViewServerRemoteClientError
@@ -253,9 +246,7 @@ export const makeViewServerClient: <const Topics extends TopicDefinitions>(
     const Query extends RawQuery<TopicRow<Topics, Topic>> | GroupedQuery<TopicRow<Topics, Topic>>,
   >(
     topic: Topic,
-    query: Query &
-      ExactLiveQuery<TopicRow<Topics, Topic>, NoInfer<Query>> &
-      ValidateLiveQuery<NoInfer<Query>>,
+    query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
   ): Effect.Effect<
     ViewServerLiveSubscription<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
     ViewServerRemoteClientError
