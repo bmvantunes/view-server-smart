@@ -14,6 +14,7 @@ import type { RawQuery } from "@view-server/config/query";
 import type { RuntimeEnvironmentConfig } from "@view-server/config/runtime";
 import { createInMemoryViewServer } from "@view-server/in-memory";
 import * as inMemoryPackage from "@view-server/in-memory";
+import * as inMemoryTestingPackage from "@view-server/in-memory/testing";
 import * as protocolPackage from "@view-server/protocol";
 import type { ViewServerWireEvent } from "@view-server/protocol";
 import { createViewServerReact } from "@view-server/react";
@@ -21,6 +22,7 @@ import { createInMemoryViewServerReact } from "@view-server/react/testing";
 import { createViewServerRuntime } from "@view-server/runtime";
 import type { ViewServerRuntime } from "@view-server/runtime";
 import { createViewServerRuntimeCore } from "@view-server/runtime-core";
+import * as runtimeCoreInternalPackage from "@view-server/runtime-core/internal";
 import * as runtimeCorePackage from "@view-server/runtime-core";
 import { createViewServerWebSocketServer } from "@view-server/server";
 import type { ViewServerHealthHttpJson, ViewServerWebSocketServer } from "@view-server/server";
@@ -99,11 +101,13 @@ const approvedPackageExports = [
   "@view-server/config/runtime",
   "@view-server/effect-utils",
   "@view-server/in-memory",
+  "@view-server/in-memory/testing",
   "@view-server/protocol",
   "@view-server/react",
   "@view-server/react/testing",
   "@view-server/runtime",
   "@view-server/runtime-core",
+  "@view-server/runtime-core/internal",
   "@view-server/server",
 ].sort();
 
@@ -186,9 +190,9 @@ const forbiddenDeepImportSuffixes = [
   "src/internal",
 ];
 
-const forbiddenPackageSubpathDeepImports = publicPackageExports.flatMap((specifier) =>
-  forbiddenDeepImportSuffixes.map((suffix) => `${specifier}/${suffix}`),
-);
+const forbiddenPackageSubpathDeepImports = publicPackageExports
+  .flatMap((specifier) => forbiddenDeepImportSuffixes.map((suffix) => `${specifier}/${suffix}`))
+  .filter((specifier) => !approvedExportSet.has(specifier));
 
 const forbiddenPackageDeepImports = [
   ...forbiddenPackageSubpathDeepImports,
@@ -290,11 +294,36 @@ requireExport("@view-server/column-live-view-engine", enginePackage, "createColu
 requireExport("@view-server/column-live-view-engine", enginePackage, "InvalidTopicError");
 requireExport("@view-server/in-memory", inMemoryPackage, "createInMemoryViewServer");
 requireExport("@view-server/in-memory", inMemoryPackage, "makeInMemoryViewServer");
+requireExport(
+  "@view-server/in-memory/testing",
+  inMemoryTestingPackage,
+  "createInMemoryViewServerTesting",
+);
+requireExport(
+  "@view-server/in-memory/testing",
+  inMemoryTestingPackage,
+  "makeInMemoryViewServerTesting",
+);
+rejectExport("@view-server/in-memory", inMemoryPackage, "createInMemoryViewServerTesting");
+rejectExport("@view-server/in-memory", inMemoryPackage, "makeInMemoryViewServerTesting");
 rejectExport("@view-server/in-memory", inMemoryPackage, "readHealth");
 rejectExport("@view-server/in-memory", inMemoryPackage, "refreshHealth");
 rejectExport("@view-server/in-memory", inMemoryPackage, "makeHealthRefreshScheduler");
 requireExport("@view-server/runtime-core", runtimeCorePackage, "createViewServerRuntimeCore");
 requireExport("@view-server/runtime-core", runtimeCorePackage, "makeViewServerRuntimeCore");
+requireExport(
+  "@view-server/runtime-core/internal",
+  runtimeCoreInternalPackage,
+  "makeViewServerRuntimeCoreInternal",
+);
+rejectExport("@view-server/runtime-core", runtimeCorePackage, "makeViewServerRuntimeCoreInternal");
+rejectExport(
+  "@view-server/runtime-core",
+  runtimeCorePackage,
+  "getViewServerRuntimeCoreInternalLiveClient",
+);
+rejectExport("@view-server/runtime-core", runtimeCorePackage, "ViewServerRuntimeCoreInternalInstance");
+rejectExport("@view-server/runtime-core", runtimeCorePackage, "ViewServerRuntimeCoreInternalLiveClient");
 rejectExport("@view-server/runtime-core", runtimeCorePackage, "readHealth");
 rejectExport("@view-server/runtime-core", runtimeCorePackage, "refreshHealth");
 rejectExport("@view-server/runtime-core", runtimeCorePackage, "makeHealthRefreshScheduler");

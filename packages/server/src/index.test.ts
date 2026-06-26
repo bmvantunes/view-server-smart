@@ -5,6 +5,8 @@ import { makeViewServerClient } from "@view-server/client/remote";
 import {
   defineViewServerConfig,
   VIEW_SERVER_HEALTH_TOPIC,
+  type TopicDefinitions,
+  type ViewServerConfig,
   type ViewServerHealth,
   type ViewServerRuntimeError,
   type ViewServerTransportError,
@@ -14,7 +16,7 @@ import {
   ViewServerRpcErrorSchema,
   ViewServerRpcs,
 } from "@view-server/protocol";
-import { createViewServerRuntimeCore } from "@view-server/runtime-core";
+import { makeViewServerRuntimeCoreInternal } from "@view-server/runtime-core/internal";
 import {
   Context,
   Cause,
@@ -136,7 +138,10 @@ const edgeViewServer = defineViewServerConfig({
   },
 });
 
-const createServerTestRuntime = createViewServerRuntimeCore;
+const createServerTestRuntime = <const Topics extends TopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  options: Parameters<typeof makeViewServerRuntimeCoreInternal<Topics>>[1] = {},
+) => Effect.runSync(makeViewServerRuntimeCoreInternal(config, options));
 
 const kafkaStartFromHealth = {
   consumerGroupId: "view-server-test",

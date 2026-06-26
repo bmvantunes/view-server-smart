@@ -18,6 +18,7 @@ Non-goals:
 - do not expose leased feed instances as public topics
 - do not let one user query merge multiple upstream gRPC streams
 - do not make gRPC a second query engine or second storage API
+- do not let one-shot snapshot/read APIs bypass leased-feed lifecycle or feed partitioning
 
 ## Compatibility With The Column Live View Engine Plan
 
@@ -41,6 +42,15 @@ Validation result:
 - Compatible with the React/provider model because `useLiveQuery` does not learn about gRPC. The server resolves leased feeds behind the same Live Query contract.
 - Compatible with the health cadence rule because gRPC health is a ledger/cached snapshot, not a full per-message health rebuild.
 - Compatible with the transport policy because browser live data continues over Effect RPC WebSocket with NDJSON. gRPC is ingress only.
+- Compatible with the one-engine rule because leased-feed row isolation is an internal partitioning concern before a query reaches the existing engine. The engine still executes the same query semantics; the runtime only narrows the retained row universe to the single resolved feed instance.
+
+Important boundaries carried forward from the v2 plan:
+
+- Browser code must not import runtime/gRPC config. The only browser-facing API is still the typed React provider/hooks.
+- In-memory testing must continue to use the same runtime-core and engine. gRPC leased/materialized feeds are server runtime Adapters, not a special test engine.
+- Production browser live traffic stays on Effect RPC WebSocket + NDJSON until a separate transport decision changes that. gRPC is not a browser transport.
+- Runtime health must remain cached/coalesced. gRPC message ingestion may update cheap counters, but it must not rebuild full health per upstream event.
+- Topic ownership must stay explicit. One public View Server topic cannot be silently populated by Kafka and gRPC, or by multiple gRPC feed definitions, unless a future multi-source contract defines ordering, dedupe, health, and restart semantics.
 
 ## Core Vocabulary
 
@@ -127,9 +137,8 @@ grpcFeed.materializedFeed({
 
 A leased feed is on-demand and route-keyed.
 
-The first runtime slice keeps the type contract and rejects leased feeds at startup until the lease
-manager exists. Do not silently accept leased feeds and leave them in health as permanently
-starting.
+The runtime lease manager owns leased feed lifecycle. Materialized startup must ignore leased feeds;
+it must not connect them early and must not leave them in health as permanently starting.
 
 Behavior:
 
@@ -161,11 +170,9 @@ grpcFeed.leasedFeed({
     region,
   }),
 
-  acquire: ({ client, request, session }) =>
+  acquire: ({ client, request }) =>
     Stream.fromAsyncIterable(
-      client.streamOrders(request, {
-        headers: session.forwardedHeaders,
-      }),
+      client.streamOrders(request),
       (cause) => new GrpcUpstreamError({ cause }),
     ),
 
@@ -257,6 +264,15 @@ must not attempt to satisfy a broader query by opening every possible route or b
 The route contract is not derived from all possible filters in the UI. It is declared by the feed author from the upstream API contract. This avoids the
 factorial/permutation problem where ten possible UI filters would imply many fake source topics or access paths.
 
+Leased feed row isolation must not rely on upstream rows telling the truth about route fields. The runtime must isolate rows by the resolved internal
+feed partition before executing the user's local query. For example, if a broken upstream stream for `region = london` emits a row whose `region` field
+is `usa`, that row must not appear in the `region = usa` feed. Public row keys and result rows must be externalized so users never observe internal feed
+partition keys.
+
+One-shot snapshots for leased topics are dangerous if they bypass lease acquisition. A runtime may either implement a scoped snapshot that acquires the
+lease, waits for the configured readiness condition, runs the partitioned snapshot, and releases it, or reject one-shot snapshots for leased topics. The
+current slice should reject one-shot snapshots for leased topics and require live subscriptions, because subscriptions naturally own the lease lifetime.
+
 Example:
 
 ```txt
@@ -336,11 +352,9 @@ export const runtime = viewServer.createRuntime({
           region,
         }),
 
-        acquire: ({ client, request, session }) =>
+        acquire: ({ client, request }) =>
           Stream.fromAsyncIterable(
-            client.streamOrders(request, {
-              headers: session.forwardedHeaders,
-            }),
+            client.streamOrders(request),
             (cause) => new GrpcUpstreamError({ cause }),
           ),
 
@@ -416,6 +430,76 @@ Do not block the first gRPC implementation on that larger public API migration.
 The important invariant is ownership, not the exact config nesting. The current config can keep `grpc.clients` and `grpc.feeds`, but validation must make
 it impossible for two ingress sources to publish independently into the same View Server topic. That includes accidental combinations such as Kafka +
 gRPC, materialized gRPC + leased gRPC, or two leased definitions for the same topic.
+
+## Current Config Model
+
+The first implementation keeps a small topic source marker on the public View Server topic:
+
+```ts
+const viewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["strategyId", "region"],
+      }),
+    },
+
+    strategies: {
+      schema: Strategy,
+      key: "id",
+      source: grpc.materialized(),
+    },
+  },
+});
+```
+
+Runtime feed definitions then reference those topics:
+
+```ts
+const grpcFeed = viewServer.grpcFeed<typeof grpcClients>();
+
+viewServer.createRuntime({
+  grpc: {
+    clients: grpcClients,
+    feeds: {
+      ordersByStrategyRegion: grpcFeed.leasedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        routeBy: ["strategyId", "region"],
+        request: ({ strategyId, region }) => ({ strategyId, region }),
+        acquire: ({ client, request }) =>
+          Stream.fromAsyncIterable(client.streamOrders(request), GrpcUpstreamError.fromUnknown),
+        map: ({ value, route }) => ({
+          id: value.orderId,
+          strategyId: route.strategyId,
+          region: route.region,
+          instrumentId: value.instrumentId,
+          status: value.status,
+          price: value.price,
+          updatedAt: value.updatedAt,
+        }),
+      }),
+    },
+  },
+});
+```
+
+This is intentionally not the final "one source constructor per topic" API. It is the smallest compatible step that gives TypeScript enough information
+to reject invalid `useLiveQuery` route predicates while preserving the existing runtime shape.
+
+Validation rules:
+
+- A topic marked `source: grpc.leased(...)` must have exactly one leased feed definition targeting it.
+- A topic marked `source: grpc.materialized()` must have exactly one materialized feed definition targeting it.
+- Kafka topics must not target gRPC-owned View Server topics.
+- Plain/no-source topics remain writable by in-memory/TCP-style public publish clients.
+- Public in-memory/runtime clients must reject direct publish/snapshot/subscribe/reset operations that would bypass leased-feed ownership.
+
+Do not let users manually return `feedKey` from `acquire`. The runtime derives `feedKey` from topic, feed name, `routeBy`, and canonical route values.
+That keeps feed identity stable, auditable, and independent from user callback bugs.
 
 ## Feed Key
 
@@ -548,7 +632,14 @@ Use cases:
 - apply per-user auth for leased feeds
 - support future session-owned feeds that must not be shared across users
 
-Initial sharing modes:
+Current slice:
+
+- leased feeds are shared, system-scoped, and route-keyed
+- `session.id` is `null`
+- `session.forwardedHeaders` and `session.systemHeaders` are empty
+- user/session-scoped auth forwarding is deferred until the server can pass an authenticated session into the lease manager
+
+Future sharing modes:
 
 - `shared`: route-keyed feed shared across all sessions
 - `session`: route-keyed feed scoped to one session/user
@@ -607,7 +698,7 @@ Current materialized runtime/e2e tests:
 
 - materialized feed starts on runtime startup with zero subscribers
 - materialized feed serves snapshot to first subscriber without opening a new upstream stream
-- materialized feed startup rejects leased feed definitions explicitly until the lease manager exists
+- materialized feed startup ignores leased feed definitions because the lease manager owns them
 - materialized feed startup rejects duplicate topic ownership across Kafka and gRPC
 - materialized feed startup rejects multiple gRPC owners for one View Server topic
 - stream completion marks feed/client degraded and releases resources
@@ -616,7 +707,7 @@ Current materialized runtime/e2e tests:
 - health reports materialized feed keys, row counts, rates, and failures
 - materialized benchmark exercises the production ingress path into runtime-core and the engine
 
-Future leased manager runtime/e2e tests:
+Current leased manager runtime/e2e tests:
 
 - leased feed does not open before first subscriber
 - first leased subscriber opens one upstream stream
@@ -624,12 +715,16 @@ Future leased manager runtime/e2e tests:
 - subscriber with different route opens a second upstream stream
 - extra local filters produce different views over the same leased feed
 - last subscriber for a feed closes upstream and drops feed rows
-- session-scoped feed does not share across users
 - invalid leased query returns `InvalidQueryError`
 - health reports leased feed keys, subscriber counts, row counts, and failures
 - runtime shutdown releases all leased gRPC streams
 
-Tests should use a fake/in-process generated-compatible gRPC stream where possible first, then add a real ConnectRPC integration test if the tooling cost is acceptable.
+Future leased tests:
+
+- session-scoped feed does not share across users once session-scoped leases exist
+- real ConnectRPC integration coverage if the tooling cost is acceptable
+
+Tests should use a fake/in-process generated-compatible gRPC stream first so lifecycle, routing, and retained-row cleanup stay deterministic.
 
 ## Benchmarks And Gates
 
@@ -659,19 +754,35 @@ Stream -> groupedWithin -> map -> runtime-core publishMany -> snapshot/readback 
 
 It records stream convergence, filtered/sorted snapshot latency, health overlay
 latency, rows/sec, final health, and memory deltas. Keep it as the materialized
-baseline while leased-feed benchmarks are still deferred.
+baseline.
 
-Future leased benchmark profiles:
+Current leased-feed benchmark command:
+
+```sh
+pnpm --filter @view-server/runtime run bench:grpc-leased
+```
+
+This benchmark uses the production lease manager with Queue-backed in-process streams:
+
+```txt
+first matching subscription -> route validation -> lease acquire/reuse -> stream rows -> runtime-core publishMany -> snapshot/readback -> health overlay -> subscription close cleanup
+```
+
+Current leased benchmark profiles:
 
 - leased first-subscriber acquisition latency
 - leased same-route reuse latency
-- leased last-subscriber cleanup latency
-- leased local-filter snapshot latency over 50k rows
-- leased delta fanout latency for multiple subscribers over one feed
+- leased local-filter live convergence over the configured rows per feed
 - many routes with one subscriber each
 - one route with many subscribers
-- write tax from feed partitioning
 - health refresh overhead with many active leased feeds
+
+Future leased benchmark profiles:
+
+- retained local-filter snapshot latency over 50k rows
+- leased last-subscriber cleanup latency as an explicit case
+- leased delta fanout latency for multiple subscribers over one feed
+- write tax from feed partitioning
 
 Add baseline automation only after repeated local runs are stable. Noisy max latency can remain report-only until stable.
 
@@ -686,13 +797,13 @@ The current materialized gRPC slice is not complete until:
 - `vp check` passes
 - focused runtime/config/protocol/client/server tests pass
 - pre-existing `pnpm run pre-grpc:gate` still passes or is intentionally extended
-- new gRPC e2e tests prove materialized behavior and explicit leased-feed rejection
+- new gRPC e2e tests prove materialized behavior and that leased feeds are ignored by materialized ingress
 - health shows materialized feed instances without rebuilding per message
 - no long-lived stream uses detached/hand-rolled lifecycle
 - no public API requires consumer `as const`
 - no casts hide topic/route/request/value/map type erasure
 
-The future leased gRPC slice is not complete until:
+The leased gRPC slice is not complete until:
 
 - `useLiveQuery` type tests reject missing/non-eq route fields for leased topics
 - decoded remote queries get the same route validation at runtime
@@ -700,10 +811,53 @@ The future leased gRPC slice is not complete until:
 - same-route subscribers share the upstream stream and retained feed state
 - different-route subscribers open different upstream streams
 - last subscriber closes the upstream stream and drops feed-owned rows
-- session-scoped feed keys do not share across users
 - health shows leased feed instances, subscriber counts, route/feed keys, row counts, and failures
 - invalid leased queries never fall back to an unfiltered upstream stream
 - all leased stream lifecycles are scoped and released on runtime shutdown
+- a Vitest benchmark covers first subscriber, same-route reuse, local-filter snapshot, many routes, and health overlay
+- leased feed row isolation is enforced by internal feed partitioning, not by trusting route fields on upstream rows
+- runtime snapshot/read APIs cannot bypass the lease manager; the current slice rejects one-shot snapshots for leased topics
+
+## Implementation Sequence
+
+Implement in slices that keep `pnpm run ready`, strict Effect LSP, package seam checks, and package tests green after each PR:
+
+1. Source contracts and type gates
+   - Add `grpc.materialized()` and `grpc.leased({ routeBy })` topic source markers.
+   - Add `grpcFeed.materializedFeed(...)` and `grpcFeed.leasedFeed(...)` runtime helpers.
+   - Add type tests for topic names, route fields, request inference, acquire value inference, mapping output exactness, and invalid leased query predicates.
+
+2. Runtime ownership validation
+   - Reject Kafka + gRPC ownership conflicts.
+   - Reject multiple gRPC owners per View Server topic.
+   - Reject lifecycle mismatch between topic source marker and runtime feed definition.
+   - Keep browser/react packages free from runtime/gRPC imports.
+
+3. Materialized feed runtime
+   - Acquire materialized streams at runtime startup.
+   - Publish mapped rows through runtime-core.
+   - Mark health degraded on stream completion/failure.
+   - Release streams on runtime shutdown.
+   - Add e2e tests and a Vitest benchmark.
+
+4. Leased feed runtime
+   - Route subscriptions by exact `eq` predicates for every `routeBy` field.
+   - Acquire one upstream stream per feed key.
+   - Reuse same-route feeds across subscribers.
+   - Isolate retained rows per internal feed partition.
+   - Release/drop feed state when the last subscriber closes.
+   - Reject one-shot snapshots/reads for leased topics in this slice.
+   - Add e2e tests and a Vitest benchmark.
+
+5. Health and lifecycle hardening
+   - Expose gRPC client/feed health separately from engine topic health.
+   - Keep health cached/coalesced.
+   - Handle stream defects with degraded health and deterministic cleanup.
+   - Avoid detached fibers for stream ownership.
+
+6. Review and benchmark gate
+   - Run focused package tests, `pnpm run ready`, strict Effect LSP, package seam checks, forbidden-pattern scans, and gRPC benchmarks.
+   - Only add CI regression thresholds after repeated benchmark runs are stable.
 
 ## Deferred Decisions
 

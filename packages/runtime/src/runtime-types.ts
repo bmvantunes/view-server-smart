@@ -2,8 +2,16 @@ import type { ViewServerLiveClient } from "@view-server/client";
 import type { GroupedIncrementalAdmissionLimits } from "@view-server/runtime-core";
 import type {
   KafkaRuntimeTopicDefinition,
+  LiveQueryRow,
+  LiveQueryResult,
+  RawQuery,
+  GroupedQuery,
+  ExactLiveQueryInputForTopic,
+  ExactPatch,
   RuntimeRegions,
   RowSchema,
+  TopicRouteBy,
+  TopicRow,
   TopicDefinitions,
   ViewServerHealth,
   ViewServerKafkaStartFrom,
@@ -188,10 +196,67 @@ export type ViewServerRuntimeOptionsInput<
   RuntimeGrpcFeedConstraint<Topics, Options> &
   RuntimeGroupedIncrementalAdmissionLimitsExactKeysConstraint<Options>;
 
+type RuntimePublicMutationTopic<Topics extends object> = Extract<
+  {
+    readonly [Topic in keyof Topics]: [TopicRouteBy<Topics, Topic>] extends [never] ? Topic : never;
+  }[keyof Topics],
+  string
+>;
+
+type RuntimeLeasedTopic<Topics extends object> = Extract<
+  {
+    readonly [Topic in keyof Topics]: [TopicRouteBy<Topics, Topic>] extends [never] ? never : Topic;
+  }[keyof Topics],
+  string
+>;
+
+type RuntimePublicReset<Topics extends object> = [RuntimeLeasedTopic<Topics>] extends [never]
+  ? {
+      readonly reset: ViewServerRuntimeClient<Topics>["reset"];
+    }
+  : {
+      readonly reset: (...args: never) => ReturnType<ViewServerRuntimeClient<Topics>["reset"]>;
+    };
+
+type RuntimePublicSnapshot<Topics extends object> = <
+  Topic extends RuntimePublicMutationTopic<Topics>,
+  const Query extends RawQuery<TopicRow<Topics, Topic>> | GroupedQuery<TopicRow<Topics, Topic>>,
+>(
+  topic: Topic,
+  query: ExactLiveQueryInputForTopic<Topics, Topic, Query>,
+) => Effect.Effect<
+  LiveQueryResult<LiveQueryRow<TopicRow<Topics, Topic>, Query>>,
+  ViewServerRuntimeError
+>;
+
+type ViewServerPublicRuntimeClient<Topics extends object> = Omit<
+  ViewServerRuntimeClient<Topics>,
+  "delete" | "patch" | "publish" | "publishMany" | "reset" | "snapshot"
+> & {
+  readonly publish: <Topic extends RuntimePublicMutationTopic<Topics>>(
+    topic: Topic,
+    row: TopicRow<Topics, Topic>,
+  ) => Effect.Effect<void, ViewServerRuntimeError>;
+  readonly publishMany: <Topic extends RuntimePublicMutationTopic<Topics>>(
+    topic: Topic,
+    rows: ReadonlyArray<TopicRow<Topics, Topic>>,
+  ) => Effect.Effect<void, ViewServerRuntimeError>;
+  readonly patch: <Topic extends RuntimePublicMutationTopic<Topics>, const Patch>(
+    topic: Topic,
+    key: string,
+    patch: Patch & Partial<TopicRow<Topics, Topic>> & ExactPatch<TopicRow<Topics, Topic>, Patch>,
+  ) => Effect.Effect<void, ViewServerRuntimeError>;
+  readonly delete: <Topic extends RuntimePublicMutationTopic<Topics>>(
+    topic: Topic,
+    key: string,
+  ) => Effect.Effect<void, ViewServerRuntimeError>;
+  readonly snapshot: RuntimePublicSnapshot<Topics>;
+} & RuntimePublicReset<Topics>;
+
 export type ViewServerRuntime<Topics extends ViewServerRuntimeTopicDefinitions> = {
   readonly url: string;
   readonly healthUrl: string;
-  readonly client: ViewServerRuntimeClient<Topics>;
+  readonly client: ViewServerPublicRuntimeClient<Topics>;
   readonly liveClient: ViewServerLiveClient<Topics>;
   readonly health: () => Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
   readonly close: Effect.Effect<void>;

@@ -14,7 +14,7 @@ export const setup = async (project: Project) => {
   }
 
   const { defineViewServerConfig } = await import("@view-server/config");
-  const { createViewServerRuntimeCore } = await import("@view-server/runtime-core");
+  const { createInMemoryViewServerTesting } = await import("@view-server/in-memory/testing");
   const { makeViewServerWebSocketServer } = await import("@view-server/server");
   const { Effect, Schema } = await import("effect");
 
@@ -48,7 +48,7 @@ export const setup = async (project: Project) => {
     },
   });
 
-  const runtimeCore = createViewServerRuntimeCore(viewServer);
+  const runtimeCore = createInMemoryViewServerTesting(viewServer);
   const server = await Effect.runPromise(
     makeViewServerWebSocketServer(viewServer, {
       liveClient: runtimeCore.liveClient,

@@ -25,10 +25,16 @@ import {
   type RuntimeCoreTransportHealth,
 } from "./health";
 import type * as Duration from "effect/Duration";
-import { engineErrorToRuntimeError, invalidRuntimeQueryError } from "./runtime-error";
+import {
+  engineErrorToRuntimeError,
+  invalidRuntimeQueryError,
+  leasedRuntimeAccessError,
+} from "./runtime-error";
+import { grpcLeasedSourceTopics } from "./topic-source";
 
 export type RuntimeCoreClientInstance<Topics extends DecodableTopicDefinitions> = {
   readonly client: ViewServerRuntimeClient<Topics>;
+  readonly internalClient: ViewServerRuntimeClient<Topics>;
   readonly close: Effect.Effect<void>;
   readonly requestHealthRefresh: Effect.Effect<void>;
   readonly refreshHealth: Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
@@ -44,6 +50,7 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
     healthRefreshCadence?: Duration.Input,
   ): Effect.Effect<RuntimeCoreClientInstance<Topics>> =>
     Effect.gen(function* () {
+      const leasedTopics = grpcLeasedSourceTopics(config);
       let healthReadEpoch = 0;
       let healthInstallEpoch = 0;
       const bumpHealthReadEpoch = Effect.sync(() => {
@@ -116,31 +123,66 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
             .snapshot<Topic, Query>(topic, query)
             .pipe(Effect.mapError(engineErrorToRuntimeError));
         });
+      const internalClient: ViewServerRuntimeClient<Topics> = {
+        publish: (topic, row) =>
+          Effect.uninterruptible(
+            engine.publish(topic, row).pipe(Effect.tap(() => requestHealthRefresh())),
+          ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+        publishMany: (topic, rows) =>
+          Effect.uninterruptible(
+            engine.publishMany(topic, rows).pipe(Effect.tap(() => requestHealthRefresh())),
+          ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+        patch: (topic, key, patch) =>
+          Effect.uninterruptible(
+            engine.patch(topic, key, patch).pipe(Effect.tap(() => requestHealthRefresh())),
+          ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+        delete: (topic, key) =>
+          Effect.uninterruptible(
+            engine.delete(topic, key).pipe(Effect.tap(() => requestHealthRefresh())),
+          ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+        snapshot,
+        health: () => healthReader(),
+        reset: () =>
+          Effect.uninterruptible(
+            engine.reset().pipe(Effect.tap(() => requestHealthRefresh())),
+          ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+      };
+      const rejectLeasedMutation = (topic: string): Effect.Effect<never, ViewServerRuntimeError> =>
+        Effect.fail(leasedRuntimeAccessError(topic));
       return {
         client: {
           publish: (topic, row) =>
-            Effect.uninterruptible(
-              engine.publish(topic, row).pipe(Effect.tap(() => requestHealthRefresh())),
-            ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+            leasedTopics.has(topic)
+              ? rejectLeasedMutation(topic)
+              : internalClient.publish(topic, row),
           publishMany: (topic, rows) =>
-            Effect.uninterruptible(
-              engine.publishMany(topic, rows).pipe(Effect.tap(() => requestHealthRefresh())),
-            ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+            leasedTopics.has(topic)
+              ? rejectLeasedMutation(topic)
+              : internalClient.publishMany(topic, rows),
           patch: (topic, key, patch) =>
-            Effect.uninterruptible(
-              engine.patch(topic, key, patch).pipe(Effect.tap(() => requestHealthRefresh())),
-            ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+            leasedTopics.has(topic)
+              ? rejectLeasedMutation(topic)
+              : internalClient.patch(topic, key, patch),
           delete: (topic, key) =>
-            Effect.uninterruptible(
-              engine.delete(topic, key).pipe(Effect.tap(() => requestHealthRefresh())),
-            ).pipe(Effect.mapError(engineErrorToRuntimeError)),
-          snapshot,
-          health: () => healthReader(),
+            leasedTopics.has(topic)
+              ? rejectLeasedMutation(topic)
+              : internalClient.delete(topic, key),
+          snapshot: (topic, query) =>
+            leasedTopics.has(topic)
+              ? Effect.fail(leasedRuntimeAccessError(topic))
+              : internalClient.snapshot(topic, query),
+          health: internalClient.health,
           reset: () =>
-            Effect.uninterruptible(
-              engine.reset().pipe(Effect.tap(() => requestHealthRefresh())),
-            ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+            leasedTopics.size === 0
+              ? internalClient.reset()
+              : Effect.fail({
+                  _tag: "ViewServerRuntimeError",
+                  code: "UnsupportedQuery",
+                  message:
+                    "Leased gRPC topics do not support direct runtime reset; close the runtime or leased subscriptions so the lease manager owns cleanup.",
+                }),
         },
+        internalClient,
         close: healthRefreshScheduler.close,
         requestHealthRefresh: requestHealthRefresh(),
         refreshHealth: refreshHealthNow(),

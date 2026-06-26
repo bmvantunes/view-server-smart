@@ -5,6 +5,7 @@ import type {
   KafkaStartFromHealth,
   RuntimeRegions,
   RuntimeValue,
+  ViewServerConfig,
   ViewServerKafkaStartFrom,
 } from "@view-server/config";
 import { Config, Effect } from "effect";
@@ -140,14 +141,6 @@ const resolveGrpcOptions: <
   }
   const feedTopics = new Map<string, string>();
   for (const [feedName, feed] of Object.entries(options.feeds)) {
-    if (feed.lifecycle === "leased") {
-      return yield* new ViewServerGrpcIngressError({
-        message: `gRPC leased feed ${feedName} is not supported by runtime startup yet.`,
-        cause: feed.lifecycle,
-        feedName,
-        topic: feed.topic,
-      });
-    }
     const previousFeedName = feedTopics.get(feed.topic);
     if (previousFeedName !== undefined) {
       return yield* new ViewServerGrpcIngressError({
@@ -198,6 +191,121 @@ export const validateSourceOwnership: (
         cause: kafkaTopic.viewServerTopic,
         feedName: grpcFeedName,
         topic: kafkaTopic.viewServerTopic,
+      });
+    }
+  }
+});
+
+const grpcTopicSourceLifecycle = (
+  topicDefinition: unknown,
+): "leased" | "materialized" | undefined => {
+  if (typeof topicDefinition !== "object" || topicDefinition === null) {
+    return undefined;
+  }
+  const source = Reflect.get(topicDefinition, "source");
+  if (typeof source !== "object" || source === null) {
+    return undefined;
+  }
+  if (Reflect.get(source, "kind") !== "grpc") {
+    return undefined;
+  }
+  const lifecycle = Reflect.get(source, "lifecycle");
+  return lifecycle === "leased" || lifecycle === "materialized" ? lifecycle : undefined;
+};
+
+const grpcTopicLeasedRouteBy = (topicDefinition: unknown): ReadonlyArray<string> | undefined => {
+  const source = Reflect.get(Object(topicDefinition), "source");
+  const routeBy = Reflect.get(Object(source), "routeBy");
+  return Array.isArray(routeBy) && routeBy.every((field) => typeof field === "string")
+    ? routeBy
+    : undefined;
+};
+
+const grpcFeedLeasedRouteBy = (feed: unknown): ReadonlyArray<string> | undefined => {
+  const routeBy = Reflect.get(Object(feed), "routeBy");
+  return Array.isArray(routeBy) && routeBy.every((field) => typeof field === "string")
+    ? routeBy
+    : undefined;
+};
+
+const sameRouteBy = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
+  left.length === right.length && left.every((field, index) => field === right[index]);
+
+export const validateGrpcSourceFeeds: <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Clients extends GrpcRuntimeClients,
+>(
+  config: ViewServerConfig<Topics>,
+  grpcOptions: ResolvedViewServerGrpcRuntimeOptions<Topics, Clients> | undefined,
+) => Effect.Effect<void, ViewServerGrpcIngressError> = Effect.fn(
+  "ViewServerRuntime.options.grpcSourceFeeds.validate",
+)(function* <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Clients extends GrpcRuntimeClients,
+>(
+  config: ViewServerConfig<Topics>,
+  grpcOptions: ResolvedViewServerGrpcRuntimeOptions<Topics, Clients> | undefined,
+) {
+  const feedEntries = Object.entries(grpcOptions?.feeds ?? {});
+  for (const [topic, topicDefinition] of Object.entries(config.topics)) {
+    const lifecycle = grpcTopicSourceLifecycle(topicDefinition);
+    if (lifecycle === undefined) {
+      continue;
+    }
+    const matchingFeeds = feedEntries.filter(([_feedName, feed]) => feed.topic === topic);
+    if (matchingFeeds.length === 0) {
+      return yield* new ViewServerGrpcIngressError({
+        message: `View Server topic ${topic} declares gRPC ${lifecycle} source but no matching gRPC feed was configured.`,
+        cause: topic,
+        feedName: topic,
+        topic,
+      });
+    }
+    const mismatchedFeed = matchingFeeds.find(([_feedName, feed]) => feed.lifecycle !== lifecycle);
+    if (mismatchedFeed !== undefined) {
+      const [feedName, feed] = mismatchedFeed;
+      return yield* new ViewServerGrpcIngressError({
+        message: `gRPC feed ${feedName} lifecycle ${feed.lifecycle} does not match View Server topic ${topic} source lifecycle ${lifecycle}.`,
+        cause: feed.lifecycle,
+        feedName,
+        topic,
+      });
+    }
+    if (lifecycle === "leased") {
+      const sourceRouteBy = grpcTopicLeasedRouteBy(topicDefinition);
+      const routeMismatch = matchingFeeds.find(([_feedName, feed]) => {
+        const feedRouteBy = grpcFeedLeasedRouteBy(feed);
+        return feedRouteBy === undefined || !sameRouteBy(sourceRouteBy ?? [], feedRouteBy);
+      });
+      if (routeMismatch !== undefined) {
+        const [feedName, feed] = routeMismatch;
+        const feedRouteBy = grpcFeedLeasedRouteBy(feed) ?? [];
+        return yield* new ViewServerGrpcIngressError({
+          message: `gRPC leased feed ${feedName} routeBy ${feedRouteBy.join(", ")} does not match View Server topic ${topic} source routeBy ${(sourceRouteBy ?? []).join(", ")}.`,
+          cause: feedRouteBy,
+          feedName,
+          topic,
+        });
+      }
+    }
+  }
+  for (const [feedName, feed] of feedEntries) {
+    const topicDefinition = config.topics[feed.topic];
+    if (topicDefinition === undefined) {
+      return yield* new ViewServerGrpcIngressError({
+        message: `gRPC feed ${feedName} references unknown View Server topic ${feed.topic}.`,
+        cause: feed.topic,
+        feedName,
+        topic: feed.topic,
+      });
+    }
+    const lifecycle = grpcTopicSourceLifecycle(topicDefinition);
+    if (lifecycle === undefined) {
+      return yield* new ViewServerGrpcIngressError({
+        message: `gRPC feed ${feedName} targets View Server topic ${feed.topic}, but that topic does not declare a gRPC source.`,
+        cause: feed.topic,
+        feedName,
+        topic: feed.topic,
       });
     }
   }

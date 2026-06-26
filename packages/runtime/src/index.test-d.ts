@@ -105,6 +105,7 @@ describe("runtime type contracts", () => {
     expectTypeOf<Effect.Error<typeof runEffect>>().toEqualTypeOf<
       | HttpServerError.ServeError
       | Config.ConfigError
+      | ViewServerRuntimeError
       | ViewServerKafkaIngressError
       | ViewServerGrpcIngressError
     >();
@@ -122,12 +123,6 @@ describe("runtime type contracts", () => {
     const subscribe = runtime.liveClient.subscribe("orders", {
       select: ["id", "price"],
     });
-    const leasedSnapshot = leasedRuntime.client.snapshot("orders", {
-      where: {
-        id: { eq: "order-1" },
-      },
-      select: ["id", "price"],
-    });
     const leasedSubscribe = leasedRuntime.liveClient.subscribe("orders", {
       where: {
         id: { eq: "order-1" },
@@ -137,7 +132,6 @@ describe("runtime type contracts", () => {
 
     expectTypeOf<Effect.Error<typeof publish>>().toEqualTypeOf<ViewServerRuntimeError>();
     expectTypeOf(subscribe).not.toBeAny();
-    expectTypeOf(leasedSnapshot).not.toBeAny();
     expectTypeOf(leasedSubscribe).not.toBeAny();
 
     const missingRouteQuery = {
@@ -156,15 +150,40 @@ describe("runtime type contracts", () => {
       };
       readonly select: readonly ["id"];
     };
-    // @ts-expect-error leased gRPC snapshots require exact eq route filters.
+    // @ts-expect-error leased gRPC snapshots are live-subscription-only.
     const invalidLeasedSnapshot = leasedRuntime.client.snapshot("orders", missingRouteQuery);
+    // @ts-expect-error leased gRPC topics reject direct runtime publishes.
+    const invalidLeasedPublish = leasedRuntime.client.publish("orders", {
+      id: "order-1",
+      price: 10,
+    });
+    // @ts-expect-error leased gRPC topics reject direct runtime batch publishes.
+    const invalidLeasedPublishMany = leasedRuntime.client.publishMany("orders", [
+      {
+        id: "order-1",
+        price: 10,
+      },
+    ]);
+    // @ts-expect-error leased gRPC topics reject direct runtime patches.
+    const invalidLeasedPatch = leasedRuntime.client.patch("orders", "order-1", {
+      price: 10,
+    });
+    // @ts-expect-error leased gRPC topics reject direct runtime deletes.
+    const invalidLeasedDelete = leasedRuntime.client.delete("orders", "order-1");
+    // @ts-expect-error leased gRPC runtimes reject direct runtime reset.
+    const _invalidLeasedReset = leasedRuntime.client.reset();
     const invalidLeasedSubscribe = leasedRuntime.liveClient.subscribe(
       "orders",
       // @ts-expect-error leased gRPC route filters must be exact eq predicates.
       shorthandRouteQuery,
     );
     expectTypeOf(invalidLeasedSnapshot).not.toBeAny();
+    expectTypeOf(invalidLeasedPublish).not.toBeAny();
+    expectTypeOf(invalidLeasedPublishMany).not.toBeAny();
+    expectTypeOf(invalidLeasedPatch).not.toBeAny();
+    expectTypeOf(invalidLeasedDelete).not.toBeAny();
     expectTypeOf(invalidLeasedSubscribe).not.toBeAny();
+    expectTypeOf(runtime.client.reset).not.toBeAny();
 
     const invalidPublish = runtime.client.publish("orders", {
       id: "order-1",

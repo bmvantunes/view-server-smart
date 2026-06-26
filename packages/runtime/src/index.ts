@@ -1,4 +1,4 @@
-import type { ViewServerConfig } from "@view-server/config";
+import type { ViewServerConfig, ViewServerRuntimeError } from "@view-server/config";
 import { Config, Effect } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
 import type { ViewServerGrpcIngressError } from "./grpc-ingress";
@@ -27,6 +27,7 @@ export const makeViewServerRuntime: <
   ViewServerRuntime<Topics>,
   | HttpServerError.ServeError
   | Config.ConfigError
+  | ViewServerRuntimeError
   | ViewServerKafkaIngressError
   | ViewServerGrpcIngressError
 > = Effect.fn("ViewServerRuntime.make")(function* <
@@ -54,6 +55,7 @@ export const runViewServerRuntime: <
   never,
   | HttpServerError.ServeError
   | Config.ConfigError
+  | ViewServerRuntimeError
   | ViewServerKafkaIngressError
   | ViewServerGrpcIngressError
 > = Effect.fn("ViewServerRuntime.run")(function* <

@@ -411,7 +411,9 @@ export const makeViewServerGrpcIngress: <
   makeClient: ViewServerGrpcClientFactory = makeDefaultGrpcClient,
 ) {
   const scope = yield* Scope.make("parallel");
-  const feedNames = Object.keys(options.feeds);
+  const feedNames = Object.entries(options.feeds)
+    .filter(([, feed]) => feed.lifecycle === "materialized")
+    .map(([feedName]) => feedName);
   return yield* Effect.gen(function* () {
     for (const [feedName, feed] of Object.entries(options.feeds)) {
       if (feed.lifecycle === "materialized") {
@@ -426,13 +428,6 @@ export const makeViewServerGrpcIngress: <
           feedName,
           feed,
         );
-      } else {
-        return yield* grpcIngressError({
-          message: `gRPC leased feed ${feedName} is not supported by materialized ingress startup`,
-          cause: feed.lifecycle,
-          feedName,
-          topic: feed.topic,
-        });
       }
     }
     return {

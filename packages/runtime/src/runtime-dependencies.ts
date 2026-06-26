@@ -3,12 +3,13 @@ import type {
   RuntimeRegions,
   ViewServerConfig,
   ViewServerRuntimeClient,
+  ViewServerRuntimeError,
 } from "@view-server/config";
+import { type ViewServerRuntimeCoreOptionsFor } from "@view-server/runtime-core";
 import {
-  makeViewServerRuntimeCore,
-  type ViewServerRuntimeCoreInstance,
-  type ViewServerRuntimeCoreOptionsFor,
-} from "@view-server/runtime-core";
+  makeViewServerRuntimeCoreInternal,
+  type ViewServerRuntimeCoreInternalInstance,
+} from "@view-server/runtime-core/internal";
 import {
   makeViewServerWebSocketServer,
   type ViewServerWebSocketServer,
@@ -39,7 +40,7 @@ export type ViewServerRuntimeDependencies<Topics extends ViewServerRuntimeTopicD
   readonly makeRuntimeCore: (
     config: ViewServerConfig<Topics>,
     options: ViewServerRuntimeCoreOptionsFor<Topics>,
-  ) => Effect.Effect<ViewServerRuntimeCoreInstance<Topics>>;
+  ) => Effect.Effect<ViewServerRuntimeCoreInternalInstance<Topics>, ViewServerRuntimeError>;
   readonly makeServer: (
     config: ViewServerConfig<Topics>,
     input: ViewServerWebSocketServerInput<Topics>,
@@ -72,7 +73,7 @@ export type ViewServerRuntimeDependencies<Topics extends ViewServerRuntimeTopicD
 export const makeDefaultRuntimeDependencies = <
   const Topics extends ViewServerRuntimeTopicDefinitions,
 >(): ViewServerRuntimeDependencies<Topics> => ({
-  makeRuntimeCore: makeViewServerRuntimeCore,
+  makeRuntimeCore: makeViewServerRuntimeCoreInternal,
   makeServer: makeViewServerWebSocketServer,
   makeKafkaHealthLedger: (_config, options) =>
     makeViewServerKafkaHealthLedger({
@@ -92,14 +93,16 @@ export const makeDefaultRuntimeDependencies = <
     makeViewServerGrpcHealthLedger({
       clients: options.clientBaseUrls,
       feeds: Object.fromEntries(
-        Object.entries(options.feeds).map(([feedName, feed]) => [
-          feedName,
-          {
-            client: feed.client,
-            lifecycle: feed.lifecycle,
-            topic: feed.topic,
-          },
-        ]),
+        Object.entries(options.feeds)
+          .filter(([, feed]) => feed.lifecycle === "materialized")
+          .map(([feedName, feed]) => [
+            feedName,
+            {
+              client: feed.client,
+              lifecycle: feed.lifecycle,
+              topic: feed.topic,
+            },
+          ]),
       ),
     }),
   makeKafkaIngress: makeViewServerKafkaIngress,

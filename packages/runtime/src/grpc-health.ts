@@ -61,11 +61,21 @@ export type ViewServerGrpcHealthLedger<Topics extends ViewServerRuntimeTopicDefi
   readonly feedReady: (feedName: string) => Effect.Effect<void>;
   readonly feedStopping: (feedName: string) => Effect.Effect<void>;
   readonly feedDegraded: (feedName: string, message: string) => Effect.Effect<void>;
+  readonly leasedFeedStarting: (input: {
+    readonly feedName: string;
+    readonly feedKey: string;
+    readonly topic: Extract<keyof Topics, string>;
+    readonly clientName: string;
+  }) => Effect.Effect<void>;
+  readonly leasedFeedRemoved: (feedKey: string) => Effect.Effect<void>;
+  readonly subscriberAdded: (feedKey: string) => Effect.Effect<void>;
+  readonly subscriberRemoved: (feedKey: string) => Effect.Effect<void>;
   readonly rowsPublished: (
     feedName: string,
     input: {
       readonly messages: number;
       readonly rows: number;
+      readonly rowCount?: number;
       readonly nowMillis: number;
     },
   ) => Effect.Effect<void>;
@@ -239,10 +249,19 @@ export const makeViewServerGrpcHealthLedger = <
 }): ViewServerGrpcHealthLedger<Topics> => {
   const clients = new Map<string, GrpcClientLedger>();
   const feeds = new Map<string, GrpcFeedLedger<Extract<keyof Topics, string>>>();
+  const materializedFeedsByClient = new Map<string, number>();
+  for (const feed of Object.values(input.feeds)) {
+    if (feed.lifecycle === "materialized") {
+      materializedFeedsByClient.set(
+        feed.client,
+        (materializedFeedsByClient.get(feed.client) ?? 0) + 1,
+      );
+    }
+  }
 
   for (const [clientName, client] of Object.entries(input.clients)) {
     clients.set(clientName, {
-      status: "starting",
+      status: materializedFeedsByClient.has(clientName) ? "starting" : "connected",
       baseUrl: client,
       activeFeeds: 0,
       lastConnectedAt: null,
@@ -251,6 +270,9 @@ export const makeViewServerGrpcHealthLedger = <
   }
 
   for (const [feedName, feed] of Object.entries(input.feeds)) {
+    if (feed.lifecycle !== "materialized") {
+      continue;
+    }
     feeds.set(feedName, {
       status: "starting",
       lifecycle: feed.lifecycle,
@@ -272,20 +294,47 @@ export const makeViewServerGrpcHealthLedger = <
     });
   }
 
-  const refreshClientActiveFeeds = () => {
-    for (const client of clients.values()) {
-      client.activeFeeds = 0;
+  const refreshClientFromFeeds = (clientName: string) => {
+    const client = clients.get(clientName);
+    if (client === undefined) {
+      return;
+    }
+    const feedsForClient = Array.from(feeds.values()).filter(
+      (feed) => feed.clientName === clientName,
+    );
+    client.activeFeeds = feedsForClient.filter((feed) => feed.status === "ready").length;
+    const degradedFeed = feedsForClient.find((feed) => feed.status === "degraded");
+    if (degradedFeed !== undefined) {
+      client.status = "degraded";
+      client.lastError = degradedFeed.lastError;
+      return;
+    }
+    const pendingFeed = feedsForClient.find(
+      (feed) => feed.status === "starting" || feed.status === "stopping",
+    );
+    if (pendingFeed !== undefined) {
+      client.status = "starting";
+      client.lastError = null;
+      return;
+    }
+    client.status = "connected";
+    client.lastError = null;
+  };
+
+  const refreshClientsFromFeeds = () => {
+    for (const clientName of clients.keys()) {
+      refreshClientFromFeeds(clientName);
     }
     for (const feed of feeds.values()) {
-      const client = clients.get(feed.clientName);
-      if (client !== undefined && feed.status === "ready") {
-        client.activeFeeds += 1;
-      }
+      refreshClientFromFeeds(feed.clientName);
     }
   };
 
   const syncFeedRowCounts = (health: ViewServerHealth<Topics>) => {
     for (const feed of feeds.values()) {
+      if (feed.lifecycle === "leased") {
+        continue;
+      }
       const topicHealth = health.engine.topics[feed.topic];
       feed.rowCount = topicHealth.rowCount;
     }
@@ -296,7 +345,7 @@ export const makeViewServerGrpcHealthLedger = <
     nowMillis: number,
   ): GrpcHealthSnapshot<Topics> => {
     syncFeedRowCounts(health);
-    refreshClientActiveFeeds();
+    refreshClientsFromFeeds();
     const clientHealth: Record<string, GrpcClientHealth> = Object.create(null);
     const feedHealth: GrpcHealthSnapshot<Topics>["feeds"] = Object.create(null);
     for (const [clientName, client] of clients) {
@@ -331,9 +380,8 @@ export const makeViewServerGrpcHealthLedger = <
       Effect.sync(() => {
         const client = clients.get(clientName);
         if (client !== undefined) {
-          client.status = "connected";
           client.lastConnectedAt = client.lastConnectedAt ?? nowMillis;
-          client.lastError = null;
+          refreshClientFromFeeds(clientName);
         }
       }),
     clientDegraded: (clientName, message) =>
@@ -350,6 +398,7 @@ export const makeViewServerGrpcHealthLedger = <
         if (feed !== undefined) {
           feed.status = "ready";
           feed.lastError = null;
+          refreshClientFromFeeds(feed.clientName);
         }
       }),
     feedStopping: (feedName) =>
@@ -357,6 +406,7 @@ export const makeViewServerGrpcHealthLedger = <
         const feed = feeds.get(feedName);
         if (feed !== undefined) {
           feed.status = "stopping";
+          refreshClientFromFeeds(feed.clientName);
         }
       }),
     feedDegraded: (feedName, message) =>
@@ -365,12 +415,62 @@ export const makeViewServerGrpcHealthLedger = <
         if (feed !== undefined) {
           feed.status = "degraded";
           feed.lastError = message;
+          refreshClientFromFeeds(feed.clientName);
+        }
+      }),
+    leasedFeedStarting: (input) =>
+      Effect.sync(() => {
+        feeds.set(input.feedKey, {
+          status: "starting",
+          lifecycle: "leased",
+          feedName: input.feedName,
+          feedKey: input.feedKey,
+          topic: input.topic,
+          clientName: input.clientName,
+          subscriberCount: 0,
+          rowCount: 0,
+          messagesPerSecond: 0,
+          rowsPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          publishFailuresPerSecond: 0,
+          reconnects: 0,
+          lastMessageAt: null,
+          lastError: null,
+          rateBuckets: initialRateBuckets(),
+        });
+        refreshClientFromFeeds(input.clientName);
+      }),
+    leasedFeedRemoved: (feedKey) =>
+      Effect.sync(() => {
+        const removedFeed = feeds.get(feedKey);
+        feeds.delete(feedKey);
+        if (removedFeed === undefined) {
+          return;
+        }
+        refreshClientFromFeeds(removedFeed.clientName);
+      }),
+    subscriberAdded: (feedKey) =>
+      Effect.sync(() => {
+        const feed = feeds.get(feedKey);
+        if (feed !== undefined) {
+          feed.subscriberCount += 1;
+        }
+      }),
+    subscriberRemoved: (feedKey) =>
+      Effect.sync(() => {
+        const feed = feeds.get(feedKey);
+        if (feed !== undefined && feed.subscriberCount > 0) {
+          feed.subscriberCount -= 1;
         }
       }),
     rowsPublished: (feedName, input) =>
       Effect.sync(() => {
         const feed = feeds.get(feedName);
         if (feed !== undefined) {
+          if (input.rowCount !== undefined) {
+            feed.rowCount = input.rowCount;
+          }
           incrementWindow(feed, input.nowMillis, {
             messages: input.messages,
             rows: input.rows,

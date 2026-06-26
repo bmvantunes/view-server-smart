@@ -1,20 +1,21 @@
-import type { ViewServerLiveClient } from "@view-server/client";
 import type { ViewServerConfig } from "@view-server/config";
-import type { ViewServerRuntimeClient } from "@view-server/config";
+import type { ViewServerRuntimeError } from "@view-server/config";
 import {
   createViewServerRuntimeCore,
   makeViewServerRuntimeCore,
   type DecodableTopicDefinitions,
   type ViewServerRuntimeCoreInstance,
   type ViewServerRuntimeCoreOptionsFor,
+  type ViewServerRuntimeCorePublicClient,
+  type ViewServerRuntimeCorePublicLiveClient,
 } from "@view-server/runtime-core";
 import { Effect } from "effect";
 
 export type { DecodableTopicDefinitions } from "@view-server/runtime-core";
 
 export type ViewServerInMemoryInstance<Topics extends DecodableTopicDefinitions> = {
-  readonly client: ViewServerRuntimeClient<Topics>;
-  readonly liveClient: ViewServerLiveClient<Topics>;
+  readonly client: ViewServerRuntimeCorePublicClient<Topics>;
+  readonly liveClient: ViewServerRuntimeCorePublicLiveClient<Topics>;
   readonly close: Effect.Effect<void>;
 };
 
@@ -39,24 +40,19 @@ const toRuntimeCoreOptions = <const Topics extends DecodableTopicDefinitions>(
 const toInMemoryInstance = <const Topics extends DecodableTopicDefinitions>(
   runtimeCore: ViewServerRuntimeCoreInstance<Topics>,
 ): ViewServerInMemoryInstance<Topics> => {
-  const liveClient: ViewServerLiveClient<Topics> = {
-    close: runtimeCore.liveClient.close,
-    health: runtimeCore.liveClient.health,
-    subscribe: runtimeCore.liveClient.subscribe,
-    subscribeHealth: runtimeCore.liveClient.subscribeHealth,
-    subscribeHealthSummary: runtimeCore.liveClient.subscribeHealthSummary,
-  };
   return {
     client: runtimeCore.client,
     close: runtimeCore.close,
-    liveClient,
+    liveClient: runtimeCore.liveClient,
   };
 };
 
 export const makeInMemoryViewServer: <const Topics extends DecodableTopicDefinitions>(
   config: ViewServerConfig<Topics>,
   input: ViewServerInMemoryOptions<Topics>,
-) => Effect.Effect<ViewServerInMemoryInstance<Topics>> = Effect.fn("ViewServerInMemory.make")(
+) => Effect.Effect<ViewServerInMemoryInstance<Topics>, ViewServerRuntimeError> = Effect.fn(
+  "ViewServerInMemory.make",
+)(
   <const Topics extends DecodableTopicDefinitions>(
     config: ViewServerConfig<Topics>,
     input: ViewServerInMemoryOptions<Topics>,

@@ -4,6 +4,7 @@ import type {
   RuntimeRegions,
   ViewServerConfig,
   ViewServerHealth,
+  ViewServerRuntimeError,
 } from "@view-server/config";
 import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/effect-utils";
 import type { ViewServerRuntimeCoreOptionsFor } from "@view-server/runtime-core";
@@ -15,8 +16,10 @@ import {
 } from "./runtime-dependencies";
 import type { ViewServerKafkaIngressError } from "./kafka-ingress";
 import type { ViewServerGrpcIngressError } from "./grpc-ingress";
+import { makeViewServerGrpcLeaseManager } from "./grpc-lease-manager";
 import {
   resolveViewServerRuntimeOptions,
+  validateGrpcSourceFeeds,
   type ResolvedViewServerRuntimeOptions,
 } from "./runtime-options";
 import type {
@@ -65,6 +68,7 @@ type RuntimeCoreOptionsBuilder<Topics extends ViewServerRuntimeTopicDefinitions>
 type ViewServerRuntimeFactoryError =
   | HttpServerError.ServeError
   | Config.ConfigError
+  | ViewServerRuntimeError
   | ViewServerKafkaIngressError
   | ViewServerGrpcIngressError;
 
@@ -114,6 +118,7 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
 ) {
   const kafkaOptions = resolvedOptions.kafkaOptions;
   const grpcOptions = resolvedOptions.grpcOptions;
+  yield* validateGrpcSourceFeeds(config, grpcOptions);
   const transportHealth = makeViewServerRuntimeTransportHealth<Topics>();
   const kafkaHealth =
     kafkaOptions === undefined
@@ -146,12 +151,28 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
   }
   const runtimeCore = yield* dependencies.makeRuntimeCore(config, runtimeCoreInput);
   const refreshTransportHealth = ignoreRuntimeHealthRefreshFailure(runtimeCore.refreshHealth);
+  const grpcLeaseManager =
+    grpcOptions === undefined || grpcHealth === undefined
+      ? undefined
+      : yield* makeViewServerGrpcLeaseManager(
+          config,
+          runtimeCore.internalClient,
+          runtimeCore.liveClient,
+          runtimeCore.internalLiveClient,
+          runtimeCore.requestHealthRefresh,
+          grpcOptions,
+          grpcHealth,
+        );
+  const runtimeLiveClient = grpcLeaseManager?.liveClient ?? runtimeCore.liveClient;
+  const runtimeClient = grpcLeaseManager?.client ?? runtimeCore.client;
+  const closeGrpcLeaseManager =
+    grpcLeaseManager === undefined ? Effect.void : grpcLeaseManager.close;
   const server = yield* dependencies
     .makeServer(
       config,
       {
-        liveClient: runtimeCore.liveClient,
-        runtime: runtimeCore.client,
+        liveClient: runtimeLiveClient,
+        runtime: runtimeClient,
         transport: {
           clientOpened: transportHealth.clientOpened.pipe(Effect.andThen(refreshTransportHealth)),
           clientClosed: transportHealth.clientClosed.pipe(Effect.andThen(refreshTransportHealth)),
@@ -161,7 +182,13 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
       },
       resolvedOptions.serverOptions,
     )
-    .pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? runtimeCore.close : Effect.void)));
+    .pipe(
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit)
+          ? closeGrpcLeaseManager.pipe(Effect.ensuring(runtimeCore.close))
+          : Effect.void,
+      ),
+    );
   const kafkaIngress =
     kafkaOptions === undefined || kafkaHealth === undefined
       ? undefined
@@ -176,7 +203,10 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
           .pipe(
             Effect.onExit((exit) =>
               Exit.isFailure(exit)
-                ? server.close.pipe(Effect.ensuring(runtimeCore.close))
+                ? server.close.pipe(
+                    Effect.ensuring(closeGrpcLeaseManager),
+                    Effect.ensuring(runtimeCore.close),
+                  )
                 : Effect.void,
             ),
           );
@@ -195,6 +225,7 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
             Effect.onExit((exit) =>
               Exit.isFailure(exit)
                 ? (kafkaIngress?.close ?? Effect.void).pipe(
+                    Effect.ensuring(closeGrpcLeaseManager),
                     Effect.ensuring(server.close),
                     Effect.ensuring(runtimeCore.close),
                   )
@@ -202,17 +233,18 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
             ),
           );
   const close = (grpcIngress?.close ?? Effect.void).pipe(
+    Effect.ensuring(closeGrpcLeaseManager),
     Effect.ensuring(kafkaIngress?.close ?? Effect.void),
     Effect.ensuring(server.close),
     Effect.ensuring(runtimeCore.close),
   );
-  const publicLiveClient = toPublicLiveClient(runtimeCore.liveClient, close);
+  const publicLiveClient = toPublicLiveClient(runtimeLiveClient, close);
   return {
     url: server.url,
     healthUrl: server.healthUrl,
-    client: runtimeCore.client,
+    client: runtimeClient,
     liveClient: publicLiveClient,
-    health: runtimeCore.client.health,
+    health: runtimeClient.health,
     close,
   };
 });
@@ -249,16 +281,9 @@ export const runViewServerRuntimeWithDependencies: <
   dependencies: ViewServerRuntimeDependencies<Topics>,
   config: ViewServerConfig<Topics>,
   options?: ViewServerRuntimeOptionsInput<Topics, Options>,
-) => Effect.Effect<
-  never,
-  | HttpServerError.ServeError
-  | Config.ConfigError
-  | ViewServerKafkaIngressError
-  | ViewServerGrpcIngressError
-> = Effect.fn("ViewServerRuntime.runWithDependencies")(function* <
-  const Topics extends ViewServerRuntimeTopicDefinitions,
-  const Options extends object,
->(
+) => Effect.Effect<never, ViewServerRuntimeFactoryError> = Effect.fn(
+  "ViewServerRuntime.runWithDependencies",
+)(function* <const Topics extends ViewServerRuntimeTopicDefinitions, const Options extends object>(
   dependencies: ViewServerRuntimeDependencies<Topics>,
   config: ViewServerConfig<Topics>,
   options?: ViewServerRuntimeOptionsInput<Topics, Options>,

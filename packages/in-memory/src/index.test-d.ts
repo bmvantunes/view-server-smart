@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
 import type { ViewServerLiveSubscription } from "@view-server/client";
-import { defineViewServerConfig, type ViewServerRuntimeError } from "@view-server/config";
+import { defineViewServerConfig, grpc, type ViewServerRuntimeError } from "@view-server/config";
 import type { Effect } from "effect";
 import { Schema } from "effect";
 import { createInMemoryViewServer } from "./index";
@@ -25,6 +25,18 @@ const inMemoryWithGroupedAdmissionLimits = createInMemoryViewServer(viewServer, 
     maxGroups: 1,
   },
 });
+const leasedViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["id"],
+      }),
+    },
+  },
+});
+const leasedInMemory = createInMemoryViewServer(leasedViewServer);
 const invalidTransportHealthOption = createInMemoryViewServer(viewServer, {
   // @ts-expect-error in-memory does not expose Runtime Core transport adapter hooks.
   transportHealth: () => ({
@@ -81,5 +93,52 @@ describe("in-memory type contracts", () => {
     expectTypeOf(invalidTransportHealthOption).not.toBeAny();
     expectTypeOf(invalidGroupedAdmissionLimitKey).not.toBeAny();
     expectTypeOf(invalidGroupedAdmissionLimitValue).not.toBeAny();
+  });
+
+  it("rejects leased gRPC topics from public in-memory clients", () => {
+    const leasedQuery = {
+      where: {
+        id: { eq: "order-1" },
+      },
+      select: ["id"],
+    } satisfies {
+      readonly where: {
+        readonly id: {
+          readonly eq: "order-1";
+        };
+      };
+      readonly select: readonly ["id"];
+    };
+    // @ts-expect-error public in-memory clients reject direct leased gRPC snapshots.
+    const invalidLeasedSnapshot = leasedInMemory.client.snapshot("orders", leasedQuery);
+    // @ts-expect-error public in-memory clients reject direct leased gRPC publishes.
+    const invalidLeasedPublish = leasedInMemory.client.publish("orders", {
+      id: "order-1",
+      price: 42,
+    });
+    // @ts-expect-error public in-memory clients reject direct leased gRPC batch publishes.
+    const invalidLeasedPublishMany = leasedInMemory.client.publishMany("orders", [
+      {
+        id: "order-1",
+        price: 42,
+      },
+    ]);
+    // @ts-expect-error public in-memory clients reject direct leased gRPC patches.
+    const invalidLeasedPatch = leasedInMemory.client.patch("orders", "order-1", {
+      price: 10,
+    });
+    // @ts-expect-error public in-memory clients reject direct leased gRPC deletes.
+    const invalidLeasedDelete = leasedInMemory.client.delete("orders", "order-1");
+    // @ts-expect-error public in-memory clients reject direct leased gRPC reset.
+    const invalidLeasedReset = leasedInMemory.client.reset();
+    // @ts-expect-error public in-memory live clients reject direct leased gRPC subscriptions.
+    const _invalidLeasedSubscribe = leasedInMemory.liveClient.subscribe("orders", leasedQuery);
+
+    expectTypeOf(invalidLeasedSnapshot).not.toBeAny();
+    expectTypeOf(invalidLeasedPublish).not.toBeAny();
+    expectTypeOf(invalidLeasedPublishMany).not.toBeAny();
+    expectTypeOf(invalidLeasedPatch).not.toBeAny();
+    expectTypeOf(invalidLeasedDelete).not.toBeAny();
+    expectTypeOf(invalidLeasedReset).not.toBeAny();
   });
 });
