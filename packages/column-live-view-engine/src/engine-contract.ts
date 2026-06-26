@@ -139,6 +139,11 @@ export type AnyTopicRow<Topics extends DecodableTopicDefinitions> = TopicRow<
   Extract<keyof Topics, string>
 >;
 
+type TopicRowWithStorageKey<Row extends object> = {
+  readonly storageKey: string;
+  readonly row: Row;
+};
+
 export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
   readonly publish: <Topic extends Extract<keyof Topics, string>>(
     topic: Topic,
@@ -170,3 +175,11 @@ export type ColumnLiveViewEngine<Topics extends DecodableTopicDefinitions> = {
   readonly reset: () => Effect.Effect<void, EngineClosedError>;
   readonly close: () => Effect.Effect<void, never>;
 };
+
+export type ColumnLiveViewEngineInternal<Topics extends DecodableTopicDefinitions> =
+  ColumnLiveViewEngine<Topics> & {
+    readonly publishManyWithStorageKeys: <Topic extends Extract<keyof Topics, string>>(
+      topic: Topic,
+      rows: ReadonlyArray<TopicRowWithStorageKey<TopicRow<Topics, Topic>>>,
+    ) => Effect.Effect<void, ColumnLiveViewEngineError>;
+  };

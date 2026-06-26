@@ -1,8 +1,8 @@
 import {
-  createColumnLiveViewEngine,
   type DecodableTopicDefinitions,
   type GroupedIncrementalAdmissionLimits,
 } from "@view-server/column-live-view-engine";
+import { createColumnLiveViewEngineInternal } from "@view-server/column-live-view-engine/internal";
 import type {
   ViewServerConfig,
   ViewServerHealth,
@@ -29,16 +29,18 @@ import type {
   ViewServerRuntimeCorePublicLiveClient,
 } from "./public-client";
 import { makeRuntimeCoreClient } from "./runtime-client";
+import type { ViewServerRuntimeCoreInternalClient } from "./runtime-client";
 import type { ViewServerRuntimeCoreInstance } from "./index";
 
 export type { ViewServerRuntimeCoreInternalLiveClient } from "./live-client";
+export type { ViewServerRuntimeCoreInternalClient } from "./runtime-client";
 
 export type ViewServerRuntimeCoreInternalInstance<Topics extends DecodableTopicDefinitions> = Omit<
   ViewServerRuntimeCoreInstance<Topics>,
   "client" | "liveClient"
 > & {
   readonly client: ViewServerRuntimeClient<Topics>;
-  readonly internalClient: ViewServerRuntimeClient<Topics>;
+  readonly internalClient: ViewServerRuntimeCoreInternalClient<Topics>;
   readonly publicClient: ViewServerRuntimeCorePublicClient<Topics>;
   readonly liveClient: ViewServerRuntimeLiveClient<Topics>;
   readonly internalLiveClient: ViewServerRuntimeCoreInternalLiveClient<Topics>;
@@ -71,7 +73,7 @@ export const makeViewServerRuntimeCoreInternal: <const Topics extends DecodableT
         : { subscriptionQueueCapacity: input.subscriptionQueueCapacity }),
       topics: config.topics,
     };
-    const engine = yield* createColumnLiveViewEngine<Topics>(engineConfig);
+    const engine = yield* createColumnLiveViewEngineInternal<Topics>(engineConfig);
     const engineHealth = yield* engine.health();
     const nowMillis = yield* Clock.currentTimeMillis;
     const health: AtomRef.AtomRef<ViewServerHealth<Topics>> = AtomRef.make(
@@ -104,6 +106,10 @@ export const makeViewServerRuntimeCoreInternal: <const Topics extends DecodableT
       internalClient: runtimeClient.internalClient,
       publicClient: runtimeClient.client,
       liveClient: {
+        ...liveClient,
+        close,
+      },
+      serverLiveClient: {
         ...liveClient,
         close,
       },

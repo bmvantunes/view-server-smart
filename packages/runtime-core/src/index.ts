@@ -14,6 +14,7 @@ import { makeViewServerRuntimeCoreInternal } from "./internal";
 import type {
   ViewServerRuntimeCorePublicClient,
   ViewServerRuntimeCorePublicLiveClient,
+  ViewServerRuntimeCoreServerLiveClient,
 } from "./public-client";
 
 export type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";
@@ -23,11 +24,13 @@ export type { RuntimeCoreHealthOverlay } from "./health";
 export type {
   ViewServerRuntimeCorePublicClient,
   ViewServerRuntimeCorePublicLiveClient,
+  ViewServerRuntimeCoreServerLiveClient,
 } from "./public-client";
 
 export type ViewServerRuntimeCoreInstance<Topics extends DecodableTopicDefinitions> = {
   readonly client: ViewServerRuntimeCorePublicClient<Topics>;
   readonly liveClient: ViewServerRuntimeCorePublicLiveClient<Topics>;
+  readonly serverLiveClient: ViewServerRuntimeCoreServerLiveClient<Topics>;
   readonly close: Effect.Effect<void>;
   readonly requestHealthRefresh: Effect.Effect<void>;
   readonly refreshHealth: Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
@@ -62,6 +65,7 @@ export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefi
   return {
     client: runtimeCore.publicClient,
     liveClient: runtimeCore.publicLiveClient,
+    serverLiveClient: runtimeCore.liveClient,
     close: runtimeCore.close,
     requestHealthRefresh: runtimeCore.requestHealthRefresh,
     refreshHealth: runtimeCore.refreshHealth,

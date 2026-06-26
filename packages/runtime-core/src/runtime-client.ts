@@ -1,7 +1,5 @@
-import type {
-  ColumnLiveViewEngine,
-  DecodableTopicDefinitions,
-} from "@view-server/column-live-view-engine";
+import type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";
+import type { ColumnLiveViewEngineInternal } from "@view-server/column-live-view-engine/internal";
 import type {
   ExactLiveQueryInputForTopic,
   GroupedQuery,
@@ -34,16 +32,27 @@ import { grpcLeasedSourceTopics } from "./topic-source";
 
 export type RuntimeCoreClientInstance<Topics extends DecodableTopicDefinitions> = {
   readonly client: ViewServerRuntimeClient<Topics>;
-  readonly internalClient: ViewServerRuntimeClient<Topics>;
+  readonly internalClient: ViewServerRuntimeCoreInternalClient<Topics>;
   readonly close: Effect.Effect<void>;
   readonly requestHealthRefresh: Effect.Effect<void>;
   readonly refreshHealth: Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
 };
 
+export type ViewServerRuntimeCoreInternalClient<Topics extends DecodableTopicDefinitions> =
+  ViewServerRuntimeClient<Topics> & {
+    readonly publishManyWithStorageKeys: <Topic extends Extract<keyof Topics, string>>(
+      topic: Topic,
+      rows: ReadonlyArray<{
+        readonly storageKey: string;
+        readonly row: TopicRow<Topics, Topic>;
+      }>,
+    ) => Effect.Effect<void, ViewServerRuntimeError>;
+  };
+
 export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.make")(
   <const Topics extends DecodableTopicDefinitions>(
     config: ViewServerConfig<Topics>,
-    engine: ColumnLiveViewEngine<Topics>,
+    engine: ColumnLiveViewEngineInternal<Topics>,
     health: AtomRef.AtomRef<ViewServerHealth<Topics>>,
     transportHealth: RuntimeCoreTransportHealth<Topics>,
     healthOverlay?: RuntimeCoreHealthOverlay<Topics>,
@@ -123,7 +132,7 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
             .snapshot<Topic, Query>(topic, query)
             .pipe(Effect.mapError(engineErrorToRuntimeError));
         });
-      const internalClient: ViewServerRuntimeClient<Topics> = {
+      const internalClient: ViewServerRuntimeCoreInternalClient<Topics> = {
         publish: (topic, row) =>
           Effect.uninterruptible(
             engine.publish(topic, row).pipe(Effect.tap(() => requestHealthRefresh())),
@@ -131,6 +140,12 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
         publishMany: (topic, rows) =>
           Effect.uninterruptible(
             engine.publishMany(topic, rows).pipe(Effect.tap(() => requestHealthRefresh())),
+          ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+        publishManyWithStorageKeys: (topic, rows) =>
+          Effect.uninterruptible(
+            engine
+              .publishManyWithStorageKeys(topic, rows)
+              .pipe(Effect.tap(() => requestHealthRefresh())),
           ).pipe(Effect.mapError(engineErrorToRuntimeError)),
         patch: (topic, key, patch) =>
           Effect.uninterruptible(

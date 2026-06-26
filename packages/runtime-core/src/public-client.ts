@@ -1,4 +1,8 @@
-import type { ViewServerLiveClient, ViewServerLiveSubscription } from "@view-server/client";
+import type {
+  ViewServerLiveClient,
+  ViewServerLiveSubscription,
+  ViewServerRuntimeLiveClient,
+} from "@view-server/client";
 import type {
   ExactLiveQueryInputForTopic,
   ExactPatch,
@@ -61,6 +65,16 @@ type RuntimeCorePublicSubscribe<Topics extends TopicDefinitions> = <
   ViewServerRuntimeError | ViewServerTransportError
 >;
 
+type RuntimeCorePublicSubscribeRuntime<Topics extends TopicDefinitions> = <
+  Topic extends RuntimeCorePublicTopic<Topics>,
+>(
+  topic: Topic,
+  query: RawQuery<TopicRow<Topics, Topic>> | GroupedQuery<TopicRow<Topics, Topic>>,
+) => Effect.Effect<
+  ViewServerLiveSubscription<object>,
+  ViewServerRuntimeError | ViewServerTransportError
+>;
+
 export type ViewServerRuntimeCorePublicClient<Topics extends TopicDefinitions> = Omit<
   ViewServerRuntimeClient<Topics>,
   "delete" | "patch" | "publish" | "publishMany" | "reset" | "snapshot"
@@ -91,4 +105,13 @@ export type ViewServerRuntimeCorePublicLiveClient<Topics extends TopicDefinition
   ? ViewServerLiveClient<Topics>
   : Omit<ViewServerLiveClient<Topics>, "subscribe"> & {
       readonly subscribe: RuntimeCorePublicSubscribe<Topics>;
+    };
+
+export type ViewServerRuntimeCoreServerLiveClient<Topics extends TopicDefinitions> = [
+  RuntimeCoreLeasedTopic<Topics>,
+] extends [never]
+  ? ViewServerRuntimeLiveClient<Topics>
+  : Omit<ViewServerRuntimeLiveClient<Topics>, "subscribe" | "subscribeRuntime"> & {
+      readonly subscribe: RuntimeCorePublicSubscribe<Topics>;
+      readonly subscribeRuntime: RuntimeCorePublicSubscribeRuntime<Topics>;
     };

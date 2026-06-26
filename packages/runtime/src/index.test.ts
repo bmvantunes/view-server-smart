@@ -203,6 +203,27 @@ const leasedGrpcViewServer = defineViewServerConfig({
   },
 });
 
+const PublicKeyGrpcOrder = Schema.Struct({
+  id: Schema.String.pipe(Schema.check(Schema.isPattern(/^public-/))),
+  customerId: Schema.String,
+  status: Schema.Literals(["open", "closed", "cancelled"]),
+  price: Schema.Number,
+  region: Schema.String,
+  updatedAt: Schema.Number,
+});
+
+const publicKeyLeasedGrpcViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: PublicKeyGrpcOrder,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["region"],
+      }),
+    },
+  },
+});
+
 const keyLeasedGrpcViewServer = defineViewServerConfig({
   topics: {
     orders: {
@@ -287,6 +308,7 @@ const grpcFeed = grpcViewServer.grpcFeed<typeof grpcClients>();
 const grpcFeedWithOrphan = grpcViewServer.grpcFeed<typeof grpcClientsWithOrphan>();
 const mixedGrpcFeed = grpcAndKafkaViewServer.grpcFeed<typeof grpcClients>();
 const leasedGrpcFeed = leasedGrpcViewServer.grpcFeed<typeof grpcClients>();
+const publicKeyLeasedGrpcFeed = publicKeyLeasedGrpcViewServer.grpcFeed<typeof grpcClients>();
 const keyLeasedGrpcFeed = keyLeasedGrpcViewServer.grpcFeed<typeof grpcClients>();
 const routeEncodingLeasedGrpcFeed =
   routeEncodingLeasedGrpcViewServer.grpcFeed<typeof grpcClients>();
@@ -432,6 +454,28 @@ const grpcLeasedFeed = (input: {
     release: () => input.release ?? Effect.void,
     map: ({ value, route }) => ({
       id: `${route.region}:${value.customerId}`,
+      customerId: value.customerId,
+      status: value.status,
+      price: value.price,
+      region: route.region,
+      updatedAt: value.updatedAt,
+    }),
+  });
+
+const grpcPublicKeyLeasedFeed = (input: {
+  readonly streamForRegion: (
+    region: string,
+  ) => Stream.Stream<GrpcOrderValueMessage, unknown, never>;
+}) =>
+  publicKeyLeasedGrpcFeed.leasedFeed({
+    topic: "orders",
+    client: "orders",
+    method: "streamOrders",
+    routeBy: ["region"],
+    request: ({ region }) => ({ orderId: region }),
+    acquire: ({ route }) => input.streamForRegion(route.region),
+    map: ({ value, route }) => ({
+      id: `public-${route.region}-${value.customerId}`,
       customerId: value.customerId,
       status: value.status,
       price: value.price,
@@ -1195,6 +1239,174 @@ describe("@view-server/runtime", () => {
       });
 
       expect(options.grpcOptions?.feeds["ordersLease"]).toBe(feed);
+    }),
+  );
+
+  it.live("keeps refined public leased row keys out of internal storage keys", () =>
+    Effect.gen(function* () {
+      const feed = grpcPublicKeyLeasedFeed({
+        streamForRegion: (region) =>
+          longRunningGrpcStream([grpcOrderValue(`${region}-order-1`, 10)]),
+      });
+      const options = yield* resolveViewServerRuntimeOptions<
+        typeof publicKeyLeasedGrpcViewServer.topics,
+        Record<string, string>,
+        typeof grpcClients
+      >({
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersLease: feed,
+          },
+        },
+      });
+      const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(
+        publicKeyLeasedGrpcViewServer,
+        {},
+      );
+      const health = makeViewServerGrpcHealthLedger<typeof publicKeyLeasedGrpcViewServer.topics>({
+        clients: grpcOptions.clientBaseUrls,
+        feeds: {},
+      });
+      const manager = yield* makeViewServerGrpcLeaseManager(
+        publicKeyLeasedGrpcViewServer,
+        runtimeCore.internalClient,
+        runtimeCore.liveClient,
+        runtimeCore.internalLiveClient,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+      const firstSubscription = yield* manager.liveClient.subscribe("orders", {
+        select: ["id", "customerId", "price", "region"],
+        where: {
+          region: { eq: "usa" },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      yield* waitForLeasedGrpcSnapshotRows(runtimeCore.internalClient, "usa", 1);
+      const subscription = yield* manager.liveClient.subscribe("orders", {
+        select: ["id", "customerId", "price", "region"],
+        where: {
+          region: { eq: "usa" },
+        },
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+      const events = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(Array.from(events)).toStrictEqual([
+        {
+          type: "snapshot",
+          topic: "orders",
+          queryId: "query-1",
+          version: 1,
+          keys: ["public-usa-usa-order-1"],
+          rows: [
+            {
+              id: "public-usa-usa-order-1",
+              customerId: "usa-order-1",
+              price: 10,
+              region: "usa",
+            },
+          ],
+          totalRows: 1,
+        },
+      ]);
+      yield* subscription.close();
+      yield* firstSubscription.close();
+      yield* manager.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("releases an interrupted same-route leased subscriber acquisition", () =>
+    Effect.gen(function* () {
+      let released = 0;
+      const feed = grpcLeasedFeed({
+        release: Effect.sync(() => {
+          released += 1;
+        }),
+        streamForRegion: () => Stream.never,
+      });
+      const grpcOptions = yield* resolveLeasedGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(leasedGrpcViewServer, {});
+      const health = makeLeasedGrpcHealth(grpcOptions);
+      const secondSubscribeStarted = yield* Deferred.make<void>();
+      const internalSubscription = {
+        events: Stream.never,
+        close: () => Effect.void,
+      };
+      const subscribeResults =
+        yield* Queue.unbounded<
+          Effect.Effect<typeof internalSubscription, ViewServerRuntimeError>
+        >();
+      yield* Queue.offer(subscribeResults, Effect.succeed(internalSubscription));
+      yield* Queue.offer(
+        subscribeResults,
+        Effect.gen(function* () {
+          yield* Deferred.succeed(secondSubscribeStarted, undefined);
+          return yield* Effect.never;
+        }),
+      );
+      const fakeInternalLiveClient: ViewServerRuntimeCoreInternalLiveClient<
+        typeof leasedGrpcViewServer.topics
+      > = {
+        subscribeInternal: () => Queue.take(subscribeResults).pipe(Effect.flatten),
+        subscribeRuntimeInternal: runtimeCore.internalLiveClient.subscribeRuntimeInternal,
+      };
+      const manager = yield* makeViewServerGrpcLeaseManager(
+        leasedGrpcViewServer,
+        runtimeCore.internalClient,
+        runtimeCore.liveClient,
+        fakeInternalLiveClient,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+      const firstSubscription = yield* manager.liveClient.subscribe(
+        "orders",
+        leasedOrdersQuery("usa"),
+      );
+      const secondFiber = yield* manager.liveClient
+        .subscribe("orders", leasedOrdersQuery("usa"))
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(secondSubscribeStarted);
+      yield* Fiber.interrupt(secondFiber);
+      const activeHealth = health.healthOverlay(yield* runtimeCore.client.health(), 1_000);
+
+      expect({
+        released,
+        subscriberCount:
+          activeHealth.grpc?.feeds["orders"]?.leased[
+            "orders/ordersLease/leased/region=string%3A3%3Ausa"
+          ]?.subscriberCount,
+      }).toStrictEqual({
+        released: 0,
+        subscriberCount: 1,
+      });
+      yield* firstSubscription.close();
+      const cleanedHealth = yield* Effect.gen(function* () {
+        return health.healthOverlay(yield* runtimeCore.client.health(), 1_000);
+      }).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) =>
+            Object.keys(currentHealth.grpc?.feeds["orders"]?.leased ?? {}).length === 0,
+        }),
+      );
+
+      expect({
+        released,
+        leasedFeeds: cleanedHealth.grpc?.feeds["orders"]?.leased ?? {},
+      }).toStrictEqual({
+        released: 1,
+        leasedFeeds: {},
+      });
+      yield* manager.close;
+      yield* runtimeCore.close;
     }),
   );
 
@@ -2327,13 +2539,13 @@ describe("@view-server/runtime", () => {
       });
       expect(readySnapshot.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A3%3Ausa/row/usa:usa-order-1",
+          id: "usa:usa-order-1",
           customerId: "usa-order-1",
           price: 10,
           region: "usa",
         },
         {
-          id: "orders/ordersLease/leased/region=string%3A3%3Ausa/row/usa:usa-order-2",
+          id: "usa:usa-order-2",
           customerId: "usa-order-2",
           price: 20,
           region: "usa",
@@ -3500,7 +3712,7 @@ describe("@view-server/runtime", () => {
       expect(acquiredRegions).toStrictEqual(["usa", "eu"]);
       expect(usaSnapshot.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A3%3Ausa/row/usa:usa-order-1",
+          id: "usa:usa-order-1",
           customerId: "usa-order-1",
           price: 3,
           region: "usa",
@@ -3508,7 +3720,7 @@ describe("@view-server/runtime", () => {
       ]);
       expect(euSnapshot.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A2%3Aeu/row/eu:eu-order-1",
+          id: "eu:eu-order-1",
           customerId: "eu-order-1",
           price: 2,
           region: "eu",
@@ -4049,7 +4261,7 @@ describe("@view-server/runtime", () => {
           status: "ready",
           code: "Ready",
           message:
-            '{"select":["id","price"],"where":{"region":{"eq":"usa"},"id":{"startsWith":"orders/ordersLease/leased/region=string%3A3%3Ausa/row/","eq":123}},"limit":10}',
+            '{"select":["id","price"],"where":{"region":{"eq":"usa"},"id":{"eq":123}},"limit":10}',
         },
       ]);
       yield* subscription.close();
@@ -4243,7 +4455,7 @@ describe("@view-server/runtime", () => {
 
       expect(usaSnapshot.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A3%3Ausa/row/shared-order",
+          id: "shared-order",
           customerId: "shared-order",
           price: 10,
           region: "usa",
@@ -4251,7 +4463,7 @@ describe("@view-server/runtime", () => {
       ]);
       expect(euSnapshot.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A2%3Aeu/row/shared-order",
+          id: "shared-order",
           customerId: "shared-order",
           price: 10,
           region: "eu",
@@ -4259,7 +4471,7 @@ describe("@view-server/runtime", () => {
       ]);
       expect(euAfterUsaClose.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A2%3Aeu/row/shared-order",
+          id: "shared-order",
           customerId: "shared-order",
           price: 10,
           region: "eu",
@@ -4313,26 +4525,15 @@ describe("@view-server/runtime", () => {
       );
       const euInitialSnapshot = yield* Queue.take(euEvents);
       yield* Queue.offer(euQueue, grpcOrderValue("shared-order", 10));
-      const euRouteMismatchedEvent = yield* Effect.race(
-        Queue.take(euEvents).pipe(Effect.as("unexpected-event" as const)),
-        Effect.sleep("20 millis").pipe(Effect.as("no-event" as const)),
-      );
-      yield* runtimeCore.internalClient
-        .snapshot("orders", {
-          select: ["id", "region"],
-          where: {
-            region: { eq: "usa" },
-          },
-          orderBy: [{ field: "id", direction: "asc" }],
-          limit: 10,
-        })
-        .pipe(
-          Effect.repeat({
-            schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
-            until: (snapshot) => snapshot.totalRows === 1,
-          }),
-        );
-
+      const euRouteMismatchedEvent = yield* Queue.take(euEvents);
+      const routeMismatchSnapshot = yield* runtimeCore.internalClient.snapshot("orders", {
+        select: ["id", "region"],
+        where: {
+          region: { eq: "usa" },
+        },
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
       const usa = yield* manager.liveClient.subscribe("orders", leasedOrdersQuery("usa"));
       const usaEventsFiber = yield* usa.events.pipe(
         Stream.take(2),
@@ -4348,7 +4549,7 @@ describe("@view-server/runtime", () => {
         type: "snapshot",
         topic: "orders",
         queryId: "query-1",
-        version: 1,
+        version: 0,
         keys: [],
         rows: [],
         totalRows: 0,
@@ -4357,8 +4558,8 @@ describe("@view-server/runtime", () => {
         type: "delta",
         topic: "orders",
         queryId: "query-1",
-        fromVersion: 1,
-        toVersion: 2,
+        fromVersion: 0,
+        toVersion: 1,
         operations: [
           {
             type: "insert",
@@ -4383,7 +4584,21 @@ describe("@view-server/runtime", () => {
         rows: [],
         totalRows: 0,
       });
-      expect(euRouteMismatchedEvent).toStrictEqual("no-event");
+      expect(euRouteMismatchedEvent).toStrictEqual({
+        type: "status",
+        topic: "orders",
+        queryId: "query-0",
+        status: "error",
+        code: "RuntimeUnavailable",
+        message: "gRPC leased upstream failed.",
+      });
+      expect(routeMismatchSnapshot).toStrictEqual({
+        rows: [],
+        totalRows: 0,
+        version: 0,
+        status: "ready",
+        statusCode: "Ready",
+      });
       yield* usa.close();
       yield* eu.close();
       yield* Fiber.interrupt(euEventsFiber);
@@ -4472,14 +4687,14 @@ describe("@view-server/runtime", () => {
       expect(acquired).toBe(1);
       expect(cheapSnapshot.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A3%3Ausa/row/usa:usa-cheap",
+          id: "usa:usa-cheap",
           price: 10,
           region: "usa",
         },
       ]);
       expect(expensiveSnapshot.rows).toStrictEqual([
         {
-          id: "orders/ordersLease/leased/region=string%3A3%3Ausa/row/usa:usa-expensive",
+          id: "usa:usa-expensive",
           price: 90,
           region: "usa",
         },
@@ -5284,7 +5499,7 @@ describe("@view-server/runtime", () => {
         });
         const grpcOptions = yield* resolveLeasedGrpcRuntimeOptions(feed);
         const runtimeCore = yield* makeViewServerRuntimeCoreInternal(leasedGrpcViewServer, {});
-        Object.defineProperty(runtimeCore.internalClient, "publishMany", {
+        Object.defineProperty(runtimeCore.internalClient, "publishManyWithStorageKeys", {
           value: () => "not-an-effect",
         });
         const health = makeLeasedGrpcHealth(grpcOptions);
@@ -5319,7 +5534,7 @@ describe("@view-server/runtime", () => {
             "orders/ordersLease/leased/region=string%3A3%3Ausa"
           ]?.lastError,
         ).toContain(
-          "Runtime publishMany did not return an Effect for leased gRPC feed ordersLease",
+          "Runtime publishManyWithStorageKeys did not return an Effect for leased gRPC feed ordersLease",
         );
         yield* subscription.close();
         yield* manager.close;
@@ -5334,11 +5549,11 @@ describe("@view-server/runtime", () => {
       });
       const grpcOptions = yield* resolveLeasedGrpcRuntimeOptions(feed);
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(leasedGrpcViewServer, {});
-      Object.defineProperty(runtimeCore.internalClient, "publishMany", {
+      Object.defineProperty(runtimeCore.internalClient, "publishManyWithStorageKeys", {
         value: () =>
           Effect.fail(
             new RuntimeTestFailure({
-              message: "runtime publishMany failed",
+              message: "runtime publishManyWithStorageKeys failed",
             }),
           ),
       });
@@ -6095,22 +6310,16 @@ describe("@view-server/runtime", () => {
         code: "RuntimeUnavailable",
         message: "gRPC leased upstream completed unexpectedly.",
       });
-      const degradedHealth = yield* Effect.gen(function* () {
+      const cleanedHealth = yield* Effect.gen(function* () {
         return health.healthOverlay(yield* runtimeCore.client.health(), 3_000);
       }).pipe(
         Effect.repeat({
           schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
           until: (currentHealth) =>
-            currentHealth.grpc?.feeds["orders"]?.leased[
-              "orders/ordersLease/leased/region=string%3A3%3Ausa"
-            ]?.rowCount === 0,
+            Object.keys(currentHealth.grpc?.feeds["orders"]?.leased ?? {}).length === 0,
         }),
       );
-      expect(
-        degradedHealth.grpc?.feeds["orders"]?.leased[
-          "orders/ordersLease/leased/region=string%3A3%3Ausa"
-        ]?.rowCount,
-      ).toBe(0);
+      expect(Object.keys(cleanedHealth.grpc?.feeds["orders"]?.leased ?? {})).toStrictEqual([]);
 
       yield* subscription.close();
       yield* Fiber.interrupt(eventsFiber);
@@ -6213,7 +6422,7 @@ describe("@view-server/runtime", () => {
         degradedHealth.grpc?.feeds["orders"]?.leased[
           "orders/ordersLease/leased/region=string%3A3%3Ausa"
         ]?.lastError,
-      ).toContain("gRPC leased feed ordersLease completed unexpectedly");
+      ).toContain("gRPC leased feed row cleanup failed for ordersLease");
 
       yield* subscription.close();
       yield* Fiber.interrupt(eventsFiber);
@@ -6434,7 +6643,7 @@ describe("@view-server/runtime", () => {
     }),
   );
 
-  it.live("rejects new leased subscribers after an upstream stream completes", () =>
+  it.live("cleans completed leased feeds and allows later subscribers to reacquire", () =>
     Effect.gen(function* () {
       let released = 0;
       const feed = grpcLeasedFeed({
@@ -6457,11 +6666,6 @@ describe("@view-server/runtime", () => {
       );
 
       const first = yield* manager.liveClient.subscribe("orders", leasedOrdersQuery("usa"));
-      const eventQueue = yield* Queue.unbounded<unknown>();
-      const eventsFiber = yield* first.events.pipe(
-        Stream.runForEach((event) => Queue.offer(eventQueue, event)),
-        Effect.forkChild,
-      );
       const degradedHealth = yield* Effect.gen(function* () {
         return health.healthOverlay(yield* runtimeCore.client.health(), 2_000);
       }).pipe(
@@ -6473,8 +6677,13 @@ describe("@view-server/runtime", () => {
             ]?.status === "degraded",
         }),
       );
-      const error = yield* Effect.flip(
+      const rejectedDuringActiveTerminal = yield* Effect.flip(
         manager.liveClient.subscribe("orders", leasedOrdersQuery("usa")),
+      );
+      const eventQueue = yield* Queue.unbounded<unknown>();
+      const eventsFiber = yield* first.events.pipe(
+        Stream.runForEach((event) => Queue.offer(eventQueue, event)),
+        Effect.forkChild,
       );
       const terminalStatus = yield* Queue.take(eventQueue).pipe(
         Effect.repeat({
@@ -6483,28 +6692,6 @@ describe("@view-server/runtime", () => {
         Effect.timeout("1 second"),
       );
 
-      expect({
-        released,
-        runtimeStatus: degradedHealth.status,
-        clientStatus: degradedHealth.grpc?.clients["orders"]?.status,
-        feedStatus:
-          degradedHealth.grpc?.feeds["orders"]?.leased[
-            "orders/ordersLease/leased/region=string%3A3%3Ausa"
-          ]?.status,
-        error,
-      }).toStrictEqual({
-        released: 1,
-        runtimeStatus: "degraded",
-        clientStatus: "degraded",
-        feedStatus: "degraded",
-        error: {
-          _tag: "ViewServerRuntimeError",
-          code: "RuntimeUnavailable",
-          topic: "orders",
-          message:
-            "gRPC leased upstream is not accepting new subscribers after completion or failure.",
-        },
-      });
       expect(terminalStatus).toStrictEqual({
         type: "status",
         topic: "orders",
@@ -6513,9 +6700,39 @@ describe("@view-server/runtime", () => {
         code: "RuntimeUnavailable",
         message: "gRPC leased upstream completed unexpectedly.",
       });
+      expect({
+        released,
+        runtimeStatus: degradedHealth.status,
+        clientStatus: degradedHealth.grpc?.clients["orders"]?.status,
+        feedStatus:
+          degradedHealth.grpc?.feeds["orders"]?.leased[
+            "orders/ordersLease/leased/region=string%3A3%3Ausa"
+          ]?.status,
+        rejectedDuringActiveTerminal,
+      }).toStrictEqual({
+        released: 1,
+        runtimeStatus: "degraded",
+        clientStatus: "degraded",
+        feedStatus: "degraded",
+        rejectedDuringActiveTerminal: {
+          _tag: "ViewServerRuntimeError",
+          code: "RuntimeUnavailable",
+          topic: "orders",
+          message:
+            "gRPC leased upstream is not accepting new subscribers after completion or failure.",
+        },
+      });
       yield* first.close();
       yield* Fiber.interrupt(eventsFiber);
-      const idleHealth = health.healthOverlay(yield* runtimeCore.client.health(), 3_000);
+      const idleHealth = yield* Effect.gen(function* () {
+        return health.healthOverlay(yield* runtimeCore.client.health(), 3_000);
+      }).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) =>
+            Object.keys(currentHealth.grpc?.feeds["orders"]?.leased ?? {}).length === 0,
+        }),
+      );
       expect({
         released,
         runtimeStatus: idleHealth.status,
@@ -6523,10 +6740,18 @@ describe("@view-server/runtime", () => {
         leasedFeeds: Object.keys(idleHealth.grpc?.feeds["orders"]?.leased ?? {}),
       }).toStrictEqual({
         released: 1,
-        runtimeStatus: "degraded",
-        clientStatus: "degraded",
-        leasedFeeds: ["orders/ordersLease/leased/region=string%3A3%3Ausa"],
+        runtimeStatus: "ready",
+        clientStatus: "connected",
+        leasedFeeds: [],
       });
+
+      const second = yield* manager.liveClient.subscribe("orders", leasedOrdersQuery("usa"));
+      const secondEvents = yield* second.events.pipe(Stream.take(4), Stream.runCollect);
+
+      expect(
+        Array.from(secondEvents).map((event) => Reflect.get(Object(event), "type")),
+      ).toStrictEqual(["snapshot", "delta", "delta", "status"]);
+      yield* second.close();
       yield* manager.close;
       yield* runtimeCore.close;
     }),
@@ -6563,26 +6788,21 @@ describe("@view-server/runtime", () => {
         );
         const snapshotEvent = yield* Queue.take(eventQueue);
         const terminalStatus = yield* Queue.take(eventQueue).pipe(Effect.timeout("1 second"));
-        const degradedHealth = yield* Effect.gen(function* () {
+        const cleanedHealth = yield* Effect.gen(function* () {
           return health.healthOverlay(yield* runtimeCore.client.health(), 2_000);
         }).pipe(
           Effect.repeat({
             schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
             until: (currentHealth) =>
-              currentHealth.grpc?.feeds["orders"]?.leased[
-                "orders/ordersLease/leased/region=string%3A3%3Ausa"
-              ]?.status === "degraded",
+              Object.keys(currentHealth.grpc?.feeds["orders"]?.leased ?? {}).length === 0,
           }),
         );
 
         expect({
           snapshotEvent,
           terminalStatus,
-          runtimeStatus: degradedHealth.status,
-          feedStatus:
-            degradedHealth.grpc?.feeds["orders"]?.leased[
-              "orders/ordersLease/leased/region=string%3A3%3Ausa"
-            ]?.status,
+          runtimeStatus: cleanedHealth.status,
+          leasedFeeds: Object.keys(cleanedHealth.grpc?.feeds["orders"]?.leased ?? {}),
         }).toStrictEqual({
           snapshotEvent: {
             type: "snapshot",
@@ -6601,8 +6821,8 @@ describe("@view-server/runtime", () => {
             code: "RuntimeUnavailable",
             message: "gRPC leased upstream completed unexpectedly.",
           },
-          runtimeStatus: "degraded",
-          feedStatus: "degraded",
+          runtimeStatus: "ready",
+          leasedFeeds: [],
         });
         yield* subscription.close();
         yield* Fiber.interrupt(eventsFiber);

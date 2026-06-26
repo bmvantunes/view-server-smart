@@ -336,9 +336,25 @@ describe("@view-server/runtime-core", () => {
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(leasedViewServer, {});
       yield* runtimeCore.internalClient.publish("orders", order("a", 10));
+      yield* runtimeCore.internalClient.publishManyWithStorageKeys("orders", [
+        {
+          storageKey: "orders/lease/row/public-b",
+          row: order("public-b", 20),
+        },
+      ]);
 
       const snapshot = yield* runtimeCore.internalClient.snapshot("orders", {
         where: {
+          customerId: { eq: "customer-a" },
+          region: { eq: "usa" },
+          status: { eq: "open" },
+        },
+        select: ["id", "region", "status"],
+        limit: 1,
+      });
+      const storageKeySnapshot = yield* runtimeCore.internalClient.snapshot("orders", {
+        where: {
+          customerId: { eq: "customer-public-b" },
           region: { eq: "usa" },
           status: { eq: "open" },
         },
@@ -360,6 +376,7 @@ describe("@view-server/runtime-core", () => {
       const publicRuntimeSubscribe = yield* Effect.flip(
         runtimeCore.liveClient.subscribeRuntime("orders", {
           where: {
+            customerId: { eq: "customer-a" },
             region: { eq: "usa" },
             status: { eq: "open" },
           },
@@ -369,6 +386,7 @@ describe("@view-server/runtime-core", () => {
       );
       const subscription = yield* runtimeCore.internalLiveClient.subscribeInternal("orders", {
         where: {
+          customerId: { eq: "customer-a" },
           region: { eq: "usa" },
           status: { eq: "open" },
         },
@@ -386,7 +404,20 @@ describe("@view-server/runtime-core", () => {
           },
         ],
         totalRows: 1,
-        version: 1,
+        version: 2,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      expect(storageKeySnapshot).toStrictEqual({
+        rows: [
+          {
+            id: "public-b",
+            region: "usa",
+            status: "open",
+          },
+        ],
+        totalRows: 1,
+        version: 2,
         status: "ready",
         statusCode: "Ready",
       });
@@ -401,7 +432,7 @@ describe("@view-server/runtime-core", () => {
         type: "snapshot",
         topic: "orders",
         queryId: "query-0",
-        version: 1,
+        version: 2,
         keys: ["a"],
         rows: [{ id: "a" }],
         totalRows: 1,

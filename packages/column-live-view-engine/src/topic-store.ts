@@ -6,7 +6,9 @@ export {
   patchTopicStoreRow,
   publishTopicStoreRow,
   publishTopicStoreRows,
+  publishTopicStoreRowsWithStorageKeys,
 } from "./topic-store-mutation";
+export type { TopicStoreRowWithStorageKey } from "./topic-store-mutation";
 export { closeTopicStoreSubscriptions, resetTopicStore } from "./topic-store-lifecycle";
 export {
   acquireTopicStoreSubscription,

@@ -144,6 +144,17 @@ describe("runtime-core type contracts", () => {
     const invalidLeasedReset = leasedRuntimeCore.client.reset();
     // @ts-expect-error public runtime-core live clients reject direct leased gRPC subscriptions.
     const _invalidLeasedSubscribe = leasedRuntimeCore.liveClient.subscribe("orders", leasedQuery);
+    const _invalidLeasedServerSubscribe = leasedRuntimeCore.serverLiveClient.subscribe(
+      // @ts-expect-error public runtime-core server live clients reject direct leased gRPC subscriptions.
+      "orders",
+      leasedQuery,
+    );
+    const _invalidLeasedServerRuntimeSubscribe =
+      leasedRuntimeCore.serverLiveClient.subscribeRuntime(
+        // @ts-expect-error public runtime-core server live clients reject direct leased gRPC runtime subscriptions.
+        "orders",
+        leasedQuery,
+      );
 
     expectTypeOf(invalidLeasedSnapshot).not.toBeAny();
     expectTypeOf(invalidLeasedPublish).not.toBeAny();

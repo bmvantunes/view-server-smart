@@ -27,6 +27,11 @@ export type TopicStoreMutationContext = {
   readonly delete: (key: string) => number;
 };
 
+export type TopicStoreRowWithStorageKey<Row extends object> = {
+  readonly storageKey: string;
+  readonly row: Row;
+};
+
 const withTopicStoreStateTransaction = <Success, Error, Requirements>(
   state: TopicStoreMutationState,
   effect: Effect.Effect<Success, Error, Requirements>,
@@ -194,6 +199,24 @@ export const publishTopicStoreRows = Effect.fn("ColumnLiveViewEngine.topicStore.
     );
   },
 );
+
+export const publishTopicStoreRowsWithStorageKeys = Effect.fn(
+  "ColumnLiveViewEngine.topicStore.publishManyWithStorageKeys",
+)(function* <Error, Row extends RowObject>(
+  store: TopicStore,
+  rows: ReadonlyArray<TopicStoreRowWithStorageKey<Row>>,
+  invalidRow: InvalidRowErrorFactory<Error>,
+) {
+  const state = topicStoreState(store);
+  const preparedRows = yield* Effect.forEach(rows, (entry) =>
+    state.storage.prepareRowWithStorageKey(entry.row, entry.storageKey, invalidRow),
+  );
+  yield* runTopicStoreMutationTransaction(state, store, (mutation) =>
+    Effect.sync(() => {
+      return mutation.publishPreparedMany(preparedRows);
+    }),
+  );
+});
 
 export const patchTopicStoreRow = Effect.fn("ColumnLiveViewEngine.topicStore.patch")(function* <
   Patch extends Partial<RowObject>,

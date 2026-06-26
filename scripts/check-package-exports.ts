@@ -6,6 +6,7 @@ import * as clientPackage from "@view-server/client";
 import * as clientRemotePackage from "@view-server/client/remote";
 import type { ColumnLiveViewEngine } from "@view-server/column-live-view-engine";
 import * as enginePackage from "@view-server/column-live-view-engine";
+import * as engineInternalPackage from "@view-server/column-live-view-engine/internal";
 import * as effectUtilsPackage from "@view-server/effect-utils";
 import type { ViewServerHealth } from "@view-server/config/health";
 import type { KafkaMappingInput } from "@view-server/config/kafka";
@@ -92,6 +93,7 @@ const approvedPackageExports = [
   "@view-server/client",
   "@view-server/client/remote",
   "@view-server/column-live-view-engine",
+  "@view-server/column-live-view-engine/internal",
   "@view-server/config",
   "@view-server/config/grpc",
   "@view-server/config/health",
@@ -292,6 +294,16 @@ requireExport("@view-server/protocol", protocolPackage, "ViewServerRpcs");
 requireExport("@view-server/protocol", protocolPackage, "ViewServerWireRowSchema");
 requireExport("@view-server/column-live-view-engine", enginePackage, "createColumnLiveViewEngine");
 requireExport("@view-server/column-live-view-engine", enginePackage, "InvalidTopicError");
+requireExport(
+  "@view-server/column-live-view-engine/internal",
+  engineInternalPackage,
+  "createColumnLiveViewEngineInternal",
+);
+rejectExport(
+  "@view-server/column-live-view-engine",
+  enginePackage,
+  "createColumnLiveViewEngineInternal",
+);
 requireExport("@view-server/in-memory", inMemoryPackage, "createInMemoryViewServer");
 requireExport("@view-server/in-memory", inMemoryPackage, "makeInMemoryViewServer");
 requireExport(

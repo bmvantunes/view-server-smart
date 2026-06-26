@@ -16,6 +16,7 @@ import {
   ViewServerRpcErrorSchema,
   ViewServerRpcs,
 } from "@view-server/protocol";
+import { makeViewServerRuntimeCore } from "@view-server/runtime-core";
 import { makeViewServerRuntimeCoreInternal } from "@view-server/runtime-core/internal";
 import {
   Context,
@@ -142,6 +143,17 @@ const createServerTestRuntime = <const Topics extends TopicDefinitions>(
   config: ViewServerConfig<Topics>,
   options: Parameters<typeof makeViewServerRuntimeCoreInternal<Topics>>[1] = {},
 ) => Effect.runSync(makeViewServerRuntimeCoreInternal(config, options));
+
+const serverTestLiveClientWithSubscribe = <const Topics extends TopicDefinitions>(
+  base: ViewServerRuntimeLiveClient<Topics>,
+  subscribe: (...args: ReadonlyArray<unknown>) => unknown,
+) => {
+  const liveClient = Object.create(base);
+  Object.defineProperty(liveClient, "subscribeRuntime", {
+    value: subscribe,
+  });
+  return liveClient;
+};
 
 const kafkaStartFromHealth = {
   consumerGroupId: "view-server-test",
@@ -648,6 +660,45 @@ describe("@view-server/server", () => {
     }),
   );
 
+  it.live("composes with the public runtime-core live client", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: runtimeCore.serverLiveClient,
+        runtime: runtimeCore.client,
+      });
+      const client = yield* makeViewServerClient(viewServer, { url: server.url });
+      yield* runtimeCore.client.publish("orders", order("public-core", 10));
+
+      const subscription = yield* client.subscribe("orders", {
+        select: ["id", "price"],
+        limit: 10,
+      });
+      const events = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(Array.from(events)).toStrictEqual([
+        {
+          type: "snapshot",
+          topic: "orders",
+          queryId: "query-0",
+          version: 1,
+          keys: ["public-core"],
+          rows: [
+            {
+              id: "public-core",
+              price: 10,
+            },
+          ],
+          totalRows: 1,
+        },
+      ]);
+      yield* subscription.close();
+      yield* client.close;
+      yield* server.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
   it.live("closes transport stream counters when subscription acquisition fails", () =>
     Effect.gen(function* () {
       const inMemory = createServerTestRuntime(viewServer);
@@ -1087,14 +1138,12 @@ describe("@view-server/server", () => {
       const inMemory = createServerTestRuntime(viewServer);
       const makeServerForEvent = Effect.fn("ViewServerServer.test.malformedEventServer.make")(
         function* (event: ViewServerLiveEvent<object>) {
-          const liveClient = {
-            ...inMemory.liveClient,
-            subscribeRuntime: () =>
-              Effect.succeed({
-                events: Stream.make(event),
-                close: () => Effect.void,
-              }),
-          };
+          const liveClient = serverTestLiveClientWithSubscribe(inMemory.liveClient, () =>
+            Effect.succeed({
+              events: Stream.make(event),
+              close: () => Effect.void,
+            }),
+          );
           const server = yield* makeViewServerWebSocketServer(viewServer, {
             liveClient,
             runtime: inMemory.client,
@@ -1195,27 +1244,25 @@ describe("@view-server/server", () => {
     return Effect.gen(function* () {
       const inMemory = createServerTestRuntime(viewServer);
       const closeStarted = yield* Deferred.make<void>();
-      const liveClient = {
-        ...inMemory.liveClient,
-        subscribeRuntime: () =>
-          Effect.succeed({
-            events: Stream.make({
-              type: "snapshot",
-              topic: "orders",
-              queryId: "close-failure",
-              version: 0,
-              keys: ["order-1"],
-              rows: [{ id: "order-1" }],
-              totalRows: 1,
-            } satisfies ViewServerLiveEvent<{ readonly id: string }>),
-            close: () =>
-              Effect.gen(function* () {
-                closeAttempts += 1;
-                yield* Deferred.succeed(closeStarted, undefined);
-                return yield* Effect.fail(closeFailure);
-              }),
-          }),
-      };
+      const liveClient = serverTestLiveClientWithSubscribe(inMemory.liveClient, () =>
+        Effect.succeed({
+          events: Stream.make({
+            type: "snapshot",
+            topic: "orders",
+            queryId: "close-failure",
+            version: 0,
+            keys: ["order-1"],
+            rows: [{ id: "order-1" }],
+            totalRows: 1,
+          } satisfies ViewServerLiveEvent<{ readonly id: string }>),
+          close: () =>
+            Effect.gen(function* () {
+              closeAttempts += 1;
+              yield* Deferred.succeed(closeStarted, undefined);
+              return yield* Effect.fail(closeFailure);
+            }),
+        }),
+      );
       const handlerScope = yield* Scope.make("parallel");
       const handlers = makeViewServerRpcHandlers(
         viewServer,
@@ -1284,32 +1331,30 @@ describe("@view-server/server", () => {
       return Effect.gen(function* () {
         const inMemory = createServerTestRuntime(viewServer);
         const closeStarted = yield* Deferred.make<void>();
-        const liveClient = {
-          ...inMemory.liveClient,
-          subscribeRuntime: () =>
-            Effect.succeed({
-              events: Stream.make({
-                type: "snapshot",
-                topic: "orders",
-                queryId: "close-failure",
-                version: 0,
-                keys: ["order-1"],
-                rows: [{ id: "order-1" }],
-                totalRows: 1,
-              } satisfies ViewServerLiveEvent<{ readonly id: string }>),
-              close: () =>
-                Effect.gen(function* () {
-                  closeAttempts += 1;
-                  yield* Deferred.succeed(closeStarted, undefined);
-                  return yield* Effect.failCause(
-                    Cause.fromReasons([
-                      Cause.makeFailReason(closeFailure),
-                      Cause.makeDieReason("close defect"),
-                    ]),
-                  );
-                }),
-            }),
-        };
+        const liveClient = serverTestLiveClientWithSubscribe(inMemory.liveClient, () =>
+          Effect.succeed({
+            events: Stream.make({
+              type: "snapshot",
+              topic: "orders",
+              queryId: "close-failure",
+              version: 0,
+              keys: ["order-1"],
+              rows: [{ id: "order-1" }],
+              totalRows: 1,
+            } satisfies ViewServerLiveEvent<{ readonly id: string }>),
+            close: () =>
+              Effect.gen(function* () {
+                closeAttempts += 1;
+                yield* Deferred.succeed(closeStarted, undefined);
+                return yield* Effect.failCause(
+                  Cause.fromReasons([
+                    Cause.makeFailReason(closeFailure),
+                    Cause.makeDieReason("close defect"),
+                  ]),
+                );
+              }),
+          }),
+        );
         const handlerScope = yield* Scope.make("parallel");
         const handlers = makeViewServerRpcHandlers(
           viewServer,
@@ -1362,27 +1407,25 @@ describe("@view-server/server", () => {
         topic: "orders",
         queryId: "close-failure",
       };
-      const liveClient = {
-        ...inMemory.liveClient,
-        subscribeRuntime: () =>
-          Effect.succeed({
-            events: Stream.make({
-              type: "snapshot",
-              topic: "orders",
-              queryId: "close-failure",
-              version: 0,
-              keys: ["order-1"],
-              rows: [{ id: "order-1" }],
-              totalRows: 1,
-            } satisfies ViewServerLiveEvent<{ readonly id: string }>),
-            close: () =>
-              Effect.gen(function* () {
-                closeAttempts += 1;
-                yield* Deferred.succeed(closeStarted, undefined);
-                return yield* Effect.fail(closeFailure);
-              }),
-          }),
-      };
+      const liveClient = serverTestLiveClientWithSubscribe(inMemory.liveClient, () =>
+        Effect.succeed({
+          events: Stream.make({
+            type: "snapshot",
+            topic: "orders",
+            queryId: "close-failure",
+            version: 0,
+            keys: ["order-1"],
+            rows: [{ id: "order-1" }],
+            totalRows: 1,
+          } satisfies ViewServerLiveEvent<{ readonly id: string }>),
+          close: () =>
+            Effect.gen(function* () {
+              closeAttempts += 1;
+              yield* Deferred.succeed(closeStarted, undefined);
+              return yield* Effect.fail(closeFailure);
+            }),
+        }),
+      );
       const server = yield* makeViewServerWebSocketServer(viewServer, {
         liveClient,
         runtime: inMemory.client,
@@ -1424,14 +1467,12 @@ describe("@view-server/server", () => {
         rows: [{ id: "bad" }],
         totalRows: 1,
       };
-      const liveClient = {
-        ...inMemory.liveClient,
-        subscribeRuntime: () =>
-          Effect.succeed({
-            events: Stream.make(event),
-            close: () => Effect.void,
-          }),
-      };
+      const liveClient = serverTestLiveClientWithSubscribe(inMemory.liveClient, () =>
+        Effect.succeed({
+          events: Stream.make(event),
+          close: () => Effect.void,
+        }),
+      );
       const server = yield* makeViewServerWebSocketServer(edgeViewServer, {
         liveClient,
         runtime: inMemory.client,

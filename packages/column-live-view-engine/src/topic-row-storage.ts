@@ -34,6 +34,7 @@ import {
 import {
   prepareTopicPatch,
   prepareTopicRow,
+  prepareTopicRowWithStorageKey,
   type InvalidRowErrorFactory,
   type PreparedTopicRow,
   type TopicRowPreparationContext,
@@ -325,6 +326,17 @@ export class TopicRowStorage {
     Row extends RowObject,
   >(this: TopicRowStorage, rows: ReadonlyArray<Row>, invalidRow: InvalidRowErrorFactory<Error>) {
     return yield* Effect.forEach(rows, (row) => this.prepareRow(row, invalidRow));
+  });
+
+  prepareRowWithStorageKey = Effect.fn(
+    "ColumnLiveViewEngine.topicRowStorage.row.prepareWithStorageKey",
+  )(function* <Error, Row extends RowObject>(
+    this: TopicRowStorage,
+    row: Row,
+    storageKey: string,
+    invalidRow: InvalidRowErrorFactory<Error>,
+  ) {
+    return yield* prepareTopicRowWithStorageKey(this.rowPreparation, row, storageKey, invalidRow);
   });
 
   preparePatch = Effect.fn("ColumnLiveViewEngine.topicRowStorage.patch.prepare")(function* <
