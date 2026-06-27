@@ -6,6 +6,7 @@ import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2
 import { FieldDescriptorProto_Type, FileDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
 import { defineViewServerConfig, grpc, type ViewServerHealth } from "@view-server/config";
 import type { ViewServerLiveSubscription } from "@view-server/client";
+import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/effect-utils";
 import {
   makeViewServerRuntimeCoreInternal,
   type ViewServerRuntimeCoreInternalInstance,
@@ -127,6 +128,10 @@ const defaultRowsPerFeed = 50;
 const defaultRouteCount = 25;
 const convergenceTimeout = "10 seconds";
 const memoryBefore = memorySnapshot();
+const ignoreGrpcLeasedBenchmarkSubscriptionCloseFailure =
+  ignoreLoggedTypedFailuresPreserveNonTypedFailures(
+    "gRPC leased benchmark subscription close failed.",
+  );
 
 const positiveIntegerFromEnv = (name: string, fallback: number): number => {
   const raw = process.env[name];
@@ -443,7 +448,11 @@ const closeWatchedSubscriptions = Effect.fn(
     (watched) =>
       watched.subscription
         .close()
-        .pipe(Effect.ignore, Effect.andThen(Fiber.interrupt(watched.fiber)), Effect.asVoid),
+        .pipe(
+          ignoreGrpcLeasedBenchmarkSubscriptionCloseFailure,
+          Effect.andThen(Fiber.interrupt(watched.fiber)),
+          Effect.asVoid,
+        ),
     { discard: true },
   );
 });
@@ -806,6 +815,73 @@ const runDeltaFanoutCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.deltaF
   },
 );
 
+const runPartitionedWriteConvergenceCase = Effect.fn(
+  "ViewServerRuntime.grpc.leased.bench.partitionedWriteConvergence.run",
+)(function* (name: string, currentProfile: BenchmarkProfile) {
+  const trackedSubscriptions: Array<WatchedSubscription> = [];
+  return yield* Effect.gen(function* () {
+    const regions = Array.from({ length: routeCount }, (_value, index) => `route-${index}`);
+    const beforeSubscribe = performance.now();
+    const subscriptions = yield* Effect.forEach(regions, (region) =>
+      currentProfile.manager.liveClient.subscribe("orders", {
+        select: ["id", "price", "status", "region"],
+        where: {
+          region: { eq: region },
+        },
+        orderBy: [{ field: "updatedAt", direction: "desc" }],
+        limit: rowsPerFeed,
+      }),
+    );
+    const afterSubscribe = performance.now();
+    const watchedSubscriptions = yield* Effect.forEach(subscriptions, (subscription) =>
+      watchSubscriptionRows(subscription).pipe(
+        Effect.tap((watched) =>
+          Effect.sync(() => {
+            trackedSubscriptions.push(watched);
+          }),
+        ),
+      ),
+    );
+    const beforeRows = performance.now();
+    yield* Effect.forEach(
+      regions,
+      (region) =>
+        offerRows(queueForRoute(currentProfile.queues, region), nextRows(region, rowsPerFeed)),
+      { discard: true },
+    );
+    yield* Effect.forEach(
+      watchedSubscriptions,
+      (subscription) => waitForWatchedRows(subscription, rowsPerFeed),
+      { discard: true },
+    );
+    const afterRows = performance.now();
+    const healthBefore = performance.now();
+    const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
+    const healthAfter = performance.now();
+    expect(activeLeasedFeedCount(health)).toBe(routeCount);
+    const cleanupBefore = performance.now();
+    yield* closeTrackedSubscriptions(trackedSubscriptions);
+    const cleanupAfter = performance.now();
+    const cleanupHealth = yield* readHealthOverlay(
+      currentProfile.runtimeCore,
+      currentProfile.health,
+    );
+    expect(activeLeasedFeedCount(cleanupHealth)).toBe(0);
+    samples.push({
+      activeLeasedFeeds: activeLeasedFeedCount(health),
+      cleanupMs: cleanupAfter - cleanupBefore,
+      cleanupActiveLeasedFeeds: activeLeasedFeedCount(cleanupHealth),
+      deltaFanoutMs: 0,
+      healthOverlayMs: healthAfter - healthBefore,
+      name,
+      rows: rowsPerFeed * regions.length,
+      rowsPerSecond: ((rowsPerFeed * regions.length) / (afterRows - beforeRows)) * 1_000,
+      snapshotMs: afterRows - beforeRows,
+      subscriptionMs: afterSubscribe - beforeSubscribe,
+    });
+  }).pipe(Effect.ensuring(closeTrackedSubscriptions(trackedSubscriptions)));
+});
+
 const runCleanupLatencyCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.cleanupLatency.run")(
   function* (name: string, currentProfile: BenchmarkProfile) {
     const trackedSubscriptions: Array<WatchedSubscription> = [];
@@ -918,6 +994,16 @@ const benchmarkCases: ReadonlyArray<BenchmarkCase> = [
     name: "gRPC leased delta fanout",
     run: () =>
       Effect.runPromise(runDeltaFanoutCase("gRPC leased delta fanout", currentBenchmarkProfile())),
+  },
+  {
+    name: "gRPC leased partitioned write convergence",
+    run: () =>
+      Effect.runPromise(
+        runPartitionedWriteConvergenceCase(
+          "gRPC leased partitioned write convergence",
+          currentBenchmarkProfile(),
+        ),
+      ),
   },
   {
     name: "gRPC leased last-subscriber cleanup",
@@ -1099,6 +1185,7 @@ afterAll(async () => {
       "Benchmark uses the production leased gRPC manager with in-memory Stream sources.",
       "Rows are written into leased feed queues, then observed through the runtime-core live subscription path.",
       "Retained local-filter case keeps one lease holder active so the measured subscriber reads an already-retained feed.",
+      "Partitioned write-convergence case opens routeCount leased feeds, writes rowsPerFeed rows into each route, and waits for every subscriber to converge.",
     ],
     queuedEventCount,
     routeCount,
