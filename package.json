@@ -14,6 +14,7 @@
     "bench:baseline:grouped-order-neutral": "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral",
     "bench:baseline:grouped-order-neutral:update": "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral --update-baseline",
     "bench:baseline:grpc-leased": "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased",
+    "bench:baseline:grpc-leased-retained": "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased-retained --no-compare",
     "bench:baseline:grpc-leased:update": "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased --update-baseline",
     "bench:baseline:grpc-materialized": "node scripts/run-benchmark-baseline.mjs --profile=grpc-materialized",
     "bench:baseline:grpc-materialized:update": "node scripts/run-benchmark-baseline.mjs --profile=grpc-materialized --update-baseline",

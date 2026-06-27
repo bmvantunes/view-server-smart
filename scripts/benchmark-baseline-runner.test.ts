@@ -200,6 +200,7 @@ describe("benchmark baseline runner", () => {
       groupedOrderNeutralUpdate: scripts["bench:baseline:grouped-order-neutral:update"],
       grpcGate: scripts["grpc:gate"],
       grpcLeased: scripts["bench:baseline:grpc-leased"],
+      grpcLeasedRetained: scripts["bench:baseline:grpc-leased-retained"],
       grpcLeasedUpdate: scripts["bench:baseline:grpc-leased:update"],
       grpcMaterialized: scripts["bench:baseline:grpc-materialized"],
       grpcMaterializedUpdate: scripts["bench:baseline:grpc-materialized:update"],
@@ -227,6 +228,8 @@ describe("benchmark baseline runner", () => {
       grpcGate:
         "pnpm run ready && pnpm run bench:baseline:grpc-materialized && pnpm run bench:baseline:grpc-leased",
       grpcLeased: "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased",
+      grpcLeasedRetained:
+        "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased-retained --no-compare",
       grpcLeasedUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased --update-baseline",
       grpcMaterialized: "node scripts/run-benchmark-baseline.mjs --profile=grpc-materialized",
@@ -263,6 +266,7 @@ describe("benchmark baseline runner", () => {
         !name.endsWith(":update") &&
         name !== "bench:baseline:grpc-materialized" &&
         name !== "bench:baseline:grpc-leased" &&
+        name !== "bench:baseline:grpc-leased-retained" &&
         command === command.replace(" --no-compare", ""),
       )
       .map(([name]) => name)
@@ -283,6 +287,7 @@ describe("benchmark baseline runner", () => {
     expect(preGrpcBenchmarkGates).not.toContain("bench:baseline:release");
     expect(preGrpcBenchmarkGates).not.toContain("bench:baseline:grpc-materialized");
     expect(preGrpcBenchmarkGates).not.toContain("bench:baseline:grpc-leased");
+    expect(preGrpcBenchmarkGates).not.toContain("bench:baseline:grpc-leased-retained");
   });
 
   it("keeps the gRPC gate scoped to gRPC runtime baselines", () => {
@@ -293,6 +298,9 @@ describe("benchmark baseline runner", () => {
       "pnpm run bench:baseline:grpc-materialized",
       "pnpm run bench:baseline:grpc-leased",
     ]);
+    expect(scripts["grpc:gate"].split(" && ")).not.toContain(
+      "pnpm run bench:baseline:grpc-leased-retained",
+    );
   });
 
   it("defines raw read and write performance gate tasks", () => {
@@ -543,9 +551,21 @@ describe("benchmark baseline runner", () => {
   it("defines the gRPC runtime benchmark tasks", () => {
     const materializedTasks = profiles.get("grpc-materialized") ?? [];
     const leasedTasks = profiles.get("grpc-leased") ?? [];
+    const retainedTasks = profiles.get("grpc-leased-retained") ?? [];
 
     expect({
       leased: leasedTasks.map((task) => ({
+        artifactKind: task.expectedArtifactKind,
+        benchmarkScope: task.expectedBenchmarkScope,
+        iterations: task.env["VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"],
+        outputJsonPath: task.packageOutputJsonPath,
+        retainedRows: task.env["VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_RETAINED_ROWS"],
+        routeCount: task.env["VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_ROUTE_COUNT"],
+        rowCount: task.env["VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_ROWS_PER_FEED"],
+          task: task.args,
+          timeMs: task.env["VIEW_SERVER_RUNTIME_BENCH_TIME_MS"],
+        })),
+      retained: retainedTasks.map((task) => ({
         artifactKind: task.expectedArtifactKind,
         benchmarkScope: task.expectedBenchmarkScope,
         iterations: task.env["VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"],
@@ -574,6 +594,19 @@ describe("benchmark baseline runner", () => {
           iterations: "3",
           outputJsonPath: ".artifacts/grpc-leased-50rows-25routes-500retained.json",
           retainedRows: "500",
+          routeCount: "25",
+          rowCount: "50",
+          task: ["run", "--no-cache", "runtime#bench:grpc-leased"],
+          timeMs: "0",
+        },
+      ],
+      retained: [
+        {
+          artifactKind: "runtime-benchmark-summary",
+          benchmarkScope: "runtime-grpc-leased",
+          iterations: "3",
+          outputJsonPath: ".artifacts/grpc-leased-50rows-25routes-50000retained.json",
+          retainedRows: "50000",
           routeCount: "25",
           rowCount: "50",
           task: ["run", "--no-cache", "runtime#bench:grpc-leased"],
@@ -1421,7 +1454,7 @@ describe("benchmark baseline runner", () => {
     }).toStrictEqual({
       exitCode: 1,
       message:
-        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, grpc-materialized, grpc-leased, websocket-firehose, active-query-sharing, raw-read-write, grouped-admission, grouped-order-neutral, release",
+        "Unknown benchmark baseline profile: missing\nAvailable profiles: smoke, kafka-ingest, kafka-sustained-firehose, grpc-materialized, grpc-leased, grpc-leased-retained, websocket-firehose, active-query-sharing, raw-read-write, grouped-admission, grouped-order-neutral, release",
     });
   });
 

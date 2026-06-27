@@ -322,6 +322,7 @@ describe("benchmark baseline comparison", () => {
     expect({
       groupedOrderNeutral: benchmarkThresholdsForProfile("grouped-order-neutral"),
       grpcLeased: benchmarkThresholdsForProfile("grpc-leased"),
+      grpcLeasedRetained: benchmarkThresholdsForProfile("grpc-leased-retained"),
       grpcMaterialized: benchmarkThresholdsForProfile("grpc-materialized"),
       kafkaIngest: benchmarkThresholdsForProfile("kafka-ingest"),
       kafkaSustainedFirehose: benchmarkThresholdsForProfile("kafka-sustained-firehose"),
@@ -339,11 +340,14 @@ describe("benchmark baseline comparison", () => {
       orderNeutralBaseline: buildBenchmarkBaseline("grouped-order-neutral", [observation])
         .thresholds,
       grpcLeasedBaseline: buildBenchmarkBaseline("grpc-leased", [observation]).thresholds,
+      grpcLeasedRetainedBaseline: buildBenchmarkBaseline("grpc-leased-retained", [observation])
+        .thresholds,
       grpcMaterializedBaseline: buildBenchmarkBaseline("grpc-materialized", [observation])
         .thresholds,
     }).toStrictEqual({
       groupedOrderNeutral: groupedOrderNeutralBenchmarkThresholds,
       grpcLeased: grpcRuntimeBenchmarkThresholds,
+      grpcLeasedRetained: grpcRuntimeBenchmarkThresholds,
       grpcMaterialized: grpcRuntimeBenchmarkThresholds,
       kafkaIngest: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehose: kafkaSustainedFirehoseBenchmarkThresholds,
@@ -357,6 +361,7 @@ describe("benchmark baseline comparison", () => {
       websocketFirehoseBaseline: websocketFirehoseBenchmarkThresholds,
       orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
       grpcLeasedBaseline: grpcRuntimeBenchmarkThresholds,
+      grpcLeasedRetainedBaseline: grpcRuntimeBenchmarkThresholds,
       grpcMaterializedBaseline: grpcRuntimeBenchmarkThresholds,
     });
   });

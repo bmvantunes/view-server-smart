@@ -150,7 +150,9 @@ export const benchmarkThresholdsForProfile = (profile) =>
       ? kafkaSustainedFirehoseBenchmarkThresholds
     : profile === "websocket-firehose"
       ? websocketFirehoseBenchmarkThresholds
-    : profile === "grpc-materialized" || profile === "grpc-leased"
+    : profile === "grpc-materialized" ||
+        profile === "grpc-leased" ||
+        profile === "grpc-leased-retained"
       ? grpcRuntimeBenchmarkThresholds
     : defaultBenchmarkThresholds;
 

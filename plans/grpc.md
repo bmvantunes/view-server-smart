@@ -778,6 +778,7 @@ Current leased-feed benchmark command:
 ```sh
 pnpm --filter @view-server/runtime run bench:grpc-leased
 pnpm run bench:baseline:grpc-leased
+pnpm run bench:baseline:grpc-leased-retained
 ```
 
 This benchmark uses the production lease manager with Queue-backed in-process streams:
@@ -794,9 +795,10 @@ Current leased benchmark profiles:
 - leased partitioned write convergence over `routeCount` active routed feeds
 - leased health refresh overhead while `routeCount` routed feeds remain active
 - retained local-filter snapshot report metadata over the configured retained rows. The direct
-  `bench:grpc-leased` script defaults this retained case to 50k rows; the committed
-  `grpc:gate` smoke baseline intentionally overrides it to 500 rows until repeated
-  local runs are stable enough for a heavier gate.
+  `bench:grpc-leased` script defaults this retained case to 50k rows. The committed
+  `grpc:gate` smoke baseline intentionally overrides it to 500 rows, while
+  `bench:baseline:grpc-leased-retained` runs the 50k retained-row profile in report-only mode
+  until repeated local runs are stable enough for a heavier gate.
 - leased delta fanout report metadata for multiple subscribers over one feed
 - leased last-subscriber cleanup report metadata as an explicit case
 - many routes with one subscriber each, including health overlay timing metadata
@@ -804,8 +806,8 @@ Current leased benchmark profiles:
 
 Future leased benchmark profiles:
 
-- repeated-run stability for the direct 50k retained local-filter snapshot before
-  promoting that heavier case into the smoke gate
+- promote the 50k retained local-filter snapshot report profile into a strict compare gate once
+  repeated runs prove it is stable enough for CI
 - repeated-run stability before tightening inner-operation max-latency gates
 
 The smoke gRPC benchmark baselines are part of `pnpm run grpc:gate`, not the
