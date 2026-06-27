@@ -131,11 +131,15 @@ export const makeRuntimeCoreClient = Effect.fn("ViewServerRuntimeCore.client.mak
             .snapshot<Topic, Query>(topic, query)
             .pipe(Effect.mapError(engineErrorToRuntimeError));
         });
+      const publish = Effect.fn("ViewServerRuntimeCore.client.publish")(function* <
+        Topic extends Extract<keyof Topics, string>,
+      >(topic: Topic, row: TopicRow<Topics, Topic>) {
+        yield* Effect.uninterruptible(
+          engine.publish(topic, row).pipe(Effect.tap(() => requestHealthRefresh())),
+        ).pipe(Effect.mapError(engineErrorToRuntimeError));
+      });
       const internalClient: ViewServerRuntimeCoreInternalClient<Topics> = {
-        publish: (topic, row) =>
-          Effect.uninterruptible(
-            engine.publish(topic, row).pipe(Effect.tap(() => requestHealthRefresh())),
-          ).pipe(Effect.mapError(engineErrorToRuntimeError)),
+        publish,
         publishMany: (topic, rows) =>
           Effect.uninterruptible(
             engine.publishMany(topic, rows).pipe(Effect.tap(() => requestHealthRefresh())),
