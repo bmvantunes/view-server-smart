@@ -1,4 +1,5 @@
 import type {
+  GrpcFeedHealth,
   TopicDefinitions,
   ViewServerConfig,
   ViewServerHealth,
@@ -37,6 +38,29 @@ function typedHealth(health: ViewServerWireHealth): ViewServerWireHealth {
   return health;
 }
 
+const validateGrpcFeedHealth = Effect.fn("ViewServerProtocol.health.grpcFeed.validate")(function* (
+  topicName: string,
+  expectedLifecycle: GrpcFeedHealth["lifecycle"],
+  feed: GrpcFeedHealth,
+) {
+  if (feed.topic !== topicName) {
+    return yield* Effect.fail(
+      invalidHealthRow(
+        topicName,
+        `Health payload feed topic does not match feed group: ${feed.topic} != ${topicName}`,
+      ),
+    );
+  }
+  if (feed.lifecycle !== expectedLifecycle) {
+    return yield* Effect.fail(
+      invalidHealthRow(
+        topicName,
+        `Health payload ${expectedLifecycle} feed has ${feed.lifecycle} lifecycle: ${feed.feedName}`,
+      ),
+    );
+  }
+});
+
 export const viewServerDecodeHealth = Effect.fn("ViewServerProtocol.health.decode")(function* <
   const Topics extends TopicDefinitions,
 >(config: ViewServerConfig<Topics>, health: ViewServerWireHealth) {
@@ -70,6 +94,19 @@ export const viewServerDecodeHealth = Effect.fn("ViewServerProtocol.health.decod
           `Health payload references unknown topic: ${kafkaTopic.viewServerTopic}`,
         ),
       );
+    }
+  }
+  for (const [topicName, feeds] of Object.entries(normalizedHealth.grpc?.feeds ?? {})) {
+    if (!hasConfiguredTopic(config, topicName)) {
+      return yield* Effect.fail(
+        invalidHealthRow(topicName, `Health payload references unknown topic: ${topicName}`),
+      );
+    }
+    for (const feed of Object.values(feeds.materialized)) {
+      yield* validateGrpcFeedHealth(topicName, "materialized", feed);
+    }
+    for (const feed of Object.values(feeds.leased)) {
+      yield* validateGrpcFeedHealth(topicName, "leased", feed);
     }
   }
   return typedHealth<Topics>(normalizedHealth);

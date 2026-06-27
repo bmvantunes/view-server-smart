@@ -1,36 +1,36 @@
-import {
-  createColumnLiveViewEngine,
-  type DecodableTopicDefinitions,
-  type GroupedIncrementalAdmissionLimits,
+import type {
+  DecodableTopicDefinitions,
+  GroupedIncrementalAdmissionLimits,
 } from "@view-server/column-live-view-engine";
-import type { ViewServerRuntimeLiveClient } from "@view-server/client";
 import type {
   ViewServerConfig,
   ViewServerHealth,
-  ViewServerRuntimeClient,
   ViewServerRuntimeError,
 } from "@view-server/config";
-import { runAllFinalizers } from "@view-server/effect-utils";
-import { Clock, Effect } from "effect";
-import { AtomRef } from "effect/unstable/reactivity";
-import {
-  defaultRuntimeCoreTransportHealth,
-  healthFromEngine,
-  type RuntimeCoreHealthOverlay,
-  type RuntimeCoreTransportHealth,
-} from "./health";
+import { Effect } from "effect";
+import { type RuntimeCoreHealthOverlay, type RuntimeCoreTransportHealth } from "./health";
 import type * as Duration from "effect/Duration";
-import { makeRuntimeCoreLiveClient } from "./live-client";
-import { makeRuntimeCoreClient } from "./runtime-client";
+import { makeViewServerRuntimeCoreInternal } from "./internal";
+import type {
+  ViewServerRuntimeCorePublicClient,
+  ViewServerRuntimeCorePublicLiveClient,
+  ViewServerRuntimeCoreServerLiveClient,
+} from "./public-client";
 
 export type { DecodableTopicDefinitions } from "@view-server/column-live-view-engine";
 export type { GroupedIncrementalAdmissionLimits } from "@view-server/column-live-view-engine";
 export type { RuntimeCoreTransportHealth } from "./health";
 export type { RuntimeCoreHealthOverlay } from "./health";
+export type {
+  ViewServerRuntimeCorePublicClient,
+  ViewServerRuntimeCorePublicLiveClient,
+  ViewServerRuntimeCoreServerLiveClient,
+} from "./public-client";
 
 export type ViewServerRuntimeCoreInstance<Topics extends DecodableTopicDefinitions> = {
-  readonly client: ViewServerRuntimeClient<Topics>;
-  readonly liveClient: ViewServerRuntimeLiveClient<Topics>;
+  readonly client: ViewServerRuntimeCorePublicClient<Topics>;
+  readonly liveClient: ViewServerRuntimeCorePublicLiveClient<Topics>;
+  readonly serverLiveClient: ViewServerRuntimeCoreServerLiveClient<Topics>;
   readonly close: Effect.Effect<void>;
   readonly requestHealthRefresh: Effect.Effect<void>;
   readonly refreshHealth: Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;
@@ -55,55 +55,22 @@ export type ViewServerRuntimeCoreOptionsFor<Topics extends DecodableTopicDefinit
 export const makeViewServerRuntimeCore: <const Topics extends DecodableTopicDefinitions>(
   config: ViewServerConfig<Topics>,
   input: ViewServerRuntimeCoreOptionsFor<Topics>,
-) => Effect.Effect<ViewServerRuntimeCoreInstance<Topics>> = Effect.fn("ViewServerRuntimeCore.make")(
-  function* <const Topics extends DecodableTopicDefinitions>(
-    config: ViewServerConfig<Topics>,
-    input: ViewServerRuntimeCoreOptionsFor<Topics>,
-  ) {
-    const transportHealth = input.transportHealth ?? defaultRuntimeCoreTransportHealth;
-    const healthOverlay = input.healthOverlay;
-    const engineConfig = {
-      ...(input.groupedIncrementalAdmissionLimits === undefined
-        ? {}
-        : { groupedIncrementalAdmissionLimits: input.groupedIncrementalAdmissionLimits }),
-      ...(input.subscriptionQueueCapacity === undefined
-        ? {}
-        : { subscriptionQueueCapacity: input.subscriptionQueueCapacity }),
-      topics: config.topics,
-    };
-    const engine = yield* createColumnLiveViewEngine<Topics>(engineConfig);
-    const engineHealth = yield* engine.health();
-    const nowMillis = yield* Clock.currentTimeMillis;
-    const health: AtomRef.AtomRef<ViewServerHealth<Topics>> = AtomRef.make(
-      healthFromEngine(engineHealth, transportHealth, healthOverlay, nowMillis),
-    );
-    const runtimeClient = yield* makeRuntimeCoreClient<Topics>(
-      config,
-      engine,
-      health,
-      transportHealth,
-      healthOverlay,
-      input.healthRefreshCadence,
-    );
-    const liveClient = yield* makeRuntimeCoreLiveClient<Topics>(
-      config,
-      engine,
-      health,
-      runtimeClient.refreshHealth,
-    );
-    const close = Effect.uninterruptible(runAllFinalizers([runtimeClient.close, liveClient.close]));
-    return {
-      client: runtimeClient.client,
-      liveClient: {
-        ...liveClient,
-        close,
-      },
-      close,
-      requestHealthRefresh: runtimeClient.requestHealthRefresh,
-      refreshHealth: runtimeClient.refreshHealth,
-    };
-  },
-);
+) => Effect.Effect<ViewServerRuntimeCoreInstance<Topics>, ViewServerRuntimeError> = Effect.fn(
+  "ViewServerRuntimeCore.make",
+)(function* <const Topics extends DecodableTopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  input: ViewServerRuntimeCoreOptionsFor<Topics>,
+) {
+  const runtimeCore = yield* makeViewServerRuntimeCoreInternal(config, input);
+  return {
+    client: runtimeCore.publicClient,
+    liveClient: runtimeCore.publicLiveClient,
+    serverLiveClient: runtimeCore.liveClient,
+    close: runtimeCore.close,
+    requestHealthRefresh: runtimeCore.requestHealthRefresh,
+    refreshHealth: runtimeCore.refreshHealth,
+  };
+});
 
 export const createViewServerRuntimeCore = <const Topics extends DecodableTopicDefinitions>(
   config: ViewServerConfig<Topics>,

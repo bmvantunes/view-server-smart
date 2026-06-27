@@ -9,6 +9,7 @@ import { Buffer } from "node:buffer";
 import {
   decodeKafkaTopicMessage,
   kafkaErrorIsMapping,
+  type RuntimeRegions,
   type KafkaMessageMetadata,
   type KafkaDecodedTopicMessage,
   type TopicRow,
@@ -189,8 +190,11 @@ export const kafkaHeadersFromMessage = (
   return output;
 };
 
-export const sourceTopicsForRegion = <const Topics extends ViewServerRuntimeTopicDefinitions>(
-  options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+export const sourceTopicsForRegion = <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Regions extends RuntimeRegions,
+>(
+  options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   region: string,
 ): ReadonlyArray<string> => {
   const topics: Array<string> = [];
@@ -624,10 +628,13 @@ export const acquireStartedKafkaConsumerResources = Effect.fn(
 });
 
 const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.decodeForBatch")(
-  function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
+  function* <
+    const Topics extends ViewServerRuntimeTopicDefinitions,
+    const Regions extends RuntimeRegions,
+  >(
     config: ViewServerConfig<Topics>,
     requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-    options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+    options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
     health: ViewServerKafkaHealthLedger<Topics>,
     region: string,
     message: KafkaConsumerMessage,
@@ -637,13 +644,17 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
     if (topic === undefined) {
       return Option.none<DecodedKafkaBatchMessage<Topics>>();
     }
+    const topicRegion = topic.regions.find((candidate) => candidate === region);
+    if (topicRegion === undefined) {
+      return Option.none<DecodedKafkaBatchMessage<Topics>>();
+    }
     const nowMillis = yield* Clock.currentTimeMillis;
     const keyBytes = message.key ?? emptyMessageBytes;
     const valueBytes = message.value ?? emptyMessageBytes;
     const messageBytes = valueBytes.byteLength + keyBytes.byteLength;
-    const metadata: KafkaMessageMetadata = {
+    const metadata: KafkaMessageMetadata<typeof topicRegion> = {
       sourceTopic,
-      sourceRegion: region,
+      sourceRegion: topicRegion,
       partition: message.partition,
       offset: String(message.offset),
       timestamp: Number(message.timestamp),
@@ -653,7 +664,7 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
     const decoded = yield* decodeKafkaTopicMessage(topic, {
       keyBytes,
       valueBytes,
-      region,
+      region: topicRegion,
       metadata,
     }).pipe(
       Effect.matchCauseEffect({
@@ -857,11 +868,14 @@ const commitKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.commit"
 });
 
 export const processKafkaMessageBatch = Effect.fn("ViewServerRuntime.kafka.messageBatch.process")(
-  function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
+  function* <
+    const Topics extends ViewServerRuntimeTopicDefinitions,
+    const Regions extends RuntimeRegions,
+  >(
     config: ViewServerConfig<Topics>,
     client: ViewServerRuntimeClient<Topics>,
     requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-    options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+    options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
     health: ViewServerKafkaHealthLedger<Topics>,
     region: string,
     batch: ReadonlyArray<KafkaConsumerMessage>,
@@ -917,11 +931,12 @@ export const processKafkaMessageBatch = Effect.fn("ViewServerRuntime.kafka.messa
 
 export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.process")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-  options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+  options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
   region: string,
   message: KafkaConsumerMessage,
@@ -1055,11 +1070,12 @@ const takeKafkaMessageBatch: (
 
 export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.run")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-  options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+  options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
   region: string,
   stream: AsyncIterable<KafkaConsumerMessage>,
@@ -1308,11 +1324,12 @@ const startKafkaLagMonitoring = Effect.fn("ViewServerRuntime.kafka.consumer.star
 
 const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-  options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+  options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
   region: string,
   brokers: string,
@@ -1439,19 +1456,25 @@ export const makeScopedKafkaIngress = Effect.fn("ViewServerRuntime.kafka.ingress
   },
 );
 
-export const makeViewServerKafkaIngress: <const Topics extends ViewServerRuntimeTopicDefinitions>(
+export const makeViewServerKafkaIngress: <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Regions extends RuntimeRegions,
+>(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-  options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+  options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
 ) => Effect.Effect<ViewServerKafkaIngress, ViewServerKafkaIngressError> = Effect.fn(
   "ViewServerRuntime.kafka.ingress.make",
-)(function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
+)(function* <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+  const Regions extends RuntimeRegions,
+>(
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-  options: ResolvedViewServerKafkaRuntimeOptions<Topics>,
+  options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
 ) {
   return yield* makeScopedKafkaIngress((scope) =>

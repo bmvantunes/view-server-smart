@@ -1,4 +1,7 @@
 import type {
+  GrpcClientHealth,
+  GrpcFeedHealth,
+  GrpcRuntimeHealth,
   KafkaStartFromHealth,
   TopicRuntimeHealth,
   TransportHealth,
@@ -67,6 +70,43 @@ const KafkaStartFromHealthSchema: Schema.Codec<KafkaStartFromHealth> = Schema.Un
   }),
 ]);
 
+const GrpcClientHealthSchema: Schema.Codec<GrpcClientHealth> = Schema.Struct({
+  status: Schema.Literals(["connected", "disconnected", "degraded", "starting"]),
+  baseUrl: Schema.String,
+  activeFeeds: Schema.Number,
+  lastConnectedAt: NumberOrNull,
+  lastError: StringOrNull,
+});
+
+const GrpcFeedHealthSchema: Schema.Codec<GrpcFeedHealth> = Schema.Struct({
+  status: Schema.Literals(["starting", "ready", "degraded", "stopping"]),
+  lifecycle: Schema.Literals(["materialized", "leased"]),
+  feedName: Schema.String,
+  feedKey: Schema.String,
+  topic: Schema.String,
+  subscriberCount: Schema.Number,
+  rowCount: Schema.Number,
+  messagesPerSecond: Schema.Number,
+  rowsPerSecond: Schema.Number,
+  decodeFailuresPerSecond: Schema.Number,
+  mappingFailuresPerSecond: Schema.Number,
+  publishFailuresPerSecond: Schema.Number,
+  reconnects: Schema.Number,
+  lastMessageAt: NumberOrNull,
+  lastError: StringOrNull,
+});
+
+const GrpcRuntimeHealthSchema: Schema.Codec<GrpcRuntimeHealth> = Schema.Struct({
+  clients: Schema.Record(Schema.String, GrpcClientHealthSchema),
+  feeds: Schema.Record(
+    Schema.String,
+    Schema.Struct({
+      materialized: Schema.Record(Schema.String, GrpcFeedHealthSchema),
+      leased: Schema.Record(Schema.String, GrpcFeedHealthSchema),
+    }),
+  ),
+});
+
 export const ViewServerHealthSchema = Schema.Struct({
   status: Schema.Literals(["ready", "degraded", "starting", "stopping"]),
   version: Schema.Number,
@@ -117,6 +157,7 @@ export const ViewServerHealthSchema = Schema.Struct({
       ),
     }),
   ),
+  grpc: Schema.optionalKey(GrpcRuntimeHealthSchema),
   transport: TransportHealthSchema,
 });
 

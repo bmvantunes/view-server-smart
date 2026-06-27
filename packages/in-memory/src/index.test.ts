@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
-import { defineViewServerConfig } from "@view-server/config";
+import { defineViewServerConfig, grpc } from "@view-server/config";
 import { Effect, Schema, Stream } from "effect";
 import { createInMemoryViewServer, makeInMemoryViewServer } from "./index";
+import { createInMemoryViewServerTesting, makeInMemoryViewServerTesting } from "./testing";
 
 const Order = Schema.Struct({
   id: Schema.String,
@@ -13,6 +14,18 @@ const viewServer = defineViewServerConfig({
     orders: {
       schema: Order,
       key: "id",
+    },
+  },
+});
+
+const leasedViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.leased({
+        routeBy: ["id"],
+      }),
     },
   },
 });
@@ -156,6 +169,80 @@ describe("@view-server/in-memory", () => {
       const health = yield* inMemory.client.health();
       expect(health.status).toBe("stopping");
       expect(health.engine.topics.orders.rowCount).toBe(1);
+      yield* inMemory.close;
+    }),
+  );
+
+  it.effect("testing adapter exposes runtime subscriptions without widening mutation client", () =>
+    Effect.gen(function* () {
+      const inMemory = yield* makeInMemoryViewServerTesting(viewServer, {
+        groupedIncrementalAdmissionLimits: {
+          maxGroups: 1,
+        },
+        healthRefreshCadence: "1 minute",
+        subscriptionQueueCapacity: 8,
+      });
+
+      yield* inMemory.client.publish("orders", { id: "order-1", price: 10 });
+      const runtimeSubscription = yield* inMemory.liveClient.subscribeRuntime("orders", {
+        select: ["id", "price"],
+        limit: 10,
+      });
+      const events = yield* runtimeSubscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "orders",
+        queryId: "query-0",
+        version: 1,
+        keys: ["order-1"],
+        rows: [{ id: "order-1", price: 10 }],
+        totalRows: 1,
+      });
+      expect("subscribeRuntime" in inMemory.client).toBe(false);
+
+      yield* runtimeSubscription.close();
+      yield* inMemory.close;
+    }),
+  );
+
+  it.effect("testing adapter subscribes to leased gRPC topics through the internal live seam", () =>
+    Effect.gen(function* () {
+      const inMemory = yield* makeInMemoryViewServerTesting(leasedViewServer, {});
+      const subscription = yield* inMemory.liveClient.subscribe("orders", {
+        select: ["id", "price"],
+        where: {
+          id: { eq: "order-1" },
+        },
+        limit: 10,
+      });
+      const events = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "orders",
+        queryId: "query-0",
+        version: 0,
+        keys: [],
+        rows: [],
+        totalRows: 0,
+      });
+
+      yield* subscription.close();
+      yield* inMemory.close;
+    }),
+  );
+
+  it.effect("supports synchronous testing adapter construction", () =>
+    Effect.gen(function* () {
+      const inMemory = createInMemoryViewServerTesting(viewServer);
+
+      yield* inMemory.client.publish("orders", { id: "order-1", price: 10 });
+      const health = yield* inMemory.client.health();
+
+      expect(health.engine.topics.orders.rowCount).toBe(1);
+      expect("subscribeRuntime" in inMemory.liveClient).toBe(true);
+
       yield* inMemory.close;
     }),
   );

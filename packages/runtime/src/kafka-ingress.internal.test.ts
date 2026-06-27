@@ -6150,6 +6150,26 @@ describe("@view-server/runtime Kafka ingress internals", () => {
         runtimeCore.requestHealthRefresh,
         kafkaOptions,
         ledger,
+        "cold",
+        kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "wrong-region",
+          value: JSON.stringify({
+            customerId: "wrong-region",
+            price: 999,
+          }),
+          offset: 9n,
+          onCommit: () => {
+            committedMessages += 1;
+          },
+        }),
+      );
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        kafkaOptions,
+        ledger,
         "local",
         kafkaMessage({
           topic: ordersSourceTopic,

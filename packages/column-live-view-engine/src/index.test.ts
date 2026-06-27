@@ -22,6 +22,7 @@ import {
   type ColumnLiveViewEngineEvent,
   type ColumnLiveViewSubscription,
 } from "./index";
+import { createColumnLiveViewEngineInternal } from "./internal";
 import { TopicRowStorage } from "./topic-row-storage";
 import {
   acquireMaterializedQueryExecution,
@@ -12726,6 +12727,77 @@ describe("ColumnLiveViewEngine validation and health", () => {
 
       const health = yield* engine.health();
       expect(health.activeSubscriptions).toBe(0);
+    }),
+  );
+
+  it.effect(
+    "validates storage-key rows against public row keys while storing by internal key",
+    () =>
+      Effect.gen(function* () {
+        const PublicOrder = Schema.Struct({
+          id: Schema.String.pipe(Schema.check(Schema.isPattern(/^public-/))),
+          price: Schema.Number,
+        });
+        const publicViewServer = defineViewServerConfig({
+          topics: {
+            orders: {
+              schema: PublicOrder,
+              key: "id",
+            },
+          },
+        });
+        const engine = yield* createColumnLiveViewEngineInternal({
+          topics: publicViewServer.topics,
+        });
+
+        yield* engine.publishManyWithStorageKeys("orders", [
+          {
+            storageKey: "orders/lease/row/public-order-1",
+            row: {
+              id: "public-order-1",
+              price: 42,
+            },
+          },
+        ]);
+        const subscription = yield* engine.subscribe("orders", {
+          select: ["id", "price"],
+          limit: 10,
+        });
+        const read = yield* makeEventReader(subscription);
+        const event = firstEvent(yield* read(1));
+        expectSnapshotEvent(event);
+        expect(event.keys).toStrictEqual(["orders/lease/row/public-order-1"]);
+        expect(event.rows).toStrictEqual([
+          {
+            id: "public-order-1",
+            price: 42,
+          },
+        ]);
+
+        yield* engine.delete("orders", "orders/lease/row/public-order-1");
+        const snapshot = yield* engine.snapshot("orders", {
+          select: ["id", "price"],
+          limit: 10,
+        });
+
+        expect(snapshot).toStrictEqual({
+          rows: [],
+          totalRows: 0,
+          version: 2,
+          status: "ready",
+          statusCode: "Ready",
+        });
+        yield* subscription.close();
+      }),
+  );
+
+  it.effect("does not expose storage-key publishing from the public engine factory", () =>
+    Effect.gen(function* () {
+      const engine = yield* createColumnLiveViewEngine({
+        topics: viewServer.topics,
+      });
+
+      expect("publishManyWithStorageKeys" in engine).toBe(false);
     }),
   );
 

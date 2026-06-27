@@ -17,7 +17,7 @@ export default defineConfig({
       },
     },
   },
-  pack: libraryPack("src/index.ts"),
+  pack: libraryPack(["src/index.ts", "src/internal.ts"]),
   lint: {
     options: {
       typeAware: true,

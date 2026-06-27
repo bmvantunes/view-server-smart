@@ -137,6 +137,24 @@ const wireHealth = {
   },
 } as const;
 
+const grpcFeedHealth = {
+  status: "ready",
+  lifecycle: "materialized",
+  feedName: "ordersFeed",
+  feedKey: "orders/ordersFeed/materialized",
+  topic: "orders",
+  subscriberCount: 0,
+  rowCount: 10,
+  messagesPerSecond: 2,
+  rowsPerSecond: 2,
+  decodeFailuresPerSecond: 0,
+  mappingFailuresPerSecond: 0,
+  publishFailuresPerSecond: 0,
+  reconnects: 0,
+  lastMessageAt: 123,
+  lastError: null,
+} as const;
+
 describe("@view-server/protocol", () => {
   it.effect("decodes the public wire schemas", () =>
     Effect.gen(function* () {
@@ -2734,6 +2752,188 @@ describe("@view-server/protocol", () => {
       );
       expect(unknownKafkaViewServerTopic.message).toBe(
         "Health payload references unknown topic: missing",
+      );
+
+      const validGrpcHealth = yield* viewServerDecodeHealth(viewServer, {
+        ...wireHealth,
+        grpc: {
+          clients: {
+            orders: {
+              status: "connected",
+              baseUrl: "https://orders.example.test",
+              activeFeeds: 1,
+              lastConnectedAt: 100,
+              lastError: null,
+            },
+          },
+          feeds: {
+            orders: {
+              materialized: {
+                ordersFeed: grpcFeedHealth,
+              },
+              leased: {},
+            },
+          },
+        },
+      });
+      expect(validGrpcHealth.grpc?.feeds["orders"]?.materialized["ordersFeed"]).toStrictEqual(
+        grpcFeedHealth,
+      );
+
+      const leasedFeedInMaterializedBucket = yield* Effect.flip(
+        viewServerDecodeHealth(viewServer, {
+          ...wireHealth,
+          grpc: {
+            clients: {},
+            feeds: {
+              orders: {
+                materialized: {
+                  ordersFeed: { ...grpcFeedHealth, lifecycle: "leased" },
+                },
+                leased: {},
+              },
+            },
+          },
+        }),
+      );
+      expect(leasedFeedInMaterializedBucket.message).toBe(
+        "Health payload materialized feed has leased lifecycle: ordersFeed",
+      );
+
+      const unknownGrpcFeedGroupTopic = yield* Effect.flip(
+        viewServerDecodeHealth(viewServer, {
+          ...wireHealth,
+          grpc: {
+            clients: {},
+            feeds: {
+              missing: {
+                materialized: {
+                  ordersFeed: { ...grpcFeedHealth, topic: "missing" },
+                },
+                leased: {},
+              },
+            },
+          },
+        }),
+      );
+      expect(unknownGrpcFeedGroupTopic.message).toBe(
+        "Health payload references unknown topic: missing",
+      );
+
+      const unknownGrpcFeedTopic = yield* Effect.flip(
+        viewServerDecodeHealth(viewServer, {
+          ...wireHealth,
+          grpc: {
+            clients: {},
+            feeds: {
+              orders: {
+                materialized: {
+                  ordersFeed: { ...grpcFeedHealth, topic: "missing" },
+                },
+                leased: {},
+              },
+            },
+          },
+        }),
+      );
+      expect(unknownGrpcFeedTopic.message).toBe(
+        "Health payload feed topic does not match feed group: missing != orders",
+      );
+
+      const mismatchedGrpcFeedTopic = yield* Effect.flip(
+        viewServerDecodeHealth(viewServer, {
+          ...wireHealth,
+          grpc: {
+            clients: {},
+            feeds: {
+              orders: {
+                materialized: {
+                  ordersFeed: { ...grpcFeedHealth, topic: "badjson" },
+                },
+                leased: {},
+              },
+            },
+          },
+        }),
+      );
+      expect(mismatchedGrpcFeedTopic.message).toBe(
+        "Health payload feed topic does not match feed group: badjson != orders",
+      );
+
+      const validLeasedGrpcHealth = yield* viewServerDecodeHealth(viewServer, {
+        ...wireHealth,
+        grpc: {
+          clients: {},
+          feeds: {
+            orders: {
+              materialized: {},
+              leased: {
+                ordersLease: {
+                  ...grpcFeedHealth,
+                  lifecycle: "leased",
+                  feedName: "ordersLease",
+                  feedKey: "orders/ordersLease/region=usa",
+                  subscriberCount: 2,
+                },
+              },
+            },
+          },
+        },
+      });
+      expect(validLeasedGrpcHealth.grpc?.feeds["orders"]?.leased["ordersLease"]).toStrictEqual({
+        ...grpcFeedHealth,
+        lifecycle: "leased",
+        feedName: "ordersLease",
+        feedKey: "orders/ordersLease/region=usa",
+        subscriberCount: 2,
+      });
+
+      const materializedFeedInLeasedBucket = yield* Effect.flip(
+        viewServerDecodeHealth(viewServer, {
+          ...wireHealth,
+          grpc: {
+            clients: {},
+            feeds: {
+              orders: {
+                materialized: {},
+                leased: {
+                  ordersLease: {
+                    ...grpcFeedHealth,
+                    feedName: "ordersLease",
+                  },
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(materializedFeedInLeasedBucket.message).toBe(
+        "Health payload leased feed has materialized lifecycle: ordersLease",
+      );
+
+      const mismatchedLeasedGrpcFeedTopic = yield* Effect.flip(
+        viewServerDecodeHealth(viewServer, {
+          ...wireHealth,
+          grpc: {
+            clients: {},
+            feeds: {
+              orders: {
+                materialized: {},
+                leased: {
+                  ordersLease: {
+                    ...grpcFeedHealth,
+                    lifecycle: "leased",
+                    feedName: "ordersLease",
+                    topic: "badjson",
+                  },
+                },
+              },
+            },
+          },
+        }),
+      );
+      expect(mismatchedLeasedGrpcFeedTopic.message).toBe(
+        "Health payload feed topic does not match feed group: badjson != orders",
       );
 
       const wrongSummaryEncodeTopic = yield* Effect.flip(

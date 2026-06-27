@@ -69,6 +69,13 @@ export type {
   Where,
 } from "./topic-contract";
 export type {
+  GrpcClientHealth,
+  GrpcClientStatus,
+  GrpcFeedHealth,
+  GrpcFeedLifecycle,
+  GrpcFeedStatus,
+  GrpcRuntimeHealth,
+  GrpcTopicFeedsHealth,
   KafkaRegionHealth,
   KafkaRegionStatus,
   KafkaStartFromHealth,
@@ -127,15 +134,23 @@ export {
 } from "./kafka-contract";
 export { grpc } from "./grpc-contract";
 export type {
+  AnyGrpcLeasedFeedDefinition,
+  AnyGrpcMaterializedFeedDefinition,
   GrpcConnectClientDefinition,
+  GrpcClientDefinitionService,
   GrpcClientValue,
   GrpcFeedAcquireInput,
+  GrpcFeedDefinition,
   GrpcFeedHelper,
   GrpcFeedMapInput,
   GrpcFeedReleaseInput,
   GrpcFeedSession,
   GrpcHelper,
+  GrpcLeasedTopic,
+  GrpcLeasedFeedDefinition,
   GrpcLeasedTopicSource,
+  GrpcMaterializedFeedDefinition,
+  GrpcMaterializedTopic,
   GrpcMaterializedTopicSource,
   GrpcMethodRequest,
   GrpcMethodValue,

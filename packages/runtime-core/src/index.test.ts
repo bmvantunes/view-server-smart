@@ -12,6 +12,7 @@ import {
   makeHealthRefreshScheduler,
   readHealth,
 } from "./health";
+import { makeViewServerRuntimeCoreInternal } from "./internal";
 import { createViewServerRuntimeCore, makeViewServerRuntimeCore } from "./index";
 import { makeRuntimeCoreLiveClient } from "./live-client";
 
@@ -62,6 +63,14 @@ const refreshFailed: ViewServerRuntimeError = {
   code: "RuntimeUnavailable",
   message: "Health refresh failed.",
 };
+
+const publicLeasedRuntimeAccessError = {
+  _tag: "ViewServerRuntimeError",
+  code: "UnsupportedQuery",
+  topic: "orders",
+  message:
+    "Leased gRPC topics do not support direct runtime mutations, one-shot snapshots, or runtime-core subscriptions; use the runtime gRPC lease manager so it owns lease lifecycle.",
+} satisfies ViewServerRuntimeError;
 
 const engineHealth = (
   status: "ready" | "stopping",
@@ -149,6 +158,29 @@ describe("@view-server/runtime-core", () => {
     }),
   );
 
+  it.effect("exposes route-bypassing internals only through the internal factory", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(viewServer, {});
+      const subscription = yield* runtimeCore.internalLiveClient.subscribeInternal("orders", {
+        select: ["id"],
+      });
+      const events = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
+
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "orders",
+        queryId: "query-0",
+        version: 0,
+        keys: [],
+        rows: [],
+        totalRows: 0,
+      });
+
+      yield* subscription.close();
+      yield* runtimeCore.close;
+    }),
+  );
+
   it.effect("supports the synchronous runtime core constructor", () =>
     Effect.gen(function* () {
       const runtimeCore = createViewServerRuntimeCore(viewServer, { subscriptionQueueCapacity: 1 });
@@ -188,7 +220,7 @@ describe("@view-server/runtime-core", () => {
     }),
   );
 
-  it.effect("rejects leased topic queries without exact runtime route filters", () =>
+  it.effect("rejects public leased topic queries before route validation", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(leasedViewServer, {});
       const missingRouteQuery = {
@@ -199,62 +231,169 @@ describe("@view-server/runtime-core", () => {
         limit: 1,
       } as const;
 
-      const missingRoute = yield* Effect.flip(
-        // @ts-expect-error hostile callers can bypass compile-time leased-route checks.
-        runtimeCore.client.snapshot("orders", missingRouteQuery),
+      const missingRouteEffect: Effect.Effect<unknown, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.client.snapshot,
+        runtimeCore.client,
+        ["orders", missingRouteQuery],
       );
-      expect(missingRoute).toStrictEqual({
-        _tag: "ViewServerRuntimeError",
-        code: "InvalidQuery",
-        topic: "orders",
-        message: "Leased topic orders route field status must use an exact eq filter.",
-      });
+      const missingRoute = yield* Effect.flip(missingRouteEffect);
+      expect(missingRoute).toStrictEqual(publicLeasedRuntimeAccessError);
 
-      const missingSubscribeRoute = yield* Effect.flip(
-        // @ts-expect-error hostile callers can bypass compile-time leased-route subscribe checks.
-        runtimeCore.liveClient.subscribe("orders", missingRouteQuery),
-      );
-      expect(missingSubscribeRoute).toStrictEqual({
-        _tag: "ViewServerRuntimeError",
-        code: "InvalidQuery",
-        topic: "orders",
-        message: "Leased topic orders route field status must use an exact eq filter.",
-      });
+      const missingSubscribeRouteEffect: Effect.Effect<unknown, ViewServerRuntimeError> =
+        Reflect.apply(runtimeCore.liveClient.subscribe, runtimeCore.liveClient, [
+          "orders",
+          missingRouteQuery,
+        ]);
+      const missingSubscribeRoute = yield* Effect.flip(missingSubscribeRouteEffect);
+      expect(missingSubscribeRoute).toStrictEqual(publicLeasedRuntimeAccessError);
 
-      const nonEqRoute = yield* Effect.flip(
-        runtimeCore.liveClient.subscribeRuntime("orders", {
-          where: {
-            region: { eq: "usa" },
-            status: { in: ["open"] },
+      const nonEqRouteEffect: Effect.Effect<unknown, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.liveClient.subscribe,
+        runtimeCore.liveClient,
+        [
+          "orders",
+          {
+            where: {
+              region: { eq: "usa" },
+              status: { in: ["open"] },
+            },
+            select: ["id"],
+            limit: 1,
           },
-          select: ["id"],
-          limit: 1,
-        }),
+        ],
       );
-      expect(nonEqRoute).toStrictEqual({
-        _tag: "ViewServerRuntimeError",
-        code: "InvalidQuery",
-        topic: "orders",
-        message: "Leased topic orders route field status must use an exact eq filter.",
-      });
+      const nonEqRoute = yield* Effect.flip(nonEqRouteEffect);
+      expect(nonEqRoute).toStrictEqual(publicLeasedRuntimeAccessError);
 
       yield* runtimeCore.close;
     }),
   );
 
-  it.effect("allows leased topic queries with exact runtime route filters", () =>
+  it.effect("rejects direct leased topic runtime access through the public runtime core", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(leasedViewServer, {});
-      yield* runtimeCore.client.publish("orders", order("a", 10));
-
-      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+      const leasedQuery = {
         where: {
           region: { eq: "usa" },
           status: { eq: "open" },
         },
         select: ["id", "region", "status"],
         limit: 1,
+      } as const;
+      const publishEffect: Effect.Effect<void, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.client.publish,
+        runtimeCore.client,
+        ["orders", order("a", 10)],
+      );
+      const publishManyEffect: Effect.Effect<void, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.client.publishMany,
+        runtimeCore.client,
+        ["orders", [order("b", 20)]],
+      );
+      const patchEffect: Effect.Effect<void, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.client.patch,
+        runtimeCore.client,
+        ["orders", "a", { price: 20 }],
+      );
+      const deleteEffect: Effect.Effect<void, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.client.delete,
+        runtimeCore.client,
+        ["orders", "a"],
+      );
+      const snapshotEffect: Effect.Effect<unknown, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.client.snapshot,
+        runtimeCore.client,
+        ["orders", leasedQuery],
+      );
+      const subscribeEffect: Effect.Effect<unknown, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.liveClient.subscribe,
+        runtimeCore.liveClient,
+        ["orders", leasedQuery],
+      );
+      const resetEffect: Effect.Effect<void, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.client.reset,
+        runtimeCore.client,
+        [],
+      );
+      expect(yield* Effect.flip(publishEffect)).toStrictEqual(publicLeasedRuntimeAccessError);
+      expect(yield* Effect.flip(publishManyEffect)).toStrictEqual(publicLeasedRuntimeAccessError);
+      expect(yield* Effect.flip(patchEffect)).toStrictEqual(publicLeasedRuntimeAccessError);
+      expect(yield* Effect.flip(deleteEffect)).toStrictEqual(publicLeasedRuntimeAccessError);
+      expect(yield* Effect.flip(snapshotEffect)).toStrictEqual(publicLeasedRuntimeAccessError);
+      expect(yield* Effect.flip(subscribeEffect)).toStrictEqual(publicLeasedRuntimeAccessError);
+      expect(yield* Effect.flip(resetEffect)).toStrictEqual({
+        _tag: "ViewServerRuntimeError",
+        code: "UnsupportedQuery",
+        message:
+          "Leased gRPC topics do not support direct runtime reset; close the runtime or leased subscriptions so the lease manager owns cleanup.",
       });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("allows internal runtime core access for leased gRPC manager internals", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(leasedViewServer, {});
+      yield* runtimeCore.internalClient.publish("orders", order("a", 10));
+      yield* runtimeCore.internalClient.publishManyWithStorageKeys("orders", [
+        {
+          storageKey: "orders/lease/row/public-b",
+          row: order("public-b", 20),
+        },
+      ]);
+
+      const snapshot = yield* runtimeCore.internalClient.snapshot("orders", {
+        where: {
+          customerId: { eq: "customer-a" },
+          region: { eq: "usa" },
+          status: { eq: "open" },
+        },
+        select: ["id", "region", "status"],
+        limit: 1,
+      });
+      const storageKeySnapshot = yield* runtimeCore.internalClient.snapshot("orders", {
+        where: {
+          customerId: { eq: "customer-public-b" },
+          region: { eq: "usa" },
+          status: { eq: "open" },
+        },
+        select: ["id", "region", "status"],
+        limit: 1,
+      });
+      const invalidRouteSnapshotEffect: Effect.Effect<unknown, ViewServerRuntimeError> =
+        Reflect.apply(runtimeCore.internalClient.snapshot, runtimeCore.internalClient, [
+          "orders",
+          {
+            where: {
+              region: { eq: "usa" },
+            },
+            select: ["id"],
+            limit: 1,
+          },
+        ]);
+      const invalidRouteSnapshot = yield* Effect.flip(invalidRouteSnapshotEffect);
+      const publicRuntimeSubscribe = yield* Effect.flip(
+        runtimeCore.liveClient.subscribeRuntime("orders", {
+          where: {
+            customerId: { eq: "customer-a" },
+            region: { eq: "usa" },
+            status: { eq: "open" },
+          },
+          select: ["id"],
+          limit: 1,
+        }),
+      );
+      const subscription = yield* runtimeCore.internalLiveClient.subscribeInternal("orders", {
+        where: {
+          customerId: { eq: "customer-a" },
+          region: { eq: "usa" },
+          status: { eq: "open" },
+        },
+        select: ["id"],
+        limit: 1,
+      });
+      const events = yield* subscription.events.pipe(Stream.take(1), Stream.runCollect);
 
       expect(snapshot).toStrictEqual({
         rows: [
@@ -265,16 +404,46 @@ describe("@view-server/runtime-core", () => {
           },
         ],
         totalRows: 1,
-        version: 1,
+        version: 2,
         status: "ready",
         statusCode: "Ready",
       });
+      expect(storageKeySnapshot).toStrictEqual({
+        rows: [
+          {
+            id: "public-b",
+            region: "usa",
+            status: "open",
+          },
+        ],
+        totalRows: 1,
+        version: 2,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      expect(invalidRouteSnapshot).toStrictEqual({
+        _tag: "ViewServerRuntimeError",
+        code: "InvalidQuery",
+        topic: "orders",
+        message: "Leased topic orders route field status must use an exact eq filter.",
+      });
+      expect(publicRuntimeSubscribe).toStrictEqual(publicLeasedRuntimeAccessError);
+      expect(events[0]).toStrictEqual({
+        type: "snapshot",
+        topic: "orders",
+        queryId: "query-0",
+        version: 2,
+        keys: ["a"],
+        rows: [{ id: "a" }],
+        totalRows: 1,
+      });
 
+      yield* subscription.close();
       yield* runtimeCore.close;
     }),
   );
 
-  it.effect("validates leased route predicates when subscription effects execute", () =>
+  it.effect("rejects public leased subscriptions when effects execute", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(leasedViewServer, {});
       const delayedSubscribeQuery = {
@@ -296,7 +465,11 @@ describe("@view-server/runtime-core", () => {
         readonly select: readonly ["id"];
         readonly limit: 1;
       };
-      const subscribeEffect = runtimeCore.liveClient.subscribe("orders", delayedSubscribeQuery);
+      const subscribeEffect: Effect.Effect<unknown, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.liveClient.subscribe,
+        runtimeCore.liveClient,
+        ["orders", delayedSubscribeQuery],
+      );
       expect(Reflect.deleteProperty(delayedSubscribeQuery.where.status, "eq")).toBe(true);
       Object.defineProperty(delayedSubscribeQuery.where.status, "in", {
         enumerable: true,
@@ -304,12 +477,7 @@ describe("@view-server/runtime-core", () => {
       });
 
       const subscribeRouteError = yield* Effect.flip(subscribeEffect);
-      expect(subscribeRouteError).toStrictEqual({
-        _tag: "ViewServerRuntimeError",
-        code: "InvalidQuery",
-        topic: "orders",
-        message: "Leased topic orders route field status must use an exact eq filter.",
-      });
+      expect(subscribeRouteError).toStrictEqual(publicLeasedRuntimeAccessError);
 
       const delayedRuntimeQuery = {
         where: {
@@ -330,9 +498,10 @@ describe("@view-server/runtime-core", () => {
         readonly select: readonly ["id"];
         readonly limit: 1;
       };
-      const subscribeRuntimeEffect = runtimeCore.liveClient.subscribeRuntime(
-        "orders",
-        delayedRuntimeQuery,
+      const subscribeRuntimeEffect: Effect.Effect<unknown, ViewServerRuntimeError> = Reflect.apply(
+        runtimeCore.liveClient.subscribe,
+        runtimeCore.liveClient,
+        ["orders", delayedRuntimeQuery],
       );
       expect(Reflect.deleteProperty(delayedRuntimeQuery.where.status, "eq")).toBe(true);
       Object.defineProperty(delayedRuntimeQuery.where.status, "in", {
@@ -341,12 +510,7 @@ describe("@view-server/runtime-core", () => {
       });
 
       const subscribeRuntimeRouteError = yield* Effect.flip(subscribeRuntimeEffect);
-      expect(subscribeRuntimeRouteError).toStrictEqual({
-        _tag: "ViewServerRuntimeError",
-        code: "InvalidQuery",
-        topic: "orders",
-        message: "Leased topic orders route field status must use an exact eq filter.",
-      });
+      expect(subscribeRuntimeRouteError).toStrictEqual(publicLeasedRuntimeAccessError);
 
       yield* runtimeCore.close;
     }),
@@ -380,8 +544,8 @@ describe("@view-server/runtime-core", () => {
 
   it.effect("subscribes through the runtime live-client entrypoint", () =>
     Effect.gen(function* () {
-      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
-      yield* runtimeCore.client.publish("orders", order("a", 10));
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(viewServer, {});
+      yield* runtimeCore.internalClient.publish("orders", order("a", 10));
 
       const subscription = yield* runtimeCore.liveClient.subscribeRuntime("orders", {
         select: ["id", "price"],
@@ -399,7 +563,7 @@ describe("@view-server/runtime-core", () => {
       });
 
       yield* subscription.close();
-      const health = yield* runtimeCore.client.health();
+      const health = yield* runtimeCore.internalClient.health();
       expect(health.engine.topics.orders.activeSubscriptions).toBe(0);
       yield* runtimeCore.close;
     }),

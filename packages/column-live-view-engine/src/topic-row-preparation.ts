@@ -91,6 +91,23 @@ export const prepareTopicRow = Effect.fn("ColumnLiveViewEngine.topicRow.prepare"
   } satisfies PreparedTopicRow;
 });
 
+export const prepareTopicRowWithStorageKey = Effect.fn(
+  "ColumnLiveViewEngine.topicRow.prepareWithStorageKey",
+)(function* <Error, Row extends RowObject>(
+  context: TopicRowPreparationContext,
+  row: Row,
+  storageKey: string,
+  invalidRow: InvalidRowErrorFactory<Error>,
+) {
+  const decoded = yield* decodeTopicRow(context, row, invalidRow);
+  yield* topicRowKey(context, decoded, invalidRow);
+  return {
+    key: storageKey,
+    row: decoded,
+    source: "row",
+  } satisfies PreparedTopicRow;
+});
+
 export const prepareTopicPatch = Effect.fn("ColumnLiveViewEngine.topicRow.patch.prepare")(
   function* <Patch extends Partial<RowObject>, Error>(
     context: TopicRowPreparationContext,

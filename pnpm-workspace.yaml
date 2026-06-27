@@ -26,6 +26,7 @@ catalog:
   vitest-browser-react: 2.2.0
   "@platformatic/kafka": 2.2.3
   "@connectrpc/connect": 2.1.2
+  "@connectrpc/connect-node": 2.1.2
 overrides:
   vite: "catalog:"
   vitest: "catalog:"

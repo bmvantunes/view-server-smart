@@ -55,7 +55,7 @@ type ExactGrpcLeasedTopicSourceInput<Input> = Input &
     }
   >;
 
-type GrpcMaterializedTopic<Topics> = Extract<
+export type GrpcMaterializedTopic<Topics> = Extract<
   {
     readonly [Topic in keyof Topics]: Topics[Topic] extends {
       readonly source: GrpcMaterializedTopicSource;
@@ -66,7 +66,7 @@ type GrpcMaterializedTopic<Topics> = Extract<
   string
 >;
 
-type GrpcLeasedTopic<Topics> = Extract<
+export type GrpcLeasedTopic<Topics> = Extract<
   {
     readonly [Topic in keyof Topics]: [TopicRouteByTuple<Topics, Topic>] extends [never]
       ? never
@@ -125,20 +125,26 @@ export type GrpcConnectClientDefinition<Service extends DescService = DescServic
 
 export type GrpcRuntimeClients = Record<string, GrpcConnectClientDefinition>;
 
-export type GrpcClientValue<ClientDefinition> =
-  ClientDefinition extends GrpcConnectClientDefinition<infer Service> ? Client<Service> : never;
+export type GrpcClientDefinitionService<ClientDefinition extends GrpcConnectClientDefinition> =
+  ClientDefinition extends GrpcConnectClientDefinition<infer Service> ? Service : never;
+
+export type GrpcClientValue<ClientDefinition extends GrpcConnectClientDefinition> = Client<
+  GrpcClientDefinitionService<ClientDefinition>
+>;
 
 export type GrpcServerStreamingMethodName<ClientDefinition> =
   ClientDefinition extends GrpcConnectClientDefinition<infer Service>
-    ? {
-        readonly [MethodName in keyof Service["method"]]: Service["method"][MethodName] extends DescMethodServerStreaming<
-          infer _Input extends DescMessage,
-          infer _Output extends DescMessage
-        >
-          ? MethodName
-          : never;
-      }[keyof Service["method"]] &
-        string
+    ? DescService extends Service
+      ? string
+      : {
+          readonly [MethodName in keyof Service["method"]]: Service["method"][MethodName] extends DescMethodServerStreaming<
+            infer _Input extends DescMessage,
+            infer _Output extends DescMessage
+          >
+            ? MethodName
+            : never;
+        }[keyof Service["method"]] &
+          string
     : never;
 
 export type GrpcMethodRequest<
@@ -146,12 +152,14 @@ export type GrpcMethodRequest<
   MethodName extends GrpcServerStreamingMethodName<ClientDefinition>,
 > =
   ClientDefinition extends GrpcConnectClientDefinition<infer Service>
-    ? Service["method"][MethodName] extends DescMethodServerStreaming<
-        infer Input extends DescMessage,
-        infer _Output extends DescMessage
-      >
-      ? MessageInitShape<Input>
-      : never
+    ? DescService extends Service
+      ? unknown
+      : Service["method"][MethodName] extends DescMethodServerStreaming<
+            infer Input extends DescMessage,
+            infer _Output extends DescMessage
+          >
+        ? MessageInitShape<Input>
+        : never
     : never;
 
 export type GrpcMethodValue<
@@ -159,12 +167,14 @@ export type GrpcMethodValue<
   MethodName extends GrpcServerStreamingMethodName<ClientDefinition>,
 > =
   ClientDefinition extends GrpcConnectClientDefinition<infer Service>
-    ? Service["method"][MethodName] extends DescMethodServerStreaming<
-        infer _Input extends DescMessage,
-        infer Output extends DescMessage
-      >
-      ? MessageShape<Output>
-      : never
+    ? DescService extends Service
+      ? unknown
+      : Service["method"][MethodName] extends DescMethodServerStreaming<
+            infer _Input extends DescMessage,
+            infer Output extends DescMessage
+          >
+        ? MessageShape<Output>
+        : never
     : never;
 
 export type GrpcFeedSession = {
@@ -192,7 +202,7 @@ export type GrpcFeedMapInput<Value, Route, SchemaValue extends RowSchema> = {
   readonly schema: SchemaValue;
 };
 
-type GrpcLeasedFeedDefinition<
+export type GrpcLeasedFeedDefinition<
   Topics extends Record<string, { readonly schema: RowSchema }>,
   Clients extends GrpcRuntimeClients,
   Topic extends Extract<keyof Topics, string>,
@@ -214,7 +224,11 @@ type GrpcLeasedFeedDefinition<
   ) => TopicRow<Topics, Topic>,
 > = {
   readonly _tag: "GrpcLeasedFeedDefinition";
-  readonly [GrpcFeedDefinitionTypeId]: true;
+  readonly [GrpcFeedDefinitionTypeId]: {
+    readonly topic: Topic;
+    readonly client: ClientName;
+    readonly method: MethodName;
+  };
   readonly lifecycle: "leased";
   readonly topic: Topic;
   readonly client: ClientName;
@@ -248,7 +262,7 @@ type GrpcLeasedFeedDefinition<
   >;
 };
 
-type GrpcMaterializedFeedDefinition<
+export type GrpcMaterializedFeedDefinition<
   Topics extends Record<string, { readonly schema: RowSchema }>,
   Clients extends GrpcRuntimeClients,
   Topic extends GrpcMaterializedTopic<Topics>,
@@ -269,7 +283,11 @@ type GrpcMaterializedFeedDefinition<
   ) => TopicRow<Topics, Topic>,
 > = {
   readonly _tag: "GrpcMaterializedFeedDefinition";
-  readonly [GrpcFeedDefinitionTypeId]: true;
+  readonly [GrpcFeedDefinitionTypeId]: {
+    readonly topic: Topic;
+    readonly client: ClientName;
+    readonly method: MethodName;
+  };
   readonly lifecycle: "materialized";
   readonly topic: Topic;
   readonly client: ClientName;
@@ -442,6 +460,46 @@ export type GrpcFeedHelper<
   ) => GrpcMaterializedFeedDefinition<Topics, Clients, Topic, ClientName, MethodName, Mapping>;
 };
 
+export type AnyGrpcMaterializedFeedDefinition<
+  Topics extends Record<string, { readonly schema: RowSchema }>,
+  Clients extends GrpcRuntimeClients,
+> = {
+  readonly [Topic in GrpcMaterializedTopic<Topics>]: {
+    readonly [ClientName in Extract<keyof Clients, string>]: {
+      readonly [MethodName in GrpcServerStreamingMethodName<
+        Clients[ClientName]
+      >]: GrpcMaterializedFeedDefinition<Topics, Clients, Topic, ClientName, MethodName>;
+    }[GrpcServerStreamingMethodName<Clients[ClientName]>];
+  }[Extract<keyof Clients, string>];
+}[GrpcMaterializedTopic<Topics>];
+
+export type AnyGrpcLeasedFeedDefinition<
+  Topics extends Record<string, { readonly schema: RowSchema }>,
+  Clients extends GrpcRuntimeClients,
+> = {
+  readonly [Topic in GrpcLeasedTopic<Topics>]: {
+    readonly [ClientName in Extract<keyof Clients, string>]: {
+      readonly [MethodName in GrpcServerStreamingMethodName<
+        Clients[ClientName]
+      >]: GrpcLeasedFeedDefinition<
+        Topics,
+        Clients,
+        Topic,
+        ClientName,
+        GrpcLeasedRouteBy<Topics, Topic>,
+        MethodName
+      >;
+    }[GrpcServerStreamingMethodName<Clients[ClientName]>];
+  }[Extract<keyof Clients, string>];
+}[GrpcLeasedTopic<Topics>];
+
+export type GrpcFeedDefinition<
+  Topics extends Record<string, { readonly schema: RowSchema }>,
+  Clients extends GrpcRuntimeClients,
+> =
+  | AnyGrpcMaterializedFeedDefinition<Topics, Clients>
+  | AnyGrpcLeasedFeedDefinition<Topics, Clients>;
+
 export const grpc: GrpcHelper = {
   materialized: () => ({
     _tag: "GrpcMaterializedTopicSource",
@@ -470,7 +528,11 @@ export const defineGrpcFeed = <
 >(): GrpcFeedHelper<Topics, Clients> => ({
   leasedFeed: (input) => ({
     _tag: "GrpcLeasedFeedDefinition",
-    [GrpcFeedDefinitionTypeId]: true,
+    [GrpcFeedDefinitionTypeId]: {
+      topic: input.topic,
+      client: input.client,
+      method: input.method,
+    },
     lifecycle: "leased",
     topic: input.topic,
     client: input.client,
@@ -483,7 +545,11 @@ export const defineGrpcFeed = <
   }),
   materializedFeed: (input) => ({
     _tag: "GrpcMaterializedFeedDefinition",
-    [GrpcFeedDefinitionTypeId]: true,
+    [GrpcFeedDefinitionTypeId]: {
+      topic: input.topic,
+      client: input.client,
+      method: input.method,
+    },
     lifecycle: "materialized",
     topic: input.topic,
     client: input.client,

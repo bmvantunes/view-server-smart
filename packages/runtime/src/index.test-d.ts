@@ -3,6 +3,8 @@ import {
   defineViewServerConfig,
   grpc,
   kafka,
+  type GrpcFeedDefinition,
+  type GrpcRuntimeClients,
   type ViewServerRuntimeError,
 } from "@view-server/config";
 import type { Config, Effect } from "effect";
@@ -12,6 +14,7 @@ import {
   makeViewServerRuntime,
   runViewServerRuntime,
   type ViewServerRuntime,
+  type ViewServerGrpcIngressError,
   type ViewServerKafkaIngressError,
   type ViewServerRuntimeOptions,
 } from "./index";
@@ -42,6 +45,16 @@ const leasedViewServer = defineViewServerConfig({
   },
 });
 
+const materializedGrpcViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      source: grpc.materialized(),
+    },
+  },
+});
+
 const runtimeEffect = makeViewServerRuntime(viewServer);
 const leasedRuntimeEffect = makeViewServerRuntime(leasedViewServer);
 const runtimeWithGroupedAdmissionLimits = makeViewServerRuntime(viewServer, {
@@ -52,6 +65,11 @@ const runtimeWithGroupedAdmissionLimits = makeViewServerRuntime(viewServer, {
 const runEffect = runViewServerRuntime(viewServer);
 declare const runtime: Effect.Success<typeof runtimeEffect>;
 declare const leasedRuntime: Effect.Success<typeof leasedRuntimeEffect>;
+declare const grpcRuntimeClients: GrpcRuntimeClients;
+declare const grpcOrdersFeed: GrpcFeedDefinition<
+  typeof materializedGrpcViewServer.topics,
+  typeof grpcRuntimeClients
+>;
 
 const usaKafkaRegions = {
   usa: "localhost:9092",
@@ -85,7 +103,11 @@ describe("runtime type contracts", () => {
     >();
     expectTypeOf<Effect.Success<typeof runEffect>>().toEqualTypeOf<never>();
     expectTypeOf<Effect.Error<typeof runEffect>>().toEqualTypeOf<
-      HttpServerError.ServeError | Config.ConfigError | ViewServerKafkaIngressError
+      | HttpServerError.ServeError
+      | Config.ConfigError
+      | ViewServerRuntimeError
+      | ViewServerKafkaIngressError
+      | ViewServerGrpcIngressError
     >();
     expectTypeOf<Effect.Success<typeof runtimeWithGroupedAdmissionLimits>>().toMatchTypeOf<
       ViewServerRuntime<typeof viewServer.topics>
@@ -101,12 +123,6 @@ describe("runtime type contracts", () => {
     const subscribe = runtime.liveClient.subscribe("orders", {
       select: ["id", "price"],
     });
-    const leasedSnapshot = leasedRuntime.client.snapshot("orders", {
-      where: {
-        id: { eq: "order-1" },
-      },
-      select: ["id", "price"],
-    });
     const leasedSubscribe = leasedRuntime.liveClient.subscribe("orders", {
       where: {
         id: { eq: "order-1" },
@@ -116,7 +132,6 @@ describe("runtime type contracts", () => {
 
     expectTypeOf<Effect.Error<typeof publish>>().toEqualTypeOf<ViewServerRuntimeError>();
     expectTypeOf(subscribe).not.toBeAny();
-    expectTypeOf(leasedSnapshot).not.toBeAny();
     expectTypeOf(leasedSubscribe).not.toBeAny();
 
     const missingRouteQuery = {
@@ -135,15 +150,40 @@ describe("runtime type contracts", () => {
       };
       readonly select: readonly ["id"];
     };
-    // @ts-expect-error leased gRPC snapshots require exact eq route filters.
+    // @ts-expect-error leased gRPC snapshots are live-subscription-only.
     const invalidLeasedSnapshot = leasedRuntime.client.snapshot("orders", missingRouteQuery);
+    // @ts-expect-error leased gRPC topics reject direct runtime publishes.
+    const invalidLeasedPublish = leasedRuntime.client.publish("orders", {
+      id: "order-1",
+      price: 10,
+    });
+    // @ts-expect-error leased gRPC topics reject direct runtime batch publishes.
+    const invalidLeasedPublishMany = leasedRuntime.client.publishMany("orders", [
+      {
+        id: "order-1",
+        price: 10,
+      },
+    ]);
+    // @ts-expect-error leased gRPC topics reject direct runtime patches.
+    const invalidLeasedPatch = leasedRuntime.client.patch("orders", "order-1", {
+      price: 10,
+    });
+    // @ts-expect-error leased gRPC topics reject direct runtime deletes.
+    const invalidLeasedDelete = leasedRuntime.client.delete("orders", "order-1");
+    // @ts-expect-error leased gRPC runtimes reject direct runtime reset.
+    const _invalidLeasedReset = leasedRuntime.client.reset();
     const invalidLeasedSubscribe = leasedRuntime.liveClient.subscribe(
       "orders",
       // @ts-expect-error leased gRPC route filters must be exact eq predicates.
       shorthandRouteQuery,
     );
     expectTypeOf(invalidLeasedSnapshot).not.toBeAny();
+    expectTypeOf(invalidLeasedPublish).not.toBeAny();
+    expectTypeOf(invalidLeasedPublishMany).not.toBeAny();
+    expectTypeOf(invalidLeasedPatch).not.toBeAny();
+    expectTypeOf(invalidLeasedDelete).not.toBeAny();
     expectTypeOf(invalidLeasedSubscribe).not.toBeAny();
+    expectTypeOf(runtime.client.reset).not.toBeAny();
 
     const invalidPublish = runtime.client.publish("orders", {
       id: "order-1",
@@ -172,33 +212,33 @@ describe("runtime type contracts", () => {
         prcie: { gte: 10 },
       },
     });
+    // @ts-expect-error runtime options reject string ports.
     const invalidOptions = makeViewServerRuntime(viewServer, {
-      // @ts-expect-error runtime options reject string ports.
       websocketPort: "8080",
     });
     const invalidTcpPublishPortOptions = makeViewServerRuntime(viewServer, {
       // @ts-expect-error TCP publish ingress is not wired by the runtime package yet.
       tcpPublishPort: 8081,
     });
+    // @ts-expect-error runtime paths must be absolute HTTP paths.
     const invalidPathOptions = makeViewServerRuntime(viewServer, {
-      // @ts-expect-error runtime paths must be absolute HTTP paths.
       rpcPath: "runtime-rpc",
     });
+    // @ts-expect-error runtime health paths must be absolute HTTP paths.
     const invalidHealthPathOptions = makeViewServerRuntime(viewServer, {
-      // @ts-expect-error runtime health paths must be absolute HTTP paths.
       healthPath: "runtime-health",
     });
+    // @ts-expect-error runtime RPC path must be a concrete slash-prefixed client URL path.
     const invalidWildcardRpcPathOptions = makeViewServerRuntime(viewServer, {
-      // @ts-expect-error runtime RPC path must be a concrete slash-prefixed client URL path.
       rpcPath: "*",
     });
+    // @ts-expect-error runtime health path must be a concrete slash-prefixed client URL path.
     const invalidWildcardHealthPathOptions = makeViewServerRuntime(viewServer, {
-      // @ts-expect-error runtime health path must be a concrete slash-prefixed client URL path.
       healthPath: "*",
     });
     const invalidGroupedAdmissionLimitKey = makeViewServerRuntime(viewServer, {
       groupedIncrementalAdmissionLimits: {
-        // @ts-expect-error grouped admission limit keys are exact.
+        // @ts-expect-error grouped admission limits reject unknown keys.
         maxGroupz: 1,
       },
     });
@@ -273,9 +313,9 @@ describe("runtime type contracts", () => {
       kafka: {
         consumerGroupId: "view-server-type-test",
         regions: usaKafkaRegions,
+        // @ts-expect-error committed Kafka start fallback must be earliest, latest, or fail.
         startFrom: {
           committedConsumerGroup: "view-server-existing-group",
-          // @ts-expect-error committed Kafka start fallback must be earliest, latest, or fail.
           fallback: "middle",
         },
         topics: {
@@ -385,6 +425,24 @@ describe("runtime type contracts", () => {
         },
       },
     });
+    const runtimeWithGrpc = makeViewServerRuntime(materializedGrpcViewServer, {
+      grpc: {
+        clients: grpcRuntimeClients,
+        feeds: {
+          ordersFeed: grpcOrdersFeed,
+        },
+      },
+    });
+    const invalidGrpcOptionKey = makeViewServerRuntime(materializedGrpcViewServer, {
+      grpc: {
+        clients: grpcRuntimeClients,
+        feeds: {
+          ordersFeed: grpcOrdersFeed,
+        },
+        // @ts-expect-error runtime gRPC options reject unknown fields.
+        feedz: {},
+      },
+    });
     expectTypeOf(invalidPublish).not.toBeAny();
     expectTypeOf(invalidSubscribe).not.toBeAny();
     expectTypeOf(invalidTopicPublish).not.toBeAny();
@@ -410,8 +468,13 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidKafkaOptionKey).not.toBeAny();
     expectTypeOf(invalidMissingKafkaConsumerGroup).not.toBeAny();
     expectTypeOf(invalidKafkaRegionRuntime).not.toBeAny();
+    expectTypeOf<Effect.Success<typeof runtimeWithGrpc>>().toMatchTypeOf<
+      ViewServerRuntime<typeof materializedGrpcViewServer.topics>
+    >();
+    expectTypeOf(invalidGrpcOptionKey).not.toBeAny();
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("port");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("path");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("tcpPublishPort");
+    expectTypeOf<ViewServerRuntimeOptions>().toHaveProperty("grpc");
   });
 });

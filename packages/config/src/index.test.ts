@@ -31,6 +31,8 @@ import {
   viewServerHealthTopicRowsFromHealth,
   validateLiveQuerySourceRoute,
   type GrpcClientValue,
+  type GrpcFeedDefinition,
+  type GrpcTopicFeedsHealth,
   type KafkaCodec,
   type KafkaMappingInput,
   type KafkaMessageMetadata,
@@ -2338,6 +2340,26 @@ describe("defineViewServerConfig", () => {
     };
     expectTypeOf(invalidSpreadRuntimeFeedDefinition).not.toBeNever();
 
+    // @ts-expect-error spread-mutated materialized feeds must preserve client/method/request/acquire/map correlation.
+    const invalidMaterializedFeedClientMutation: GrpcFeedDefinition<
+      typeof grpcViewServer.topics,
+      typeof clients
+    > = {
+      ...materializedTrades,
+      client: "trades",
+    };
+    expectTypeOf(invalidMaterializedFeedClientMutation).not.toBeNever();
+
+    // @ts-expect-error spread-mutated leased feeds must preserve method/request/acquire/map correlation.
+    const invalidLeasedFeedMethodMutation: GrpcFeedDefinition<
+      typeof grpcViewServer.topics,
+      typeof clients
+    > = {
+      ...leasedOrders,
+      method: "streamTrades",
+    };
+    expectTypeOf(invalidLeasedFeedMethodMutation).not.toBeNever();
+
     feed.materializedFeed({
       topic: "trades",
       client: "trades",
@@ -2444,6 +2466,67 @@ describe("defineViewServerConfig", () => {
           price: 10,
           updatedAt: 1,
         }),
+      map: ({ value }) => ({
+        id: value.customerId,
+        customerId: value.customerId,
+        status: value.status,
+        price: value.price,
+        region: "usa",
+        updatedAt: value.updatedAt,
+      }),
+    });
+
+    feed.leasedFeed({
+      topic: "orders",
+      client: "orders",
+      method: "streamOrders",
+      routeBy: ["region", "status"],
+      request: ({ region, status }) => ({ orderId: `${region}:${status}` }),
+      // @ts-expect-error leased feed acquire callbacks must accept every configured route value.
+      acquire: (input: {
+        readonly route: {
+          readonly region: "usa";
+          readonly status: "open";
+        };
+      }) =>
+        Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: input.route.region,
+          status: input.route.status,
+          price: 10,
+          updatedAt: 1,
+        }),
+      map: ({ value }) => ({
+        id: value.customerId,
+        customerId: value.customerId,
+        status: value.status,
+        price: value.price,
+        region: "usa",
+        updatedAt: value.updatedAt,
+      }),
+    });
+
+    feed.leasedFeed({
+      topic: "orders",
+      client: "orders",
+      method: "streamOrders",
+      routeBy: ["region", "status"],
+      request: ({ region, status }) => ({ orderId: `${region}:${status}` }),
+      acquire: () =>
+        Stream.make({
+          $typeName: "viewserver.test.OrderValue",
+          customerId: "customer-1",
+          status: "open",
+          price: 10,
+          updatedAt: 1,
+        }),
+      // @ts-expect-error leased feed release callbacks must accept every configured route value.
+      release: (input: {
+        readonly route: {
+          readonly region: "usa";
+          readonly status: "open";
+        };
+      }) => Effect.logDebug(input.route.region),
       map: ({ value }) => ({
         id: value.customerId,
         customerId: value.customerId,
@@ -5512,6 +5595,98 @@ describe("public type surface", () => {
       engine: health.engine,
       transport: health.transport,
     };
+    const grpcOnlyHealth: ViewServerHealth<typeof viewServer.topics> = {
+      status: "degraded",
+      version: 9,
+      uptimeMs: 300,
+      engine: {
+        topics: {
+          orders: runtimeTopicHealth("ready", 10),
+          trades: runtimeTopicHealth("ready", 20),
+          positions: runtimeTopicHealth("ready", 30),
+        },
+      },
+      grpc: {
+        clients: {
+          ordersClient: {
+            status: "connected",
+            baseUrl: "http://localhost:8080",
+            activeFeeds: 3,
+            lastConnectedAt: null,
+            lastError: null,
+          },
+        },
+        feeds: {
+          orders: {
+            materialized: {
+              ordersFeed: {
+                status: "ready",
+                lifecycle: "materialized",
+                feedName: "ordersFeed",
+                feedKey: "ordersFeed",
+                topic: "orders",
+                subscriberCount: 0,
+                rowCount: 10,
+                messagesPerSecond: 1,
+                rowsPerSecond: 1,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                publishFailuresPerSecond: 0,
+                reconnects: 0,
+                lastMessageAt: null,
+                lastError: null,
+              },
+            },
+            leased: {},
+          },
+          trades: {
+            materialized: {},
+            leased: {
+              tradesFeed: {
+                status: "starting",
+                lifecycle: "leased",
+                feedName: "tradesFeed",
+                feedKey: "tradesFeed:region=usa",
+                topic: "trades",
+                subscriberCount: 1,
+                rowCount: 0,
+                messagesPerSecond: 0,
+                rowsPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 0,
+                publishFailuresPerSecond: 0,
+                reconnects: 0,
+                lastMessageAt: null,
+                lastError: null,
+              },
+            },
+          },
+          positions: {
+            materialized: {
+              positionsFeed: {
+                status: "degraded",
+                lifecycle: "materialized",
+                feedName: "positionsFeed",
+                feedKey: "positionsFeed",
+                topic: "positions",
+                subscriberCount: 0,
+                rowCount: 0,
+                messagesPerSecond: 0,
+                rowsPerSecond: 0,
+                decodeFailuresPerSecond: 0,
+                mappingFailuresPerSecond: 1,
+                publishFailuresPerSecond: 0,
+                reconnects: 1,
+                lastMessageAt: null,
+                lastError: "mapping failed",
+              },
+            },
+            leased: {},
+          },
+        },
+      },
+      transport: health.transport,
+    };
     const kafkaStartingHealth: ViewServerHealth<typeof viewServer.topics> = {
       status: "starting",
       version: 8,
@@ -5767,6 +5942,21 @@ describe("public type surface", () => {
       updatedAtNanos: 123n,
       maxKafkaLag: null,
     });
+    expect(viewServerHealthSummaryFromHealth(grpcOnlyHealth, 123n)).toStrictEqual({
+      status: "degraded",
+      runtimeStatus: "degraded",
+      connectionStatus: "connected",
+      unhealthyTopics: ["trades", "positions"],
+      updatedAtNanos: 123n,
+      maxKafkaLag: null,
+    });
+    expect(
+      viewServerHealthTopicRowsFromHealth(grpcOnlyHealth, 123n).map((row) => [row.id, row.status]),
+    ).toStrictEqual([
+      ["orders", "ready"],
+      ["trades", "starting"],
+      ["positions", "degraded"],
+    ]);
     expect(stoppingRows.map((row) => row.status)).toStrictEqual([
       "stopping",
       "stopping",
@@ -5793,6 +5983,15 @@ describe("public type surface", () => {
       ViewServerHealthTopicRow<"orders" | "trades" | "positions"> | undefined
     >();
     expectTypeOf(rows[0]?.kafkaLag).toEqualTypeOf<bigint | null | undefined>();
+    expectTypeOf(grpcOnlyHealth.grpc?.feeds.orders).toEqualTypeOf<
+      GrpcTopicFeedsHealth<"orders"> | undefined
+    >();
+    expectTypeOf(grpcOnlyHealth.grpc?.feeds.trades).toEqualTypeOf<
+      GrpcTopicFeedsHealth<"trades"> | undefined
+    >();
+    expectTypeOf(grpcOnlyHealth.grpc?.feeds.positions).toEqualTypeOf<
+      GrpcTopicFeedsHealth<"positions"> | undefined
+    >();
     expectTypeOf<ViewServerHealthDetails<"orders">["status"]>().toEqualTypeOf<
       "ready" | "degraded" | "starting" | "stopping" | "connecting" | "disconnected"
     >();

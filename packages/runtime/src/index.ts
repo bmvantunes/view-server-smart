@@ -1,6 +1,7 @@
-import type { ViewServerConfig } from "@view-server/config";
+import type { ViewServerConfig, ViewServerRuntimeError } from "@view-server/config";
 import { Config, Effect } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
+import type { ViewServerGrpcIngressError } from "./grpc-ingress";
 import type { ViewServerKafkaIngressError } from "./kafka-ingress";
 import {
   makeDefaultRuntimeDependencies,
@@ -14,19 +15,24 @@ import {
 
 export type { ViewServerRuntime, ViewServerRuntimeOptions, ViewServerRuntimeOptionsInput };
 export type { ViewServerKafkaIngressError };
+export type { ViewServerGrpcIngressError };
 
 export const makeViewServerRuntime: <
   const Topics extends ViewServerRuntimeTopicDefinitions,
-  const Options extends ViewServerRuntimeOptions<Topics> = ViewServerRuntimeOptions<Topics>,
+  const Options extends object = ViewServerRuntimeOptions<Topics>,
 >(
   config: ViewServerConfig<Topics>,
   options?: ViewServerRuntimeOptionsInput<Topics, Options>,
 ) => Effect.Effect<
   ViewServerRuntime<Topics>,
-  HttpServerError.ServeError | Config.ConfigError | ViewServerKafkaIngressError
+  | HttpServerError.ServeError
+  | Config.ConfigError
+  | ViewServerRuntimeError
+  | ViewServerKafkaIngressError
+  | ViewServerGrpcIngressError
 > = Effect.fn("ViewServerRuntime.make")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
-  const Options extends ViewServerRuntimeOptions<Topics>,
+  const Options extends object,
 >(config: ViewServerConfig<Topics>, options?: ViewServerRuntimeOptionsInput<Topics, Options>) {
   return yield* options === undefined
     ? makeViewServerRuntimeWithDependencies(makeDefaultRuntimeDependencies<Topics>(), config)
@@ -41,16 +47,20 @@ export const createViewServerRuntime = makeViewServerRuntime;
 
 export const runViewServerRuntime: <
   const Topics extends ViewServerRuntimeTopicDefinitions,
-  const Options extends ViewServerRuntimeOptions<Topics> = ViewServerRuntimeOptions<Topics>,
+  const Options extends object = ViewServerRuntimeOptions<Topics>,
 >(
   config: ViewServerConfig<Topics>,
   options?: ViewServerRuntimeOptionsInput<Topics, Options>,
 ) => Effect.Effect<
   never,
-  HttpServerError.ServeError | Config.ConfigError | ViewServerKafkaIngressError
+  | HttpServerError.ServeError
+  | Config.ConfigError
+  | ViewServerRuntimeError
+  | ViewServerKafkaIngressError
+  | ViewServerGrpcIngressError
 > = Effect.fn("ViewServerRuntime.run")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
-  const Options extends ViewServerRuntimeOptions<Topics>,
+  const Options extends object,
 >(config: ViewServerConfig<Topics>, options?: ViewServerRuntimeOptionsInput<Topics, Options>) {
   return yield* options === undefined
     ? runViewServerRuntimeWithDependencies(makeDefaultRuntimeDependencies<Topics>(), config)

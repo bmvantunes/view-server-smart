@@ -57,3 +57,11 @@ export const invalidRuntimeQueryError = (
   topic,
   message,
 });
+
+export const leasedRuntimeAccessError = (topic: string): ViewServerRuntimeError => ({
+  _tag: "ViewServerRuntimeError",
+  code: "UnsupportedQuery",
+  topic,
+  message:
+    "Leased gRPC topics do not support direct runtime mutations, one-shot snapshots, or runtime-core subscriptions; use the runtime gRPC lease manager so it owns lease lifecycle.",
+});

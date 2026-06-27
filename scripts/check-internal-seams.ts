@@ -1498,6 +1498,7 @@ const approvedPublicViewServerSpecifiers = new Set([
   "@view-server/client",
   "@view-server/client/remote",
   "@view-server/column-live-view-engine",
+  "@view-server/column-live-view-engine/internal",
   "@view-server/config",
   "@view-server/config/grpc",
   "@view-server/config/health",
@@ -1507,11 +1508,13 @@ const approvedPublicViewServerSpecifiers = new Set([
   "@view-server/config/runtime",
   "@view-server/effect-utils",
   "@view-server/in-memory",
+  "@view-server/in-memory/testing",
   "@view-server/protocol",
   "@view-server/react",
   "@view-server/react/testing",
   "@view-server/runtime",
   "@view-server/runtime-core",
+  "@view-server/runtime-core/internal",
   "@view-server/server",
 ]);
 
@@ -2167,11 +2170,14 @@ const viewServerPackages = {
   config: "@view-server/config",
   effectUtils: "@view-server/effect-utils",
   engine: "@view-server/column-live-view-engine",
+  engineInternal: "@view-server/column-live-view-engine/internal",
   inMemory: "@view-server/in-memory",
+  inMemoryTesting: "@view-server/in-memory/testing",
   protocol: "@view-server/protocol",
   react: "@view-server/react",
   runtime: "@view-server/runtime",
   runtimeCore: "@view-server/runtime-core",
+  runtimeCoreInternal: "@view-server/runtime-core/internal",
   server: "@view-server/server",
 } as const;
 
@@ -2217,6 +2223,7 @@ const restrictedPackageImports: ReadonlyArray<RestrictedPackageImport> = [
       viewServerPackages.config,
       viewServerPackages.effectUtils,
       viewServerPackages.engine,
+      viewServerPackages.engineInternal,
     ]),
     forbiddenSpecifiers: allViewServerPackages,
     message: "Runtime core may compose client contracts, config, effect utils, and engine only.",
@@ -2228,6 +2235,7 @@ const restrictedPackageImports: ReadonlyArray<RestrictedPackageImport> = [
       viewServerPackages.config,
       viewServerPackages.effectUtils,
       viewServerPackages.runtimeCore,
+      viewServerPackages.runtimeCoreInternal,
       viewServerPackages.server,
     ]),
     forbiddenSpecifiers: allViewServerPackages,
@@ -2239,6 +2247,9 @@ const restrictedPackageImports: ReadonlyArray<RestrictedPackageImport> = [
       viewServerPackages.client,
       viewServerPackages.config,
       viewServerPackages.runtimeCore,
+    ]),
+    allowedRelativePathSpecifiers: new Map([
+      ["src/testing.ts", new Set([viewServerPackages.runtimeCoreInternal])],
     ]),
     forbiddenSpecifiers: allViewServerPackages,
     message: "The in-memory Adapter must use runtime-core instead of reaching into lower layers.",
@@ -2256,7 +2267,10 @@ const restrictedPackageImports: ReadonlyArray<RestrictedPackageImport> = [
   },
   {
     allowedRelativePathSpecifiers: new Map([
-      ["src/testing.tsx", new Set([viewServerPackages.inMemory])],
+      [
+        "src/testing.tsx",
+        new Set([viewServerPackages.inMemory, viewServerPackages.inMemoryTesting]),
+      ],
     ]),
     packageName: "react",
     allowedSpecifiers: new Set([
