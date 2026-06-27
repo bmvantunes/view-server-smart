@@ -46,8 +46,9 @@ import {
   installTcpPublishAcceptedSocket,
   makeViewServerTcpPublishIngress,
   rejectTcpSocketWhenClosed,
+  tcpPublishUrl,
   ViewServerTcpPublishIngressError,
-  writeTcpJsonLineOrClose,
+  writeTcpJsonLine,
 } from "./tcp-publish-ingress";
 import {
   resolveViewServerRuntimeOptions,
@@ -105,8 +106,9 @@ const TcpPublishResponse = Schema.Union([
     ok: Schema.Literal(false),
     error: Schema.Struct({
       _tag: Schema.String,
+      code: Schema.optional(Schema.String),
       message: Schema.String,
-      phase: Schema.String,
+      phase: Schema.optional(Schema.String),
       topic: Schema.optional(Schema.String),
     }),
   }),
@@ -140,6 +142,20 @@ const nestedTcpViewServer = defineViewServerConfig({
   topics: {
     orders: {
       schema: NestedTcpOrder,
+      key: "id",
+    },
+  },
+});
+
+const TransformTcpOrder = Schema.Struct({
+  id: Schema.String,
+  quantity: Schema.BigIntFromString,
+});
+
+const transformTcpViewServer = defineViewServerConfig({
+  topics: {
+    orders: {
+      schema: TransformTcpOrder,
       key: "id",
     },
   },
@@ -642,6 +658,9 @@ const fetchText = Effect.fn("ViewServerRuntime.test.text.fetch")(function* (url:
   return { response, text };
 });
 
+const tcpUrlConnectHost = (hostname: string): string =>
+  hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+
 const connectTcpPublishSocket = Effect.fn("ViewServerRuntime.test.tcp.connect")(function* (
   url: string,
 ) {
@@ -655,7 +674,7 @@ const connectTcpPublishSocket = Effect.fn("ViewServerRuntime.test.tcp.connect")(
   }
   return yield* Effect.callback<Net.Socket, RuntimeTcpTestFailure>((resume) => {
     const socket = Net.createConnection({
-      host: parsedUrl.hostname,
+      host: tcpUrlConnectHost(parsedUrl.hostname),
       port,
     });
     socket.setEncoding("utf8");
@@ -1191,6 +1210,86 @@ describe("@view-server/runtime", () => {
     }),
   );
 
+  it.live("passes TCP JSON rows to runtime core without double-decoding transform schemas", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeViewServerRuntime(transformTcpViewServer, {
+        host: "127.0.0.1",
+        tcpPublishPort: 0,
+        websocketPort: 0,
+      });
+      const tcpUrl = yield* Effect.fromNullishOr(runtime.tcpPublishUrl);
+
+      const responses = [
+        yield* sendTcpPublishCommand(tcpUrl, {
+          op: "publish",
+          topic: "orders",
+          row: { id: "a", quantity: "9007199254740993" },
+        }),
+        yield* sendTcpPublishCommand(tcpUrl, {
+          op: "patch",
+          topic: "orders",
+          key: "a",
+          patch: { quantity: "9007199254740995" },
+        }),
+        yield* sendTcpPublishCommand(tcpUrl, {
+          op: "publishMany",
+          topic: "orders",
+          rows: [{ id: "b", quantity: "9007199254740997" }],
+        }),
+      ];
+      const snapshot = yield* runtime.client.snapshot("orders", {
+        select: ["id", "quantity"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(responses).toStrictEqual([{ ok: true }, { ok: true }, { ok: true }]);
+      expect(snapshot).toStrictEqual({
+        rows: [
+          { id: "a", quantity: 9007199254740995n },
+          { id: "b", quantity: 9007199254740997n },
+        ],
+        totalRows: 2,
+        version: 3,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      yield* runtime.close;
+    }),
+  );
+
+  it.live("returns a usable bracketed TCP publish URL for IPv6 hosts", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeViewServerRuntime(viewServer, {
+        tcpPublishHost: "::1",
+        tcpPublishPort: 0,
+        websocketPort: 0,
+      });
+      const tcpUrl = yield* Effect.fromNullishOr(runtime.tcpPublishUrl);
+      const response = yield* sendTcpPublishCommand(tcpUrl, {
+        op: "publish",
+        topic: "orders",
+        row: order("ipv6", 42),
+      });
+      const snapshot = yield* runtime.client.snapshot("orders", {
+        select: ["id", "price"],
+        limit: 10,
+      });
+
+      expect(tcpUrl.startsWith("tcp://[")).toBe(true);
+      expect(tcpUrl.includes("]:")).toBe(true);
+      expect(response).toStrictEqual({ ok: true });
+      expect(snapshot).toStrictEqual({
+        rows: [{ id: "ipv6", price: 42 }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      yield* runtime.close;
+    }),
+  );
+
   it.live("rejects invalid TCP publish batches without partial mutation", () =>
     Effect.gen(function* () {
       const runtime = yield* makeViewServerRuntime(viewServer, {
@@ -1226,6 +1325,35 @@ describe("@view-server/runtime", () => {
         version: 0,
         status: "ready",
         statusCode: "Ready",
+      });
+      yield* runtime.close;
+    }),
+  );
+
+  it.live("preserves runtime error codes in TCP publish responses", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeViewServerRuntime(viewServer, {
+        host: "127.0.0.1",
+        tcpPublishPort: 0,
+        websocketPort: 0,
+      });
+      const tcpUrl = yield* Effect.fromNullishOr(runtime.tcpPublishUrl);
+
+      const response = yield* sendTcpPublishCommand(tcpUrl, {
+        op: "patch",
+        topic: "orders",
+        key: "missing",
+        patch: { price: 11 },
+      });
+
+      expect(response).toStrictEqual({
+        ok: false,
+        error: {
+          _tag: "ViewServerRuntimeError",
+          code: "InvalidRow",
+          message: "Cannot patch missing key: missing",
+          topic: "orders",
+        },
       });
       yield* runtime.close;
     }),
@@ -1930,6 +2058,8 @@ describe("@view-server/runtime", () => {
           phase: "backpressure",
         },
       });
+      expect(oversizedSocket.destroyed).toBe(true);
+      expect(oversizedCompleteLineSocket.destroyed).toBe(true);
       expect(rejectedConnectionCappedSocket.destroyed).toBe(true);
       expect(rejectedAcceptedSocket.destroyed).toBe(true);
 
@@ -1950,14 +2080,16 @@ describe("@view-server/runtime", () => {
     }),
   );
 
-  it.live("closes TCP writers and rejected accepted sockets through deterministic internals", () =>
+  it.live("keeps TCP response backpressure non-fatal through deterministic internals", () =>
     Effect.gen(function* () {
       const runtime = yield* makeViewServerRuntime(viewServer, {
         host: "127.0.0.1",
         websocketPort: 0,
       });
-      const endedChunks: Array<string | undefined> = [];
+      const writtenChunks: Array<string> = [];
       const destroyed: Array<"socket"> = [];
+      const listeners: Partial<Record<"close" | "error", () => void>> = {};
+      let writeCallback: () => void = () => undefined;
       const closedServerState = {
         activeChains: new Set<Promise<void>>(),
         activeFibers: new Set<Fiber.Fiber<void, never>>(),
@@ -1975,13 +2107,54 @@ describe("@view-server/runtime", () => {
         queuedCommands: 0,
       };
 
-      writeTcpJsonLineOrClose(
-        () => false,
-        () => {
-          endedChunks.push(undefined);
+      const pendingWrite = writeTcpJsonLine(
+        {
+          destroyed: false,
+          off: (event) => {
+            delete listeners[event];
+            return new Net.Socket();
+          },
+          once: (event, listener) => {
+            listeners[event] = () => listener();
+            return new Net.Socket();
+          },
+          write: (chunk, callback) => {
+            writtenChunks.push(chunk);
+            writeCallback = callback;
+            return false;
+          },
         },
         state,
         { ok: true },
+      );
+      yield* Effect.promise(() => Promise.resolve());
+      expect({
+        listenerNames: Object.keys(listeners),
+        stateClosed: state.closed,
+        writtenChunks,
+      }).toStrictEqual({
+        listenerNames: ["close", "error"],
+        stateClosed: false,
+        writtenChunks: ['{"ok":true}\n'],
+      });
+      writeCallback();
+      writeCallback();
+      yield* Effect.promise(() => pendingWrite);
+      yield* Effect.promise(() =>
+        writeTcpJsonLine(
+          {
+            destroyed: true,
+            off: () => new Net.Socket(),
+            once: () => new Net.Socket(),
+            write: (chunk, callback) => {
+              writtenChunks.push(chunk);
+              callback();
+              return true;
+            },
+          },
+          state,
+          { ok: false },
+        ),
       );
       const acceptedWhileClosed = rejectTcpSocketWhenClosed(true, {
         destroy: () => {
@@ -2008,16 +2181,18 @@ describe("@view-server/runtime", () => {
         acceptedWhileClosed,
         acceptedWhileOpen,
         destroyed,
-        endedChunks,
         ignoredAfterCloseQueuedCommands: closedServerState.queuedCommands,
+        listenerNames: Object.keys(listeners),
         stateClosed: state.closed,
+        writtenChunks,
       }).toStrictEqual({
         acceptedWhileClosed: true,
         acceptedWhileOpen: false,
         destroyed: ["socket"],
-        endedChunks: [undefined],
         ignoredAfterCloseQueuedCommands: 0,
-        stateClosed: true,
+        listenerNames: [],
+        stateClosed: false,
+        writtenChunks: ['{"ok":true}\n'],
       });
       yield* runtime.close;
     }),
@@ -2051,6 +2226,19 @@ describe("@view-server/runtime", () => {
             }),
           ),
       });
+      const stringFailingPublishClient = Object.create(runtime.client);
+      Object.defineProperty(stringFailingPublishClient, "publish", {
+        value: () => Effect.fail("string runtime failure"),
+      });
+      const unavailablePublishClient = Object.create(runtime.client);
+      Object.defineProperty(unavailablePublishClient, "publish", {
+        value: () =>
+          Effect.fail({
+            _tag: "ViewServerRuntimeError",
+            code: "RuntimeUnavailable",
+            message: "runtime unavailable for tcp test",
+          } satisfies ViewServerRuntimeError),
+      });
       const missingPublishIngress = yield* makeViewServerTcpPublishIngress(
         viewServer,
         missingPublishClient,
@@ -2071,6 +2259,16 @@ describe("@view-server/runtime", () => {
         failingPublishClient,
         { port: 0 },
       );
+      const stringFailingPublishIngress = yield* makeViewServerTcpPublishIngress(
+        viewServer,
+        stringFailingPublishClient,
+        { port: 0 },
+      );
+      const unavailablePublishIngress = yield* makeViewServerTcpPublishIngress(
+        viewServer,
+        unavailablePublishClient,
+        { port: 0 },
+      );
 
       const responses = [
         yield* sendTcpPublishCommand(missingPublishIngress.url, {
@@ -2089,6 +2287,16 @@ describe("@view-server/runtime", () => {
           row: order("a", 10),
         }),
         yield* sendTcpPublishCommand(failingPublishIngress.url, {
+          op: "publish",
+          topic: "orders",
+          row: order("a", 10),
+        }),
+        yield* sendTcpPublishCommand(stringFailingPublishIngress.url, {
+          op: "publish",
+          topic: "orders",
+          row: order("a", 10),
+        }),
+        yield* sendTcpPublishCommand(unavailablePublishIngress.url, {
           op: "publish",
           topic: "orders",
           row: order("a", 10),
@@ -2131,8 +2339,27 @@ describe("@view-server/runtime", () => {
             topic: "orders",
           },
         },
+        {
+          ok: false,
+          error: {
+            _tag: "ViewServerTcpPublishIngressError",
+            message: "TCP publish runtime publish failed for topic orders.",
+            phase: "runtime",
+            topic: "orders",
+          },
+        },
+        {
+          ok: false,
+          error: {
+            _tag: "ViewServerRuntimeError",
+            code: "RuntimeUnavailable",
+            message: "runtime unavailable for tcp test",
+          },
+        },
       ]);
 
+      yield* unavailablePublishIngress.close;
+      yield* stringFailingPublishIngress.close;
       yield* failingPublishIngress.close;
       yield* defectPublishIngress.close;
       yield* nonEffectPublishIngress.close;
@@ -2214,6 +2441,11 @@ describe("@view-server/runtime", () => {
       expect(configuredRuntime.metricsUrl.endsWith("/metrics")).toBe(true);
       const configuredTcpPublishUrl = yield* Effect.fromNullishOr(configuredRuntime.tcpPublishUrl);
       expect(configuredTcpPublishUrl.startsWith("tcp://")).toBe(true);
+      expect([
+        tcpPublishUrl({ address: "127.0.0.1", port: 1234 }),
+        tcpPublishUrl({ address: "::1", port: 1234 }),
+        tcpPublishUrl({ address: "::", port: 1234 }),
+      ]).toStrictEqual(["tcp://127.0.0.1:1234", "tcp://[::1]:1234", "tcp://[::]:1234"]);
       yield* configuredRuntime.close;
     }),
   );
