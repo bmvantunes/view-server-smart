@@ -11,7 +11,7 @@ import {
   makeViewServerRuntimeCoreInternal,
   type ViewServerRuntimeCoreInternalInstance,
 } from "@view-server/runtime-core/internal";
-import { Clock, Config, Effect, Fiber, Queue, Schema, Stream } from "effect";
+import { Clock, Config, Effect, Exit, Fiber, Queue, Schema, Scope, Stream } from "effect";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { makeViewServerGrpcHealthLedger } from "./grpc-health";
@@ -64,6 +64,7 @@ type BenchmarkProfile = {
   readonly memoryAfterSetup: BenchmarkMemorySnapshot;
   readonly queues: ReadonlyMap<string, Queue.Queue<GrpcOrderValueMessage>>;
   readonly runtimeCore: ViewServerRuntimeCoreInternalInstance<Topics>;
+  readonly scope: Scope.Closeable;
 };
 
 type BenchmarkCase = {
@@ -172,6 +173,9 @@ const benchOptions = {
 };
 
 let profile: BenchmarkProfile | undefined;
+let healthRefreshProfile: BenchmarkProfile | undefined;
+let benchmarkSetupMemory: BenchmarkMemorySnapshot | undefined;
+const healthRefreshSubscriptions: Array<WatchedSubscription> = [];
 let nextRowIndex = 0;
 let offeredRowCount = 0;
 const samples: Array<GrpcLeasedSample> = [];
@@ -377,9 +381,69 @@ const currentBenchmarkProfile = (): BenchmarkProfile => {
   return currentProfile ?? missingBenchmarkProfile();
 };
 
+const currentHealthRefreshProfile = (): BenchmarkProfile => {
+  const currentProfile = healthRefreshProfile;
+  return currentProfile ?? missingBenchmarkProfile();
+};
+
 const missingBenchmarkProfile = (): never => {
   throw new Error("gRPC leased benchmark setup did not create a profile.");
 };
+
+const makeBenchmarkProfile = Effect.fn("ViewServerRuntime.grpc.leased.bench.profile.make")(
+  function* () {
+    const scope = yield* Scope.make("parallel");
+    const queueEntries = yield* Effect.forEach(
+      [
+        "seed",
+        "first",
+        "reuse",
+        "many-subscribers",
+        "retained-filter",
+        "delta-fanout",
+        "cleanup-latency",
+        ...Array.from({ length: routeCount }, (_value, index) => `route-${index}`),
+      ],
+      (region) =>
+        Queue.unbounded<GrpcOrderValueMessage>().pipe(
+          Effect.map((queue) => [region, queue] as const),
+        ),
+    );
+    const queues = new Map(queueEntries);
+    const runtimeCore = yield* makeViewServerRuntimeCoreInternal(viewServer, {});
+    const health = makeViewServerGrpcHealthLedger<Topics>({
+      clients: grpcHealthClientBaseUrls,
+      feeds: {},
+    });
+    const manager = yield* makeViewServerGrpcLeaseManager(
+      viewServer,
+      runtimeCore.internalClient,
+      runtimeCore.liveClient,
+      runtimeCore.internalLiveClient,
+      Effect.void,
+      {
+        clientBaseUrls: grpcHealthClientBaseUrls,
+        clients: grpcClients,
+        feeds: {
+          ordersLease: grpcLeasedFeed(queues),
+        },
+        materializedReconnect: {
+          delay: "1 second",
+          maxReconnects: 60,
+        },
+      },
+      health,
+    );
+    return {
+      health,
+      manager,
+      memoryAfterSetup: memorySnapshot(),
+      queues,
+      runtimeCore,
+      scope,
+    };
+  },
+);
 
 const offerRows = Effect.fn("ViewServerRuntime.grpc.leased.bench.rows.offer")(function* (
   queue: Queue.Queue<GrpcOrderValueMessage>,
@@ -402,16 +466,19 @@ const readHealthOverlay = Effect.fn("ViewServerRuntime.grpc.leased.bench.healthO
 );
 
 const watchSubscriptionRows = Effect.fn("ViewServerRuntime.grpc.leased.bench.subscription.watch")(
-  function* (subscription: ViewServerLiveSubscription<ProjectedOrderRow>) {
+  function* (subscription: ViewServerLiveSubscription<ProjectedOrderRow>, scope?: Scope.Closeable) {
     const totalRowsQueue = yield* Queue.unbounded<number>();
-    const fiber = yield* subscription.events.pipe(
+    const collectRows = subscription.events.pipe(
       Stream.runForEach((event) =>
         event.type === "snapshot" || event.type === "delta"
           ? Queue.offer(totalRowsQueue, event.totalRows).pipe(Effect.asVoid)
           : Effect.void,
       ),
-      Effect.forkChild,
     );
+    const fiber =
+      scope === undefined
+        ? yield* collectRows.pipe(Effect.forkChild)
+        : yield* collectRows.pipe(Effect.forkIn(scope, { startImmediately: true }));
     return {
       fiber,
       subscription,
@@ -464,8 +531,66 @@ const closeTrackedSubscriptions = Effect.fn(
   watchedSubscriptions.length = 0;
 });
 
+const closeProfileResources = Effect.fn("ViewServerRuntime.grpc.leased.bench.profile.close")(
+  function* (currentProfile: BenchmarkProfile) {
+    const closeRuntimeCore = currentProfile.runtimeCore.close;
+    const closeManagerAndRuntimeCore = currentProfile.manager.close.pipe(
+      Effect.ensuring(closeRuntimeCore),
+    );
+    yield* Scope.close(currentProfile.scope, Exit.void).pipe(
+      Effect.ensuring(closeManagerAndRuntimeCore),
+    );
+  },
+);
+
+const closeOptionalProfileResources = Effect.fn(
+  "ViewServerRuntime.grpc.leased.bench.profile.closeOptional",
+)(function* (currentProfile: BenchmarkProfile | undefined) {
+  if (currentProfile === undefined) {
+    return;
+  }
+  yield* closeProfileResources(currentProfile);
+});
+
 const activeLeasedFeedCount = (health: ViewServerHealth<Topics>): number =>
   Object.values(health.grpc?.feeds.orders?.leased ?? {}).length;
+
+const prepareHealthRefreshProfile = Effect.fn(
+  "ViewServerRuntime.grpc.leased.bench.healthRefreshOverhead.prepare",
+)(function* (currentProfile: BenchmarkProfile) {
+  const regions = Array.from({ length: routeCount }, (_value, index) => `route-${index}`);
+  const subscriptions = yield* Effect.forEach(regions, (region) =>
+    currentProfile.manager.liveClient.subscribe("orders", {
+      select: ["id", "price", "status", "region"],
+      where: {
+        region: { eq: region },
+      },
+      orderBy: [{ field: "updatedAt", direction: "desc" }],
+      limit: 10,
+    }),
+  );
+  const watchedSubscriptions = yield* Effect.forEach(subscriptions, (subscription) =>
+    watchSubscriptionRows(subscription, currentProfile.scope).pipe(
+      Effect.tap((watched) =>
+        Effect.sync(() => {
+          healthRefreshSubscriptions.push(watched);
+        }),
+      ),
+    ),
+  );
+  yield* Effect.forEach(
+    regions,
+    (region) => offerRows(queueForRoute(currentProfile.queues, region), nextRows(region, 1)),
+    { discard: true },
+  );
+  yield* Effect.forEach(
+    watchedSubscriptions,
+    (subscription) => waitForWatchedRows(subscription, 1),
+    { discard: true },
+  );
+  const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
+  expect(activeLeasedFeedCount(health)).toBe(routeCount);
+});
 
 const runLeasedSubscriptionCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.subscription.run")(
   function* (
@@ -882,6 +1007,32 @@ const runPartitionedWriteConvergenceCase = Effect.fn(
   }).pipe(Effect.ensuring(closeTrackedSubscriptions(trackedSubscriptions)));
 });
 
+const runHealthRefreshOverheadCase = Effect.fn(
+  "ViewServerRuntime.grpc.leased.bench.healthRefreshOverhead.run",
+)(function* (name: string, currentProfile: BenchmarkProfile) {
+  const beforeHealth = performance.now();
+  const healthResults = yield* Effect.forEach(
+    Array.from({ length: routeCount }, () => currentProfile),
+    (profileForRead) => readHealthOverlay(profileForRead.runtimeCore, profileForRead.health),
+  );
+  const afterHealth = performance.now();
+  expect(healthResults.map(activeLeasedFeedCount)).toStrictEqual(
+    Array.from({ length: routeCount }, () => routeCount),
+  );
+  samples.push({
+    activeLeasedFeeds: routeCount,
+    cleanupMs: 0,
+    cleanupActiveLeasedFeeds: 0,
+    deltaFanoutMs: 0,
+    healthOverlayMs: afterHealth - beforeHealth,
+    name,
+    rows: 0,
+    rowsPerSecond: 0,
+    snapshotMs: 0,
+    subscriptionMs: 0,
+  });
+});
+
 const runCleanupLatencyCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.cleanupLatency.run")(
   function* (name: string, currentProfile: BenchmarkProfile) {
     const trackedSubscriptions: Array<WatchedSubscription> = [];
@@ -1006,6 +1157,16 @@ const benchmarkCases: ReadonlyArray<BenchmarkCase> = [
       ),
   },
   {
+    name: "gRPC leased health refresh overhead",
+    run: () =>
+      Effect.runPromise(
+        runHealthRefreshOverheadCase(
+          "gRPC leased health refresh overhead",
+          currentHealthRefreshProfile(),
+        ),
+      ),
+  },
+  {
     name: "gRPC leased last-subscriber cleanup",
     run: () =>
       Effect.runPromise(
@@ -1083,74 +1244,76 @@ const summarizeSamples = (
 };
 
 beforeAll(async () => {
+  let createdBenchmarkProfile: BenchmarkProfile | undefined;
+  let createdHealthProfile: BenchmarkProfile | undefined;
   profile = await Effect.runPromise(
     Effect.gen(function* () {
-      const queueEntries = yield* Effect.forEach(
-        [
-          "seed",
-          "first",
-          "reuse",
-          "many-subscribers",
-          "retained-filter",
-          "delta-fanout",
-          "cleanup-latency",
-          ...Array.from({ length: routeCount }, (_value, index) => `route-${index}`),
-        ],
-        (region) =>
-          Queue.unbounded<GrpcOrderValueMessage>().pipe(
-            Effect.map((queue) => [region, queue] as const),
-          ),
-      );
-      const queues = new Map(queueEntries);
-      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(viewServer, {});
-      const health = makeViewServerGrpcHealthLedger<Topics>({
-        clients: grpcHealthClientBaseUrls,
-        feeds: {},
+      const benchmarkProfile = yield* makeBenchmarkProfile();
+      yield* Effect.sync(() => {
+        createdBenchmarkProfile = benchmarkProfile;
       });
-      const manager = yield* makeViewServerGrpcLeaseManager(
-        viewServer,
-        runtimeCore.internalClient,
-        runtimeCore.liveClient,
-        runtimeCore.internalLiveClient,
-        Effect.void,
-        {
-          clientBaseUrls: grpcHealthClientBaseUrls,
-          clients: grpcClients,
-          feeds: {
-            ordersLease: grpcLeasedFeed(queues),
-          },
-          materializedReconnect: {
-            delay: "1 second",
-            maxReconnects: 60,
-          },
-        },
-        health,
-      );
+      const healthProfile = yield* makeBenchmarkProfile();
+      yield* Effect.sync(() => {
+        createdHealthProfile = healthProfile;
+      });
+      yield* prepareHealthRefreshProfile(healthProfile);
       samples.length = 0;
       offeredRowCount = 0;
-      return {
-        health,
-        manager,
-        memoryAfterSetup: memorySnapshot(),
-        queues,
-        runtimeCore,
-      };
-    }),
+      healthRefreshProfile = healthProfile;
+      benchmarkSetupMemory = memorySnapshot();
+      return benchmarkProfile;
+    }).pipe(
+      Effect.tapCause(() =>
+        closeTrackedSubscriptions(healthRefreshSubscriptions).pipe(
+          Effect.ensuring(
+            closeOptionalProfileResources(createdHealthProfile).pipe(
+              Effect.ensuring(closeOptionalProfileResources(createdBenchmarkProfile)),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 });
 
 afterAll(async () => {
   const currentProfile = currentBenchmarkProfile();
-  await Effect.runPromise(currentProfile.manager.close);
-  const health: ViewServerHealth<Topics> = await Effect.runPromise(
-    readHealthOverlay(currentProfile.runtimeCore, currentProfile.health),
+  const currentHealthProfile = currentHealthRefreshProfile();
+  const { health, healthRefreshCleanupHealth } = await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* closeTrackedSubscriptions(healthRefreshSubscriptions);
+      const healthRefreshCleanupHealth: ViewServerHealth<Topics> = yield* readHealthOverlay(
+        currentHealthProfile.runtimeCore,
+        currentHealthProfile.health,
+      );
+      expect(activeLeasedFeedCount(healthRefreshCleanupHealth)).toBe(0);
+      expect(cleanupLeakCountFromHealth(healthRefreshCleanupHealth)).toBe(0);
+      yield* currentProfile.manager.close;
+      const health: ViewServerHealth<Topics> = yield* readHealthOverlay(
+        currentProfile.runtimeCore,
+        currentProfile.health,
+      );
+      expect(activeLeasedFeedCount(health)).toBe(0);
+      return {
+        health,
+        healthRefreshCleanupHealth,
+      };
+    }).pipe(
+      Effect.ensuring(
+        closeProfileResources(currentHealthProfile).pipe(
+          Effect.ensuring(closeProfileResources(currentProfile)),
+        ),
+      ),
+    ),
   );
-  expect(activeLeasedFeedCount(health)).toBe(0);
-  await Effect.runPromise(currentProfile.runtimeCore.close);
   const memoryAfterBenchmark = memorySnapshot();
-  const cleanupLeakCount = cleanupLeakCountFromHealth(health);
-  const backpressureCount = backpressureCountFromHealth(health);
-  const queuedEventCount = queuedEventCountFromHealth(health);
+  const cleanupLeakCount =
+    cleanupLeakCountFromHealth(health) + cleanupLeakCountFromHealth(healthRefreshCleanupHealth);
+  const backpressureCount =
+    backpressureCountFromHealth(health) + backpressureCountFromHealth(healthRefreshCleanupHealth);
+  const queuedEventCount =
+    queuedEventCountFromHealth(health) + queuedEventCountFromHealth(healthRefreshCleanupHealth);
+  const setupMemory = benchmarkSetupMemory;
   writeJsonFile(benchmarkSummaryPath(outputJsonPath), {
     artifactKind: "runtime-benchmark-summary",
     backpressureCount,
@@ -1160,18 +1323,16 @@ afterAll(async () => {
     cases: benchmarkCases.map((benchmarkCase) => summarizeSamples(benchmarkCase.name)),
     cleanupLeakCount,
     health,
+    healthRefreshHealth: healthRefreshCleanupHealth,
     latency: {
       outputJsonPath,
       source: "vitest-output-json",
     },
     memory: {
       afterBenchmark: memoryAfterBenchmark,
-      afterSetup: currentProfile?.memoryAfterSetup,
+      afterSetup: setupMemory,
       before: memoryBefore,
-      setupDelta:
-        currentProfile?.memoryAfterSetup === undefined
-          ? undefined
-          : memoryDelta(memoryBefore, currentProfile.memoryAfterSetup),
+      setupDelta: setupMemory === undefined ? undefined : memoryDelta(memoryBefore, setupMemory),
       totalDelta: memoryDelta(memoryBefore, memoryAfterBenchmark),
     },
     grpcParameters: {
@@ -1186,6 +1347,7 @@ afterAll(async () => {
       "Rows are written into leased feed queues, then observed through the runtime-core live subscription path.",
       "Retained local-filter case keeps one lease holder active so the measured subscriber reads an already-retained feed.",
       "Partitioned write-convergence case opens routeCount leased feeds, writes rowsPerFeed rows into each route, and waits for every subscriber to converge.",
+      "Health refresh overhead case uses a separately prepared runtime with routeCount active leased feeds; the Vitest-timed body only reads routeCount health overlays and validates every read. That profile is cleaned up once in afterAll.",
     ],
     queuedEventCount,
     routeCount,
