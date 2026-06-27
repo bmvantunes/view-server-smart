@@ -16,6 +16,7 @@ import {
 } from "./runtime-dependencies";
 import type { ViewServerKafkaIngressError } from "./kafka-ingress";
 import type { ViewServerGrpcIngressError } from "./grpc-ingress";
+import type { ViewServerTcpPublishIngressError } from "./tcp-publish-ingress";
 import { makeViewServerGrpcLeaseManager } from "./grpc-lease-manager";
 import {
   resolveViewServerRuntimeOptions,
@@ -72,7 +73,8 @@ type ViewServerRuntimeFactoryError =
   | Config.ConfigError
   | ViewServerRuntimeError
   | ViewServerKafkaIngressError
-  | ViewServerGrpcIngressError;
+  | ViewServerGrpcIngressError
+  | ViewServerTcpPublishIngressError;
 
 type MakeViewServerRuntimeWithDependencies = {
   <const Topics extends ViewServerRuntimeTopicDefinitions>(
@@ -169,6 +171,28 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
   const runtimeClient = grpcLeaseManager?.client ?? runtimeCore.client;
   const closeGrpcLeaseManager =
     grpcLeaseManager === undefined ? Effect.void : grpcLeaseManager.close;
+  const sourceOwnedTopics = new Set<string>();
+  for (const kafkaTopic of Object.values(kafkaOptions?.topics ?? {})) {
+    sourceOwnedTopics.add(kafkaTopic.viewServerTopic);
+  }
+  for (const grpcFeed of Object.values(grpcOptions?.feeds ?? {})) {
+    sourceOwnedTopics.add(grpcFeed.topic);
+  }
+  const tcpPublishIngress =
+    resolvedOptions.tcpPublishOptions === undefined
+      ? undefined
+      : yield* dependencies
+          .makeTcpPublishIngress(config, runtimeClient, {
+            ...resolvedOptions.tcpPublishOptions,
+            rejectedTopics: sourceOwnedTopics,
+          })
+          .pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit)
+                ? closeGrpcLeaseManager.pipe(Effect.ensuring(runtimeCore.close))
+                : Effect.void,
+            ),
+          );
   const server = yield* dependencies
     .makeServer(
       config,
@@ -187,7 +211,10 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
     .pipe(
       Effect.onExit((exit) =>
         Exit.isFailure(exit)
-          ? closeGrpcLeaseManager.pipe(Effect.ensuring(runtimeCore.close))
+          ? (tcpPublishIngress?.close ?? Effect.void).pipe(
+              Effect.ensuring(closeGrpcLeaseManager),
+              Effect.ensuring(runtimeCore.close),
+            )
           : Effect.void,
       ),
     );
@@ -205,7 +232,8 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
           .pipe(
             Effect.onExit((exit) =>
               Exit.isFailure(exit)
-                ? server.close.pipe(
+                ? (tcpPublishIngress?.close ?? Effect.void).pipe(
+                    Effect.ensuring(server.close),
                     Effect.ensuring(closeGrpcLeaseManager),
                     Effect.ensuring(runtimeCore.close),
                   )
@@ -226,7 +254,8 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
           .pipe(
             Effect.onExit((exit) =>
               Exit.isFailure(exit)
-                ? (kafkaIngress?.close ?? Effect.void).pipe(
+                ? (tcpPublishIngress?.close ?? Effect.void).pipe(
+                    Effect.ensuring(kafkaIngress?.close ?? Effect.void),
                     Effect.ensuring(closeGrpcLeaseManager),
                     Effect.ensuring(server.close),
                     Effect.ensuring(runtimeCore.close),
@@ -238,7 +267,10 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
     grpcIngress === undefined ? Effect.void : grpcIngress.close;
   const closeKafkaIngress: Effect.Effect<void> =
     kafkaIngress === undefined ? Effect.void : kafkaIngress.close;
-  const close: Effect.Effect<void> = closeGrpcIngress.pipe(
+  const closeTcpPublishIngress: Effect.Effect<void> =
+    tcpPublishIngress === undefined ? Effect.void : tcpPublishIngress.close;
+  const close: Effect.Effect<void> = closeTcpPublishIngress.pipe(
+    Effect.ensuring(closeGrpcIngress),
     Effect.ensuring(closeGrpcLeaseManager),
     Effect.ensuring(closeKafkaIngress),
     Effect.ensuring(server.close),
@@ -249,6 +281,7 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
     url: server.url,
     healthUrl: server.healthUrl,
     metricsUrl: server.metricsUrl,
+    ...(tcpPublishIngress === undefined ? {} : { tcpPublishUrl: tcpPublishIngress.url }),
     client: runtimeClient,
     liveClient: publicLiveClient,
     health: runtimeClient.health,
@@ -262,6 +295,9 @@ const logRuntimeStarted = Effect.fn("ViewServerRuntime.logStarted")(function* <
   yield* Effect.logInfo(`View Server WebSocket listening at ${runtime.url}`);
   yield* Effect.logInfo(`View Server health endpoint listening at ${runtime.healthUrl}`);
   yield* Effect.logInfo(`View Server metrics endpoint listening at ${runtime.metricsUrl}`);
+  if (runtime.tcpPublishUrl !== undefined) {
+    yield* Effect.logInfo(`View Server TCP publish endpoint listening at ${runtime.tcpPublishUrl}`);
+  }
 });
 
 const makeViewServerRuntimeLaunchLayer = <

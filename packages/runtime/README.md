@@ -3,9 +3,9 @@
 Production runtime composition for View Server.
 
 This package wires Runtime Core, Effect RPC WebSocket transport, `GET /health`,
-`GET /metrics`, and optional Kafka ingestion. The in-memory engine remains the
-single mutation path; Kafka and future ingress adapters publish into the same
-runtime core used by tests.
+`GET /metrics`, optional Kafka/gRPC ingestion, and optional TCP publish ingress.
+The in-memory engine remains the single mutation path; Kafka, gRPC, TCP, and
+tests publish into the same runtime core.
 
 ## Entrypoint
 
@@ -21,12 +21,15 @@ NodeRuntime.runMain(
   runViewServerRuntime(viewServer, {
     host: "0.0.0.0",
     websocketPort: 8080,
+    tcpPublishHost: "127.0.0.1",
+    tcpPublishPort: 8081,
   }),
 );
 ```
 
-`runViewServerRuntime` logs the WebSocket, health, and metrics URLs when the
-runtime starts and keeps the server alive until the main fiber is interrupted.
+`runViewServerRuntime` logs the WebSocket, health, metrics, and TCP publish URLs
+when those endpoints are configured, then keeps the server alive until the main
+fiber is interrupted.
 
 ## Health
 
@@ -152,6 +155,46 @@ restart from committed offsets can skip rows that existed only in memory.
 Deployments that need rebuild-after-restart semantics must replay Kafka from an
 authoritative position, such as `startFrom: "earliest"` or a fresh/reset
 dedicated rebuild consumer group, until durable checkpoints are added.
+
+## TCP Publish Ingress
+
+`tcpPublishPort` enables a non-browser publisher ingress for systems that need a
+small push path without Kafka or gRPC. The runtime returns `tcpPublishUrl` when
+the endpoint is configured.
+
+TCP publish has its own `tcpPublishHost` and defaults to `127.0.0.1`. It does
+not inherit the public WebSocket/HTTP `host`, so binding the runtime server to
+`0.0.0.0` does not accidentally expose a mutation port. Bind TCP publish to a
+different interface only behind your own network controls.
+
+The protocol is NDJSON over TCP: one JSON command per line and one JSON response
+per line.
+
+Supported commands:
+
+```json
+{ "op": "publish", "topic": "orders", "row": { "id": "o1", "price": 10 } }
+{ "op": "publishMany", "topic": "orders", "rows": [{ "id": "o1", "price": 10 }] }
+{ "op": "patch", "topic": "orders", "key": "o1", "patch": { "price": 20 } }
+{ "op": "delete", "topic": "orders", "key": "o1" }
+```
+
+Responses:
+
+```json
+{ "ok": true }
+{ "ok": false, "error": { "_tag": "ViewServerTcpPublishIngressError", "phase": "decode", "message": "..." } }
+```
+
+Valid TCP publish mutations use the same runtime-core mutation methods as Kafka,
+gRPC, and in-memory tests. Invalid TCP row or patch payloads fail at the TCP
+decode boundary before mutation, so invalid batches do not partially publish.
+
+The endpoint is bounded: excessive connections, oversized lines, and excessive
+queued commands return typed `ViewServerTcpPublishIngressError` responses and
+close or reject the offending socket. TCP publish also refuses Kafka/gRPC-owned
+View Server topics; use it only for topics whose source of truth is the TCP
+publisher.
 
 ## Current Consumer Group Assumption
 

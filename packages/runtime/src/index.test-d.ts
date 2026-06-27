@@ -17,6 +17,7 @@ import {
   type ViewServerGrpcRuntimeOptions,
   type ViewServerGrpcIngressError,
   type ViewServerKafkaIngressError,
+  type ViewServerTcpPublishIngressError,
   type ViewServerRuntimeOptions,
 } from "./index";
 
@@ -99,6 +100,9 @@ describe("runtime type contracts", () => {
     expectTypeOf(runtime.metricsUrl).toEqualTypeOf<
       ViewServerRuntime<typeof viewServer.topics>["metricsUrl"]
     >();
+    expectTypeOf(runtime.tcpPublishUrl).toEqualTypeOf<
+      ViewServerRuntime<typeof viewServer.topics>["tcpPublishUrl"]
+    >();
     expectTypeOf(runtime.health).toEqualTypeOf<
       ViewServerRuntime<typeof viewServer.topics>["health"]
     >();
@@ -112,6 +116,7 @@ describe("runtime type contracts", () => {
       | ViewServerRuntimeError
       | ViewServerKafkaIngressError
       | ViewServerGrpcIngressError
+      | ViewServerTcpPublishIngressError
     >();
     expectTypeOf<Effect.Success<typeof runtimeWithGroupedAdmissionLimits>>().toMatchTypeOf<
       ViewServerRuntime<typeof viewServer.topics>
@@ -220,8 +225,20 @@ describe("runtime type contracts", () => {
     const invalidOptions = makeViewServerRuntime(viewServer, {
       websocketPort: "8080",
     });
+    const tcpPublishPortOptions = makeViewServerRuntime(viewServer, {
+      tcpPublishMaxConnections: 16,
+      tcpPublishPort: 8081,
+    });
+    expectTypeOf<Effect.Success<typeof tcpPublishPortOptions>>().toMatchTypeOf<
+      ViewServerRuntime<typeof viewServer.topics>
+    >();
+    // @ts-expect-error runtime TCP publish port rejects string ports.
     const invalidTcpPublishPortOptions = makeViewServerRuntime(viewServer, {
-      // @ts-expect-error TCP publish ingress is not wired by the runtime package yet.
+      tcpPublishPort: "8081",
+    });
+    // @ts-expect-error runtime TCP publish connection cap rejects string values.
+    const invalidTcpPublishMaxConnectionsOptions = makeViewServerRuntime(viewServer, {
+      tcpPublishMaxConnections: "16",
       tcpPublishPort: 8081,
     });
     // @ts-expect-error runtime paths must be absolute HTTP paths.
@@ -496,7 +513,6 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidTopicPublish).not.toBeAny();
     expectTypeOf(invalidSnapshot).not.toBeAny();
     expectTypeOf(invalidOptions).not.toBeAny();
-    expectTypeOf(invalidTcpPublishPortOptions).not.toBeAny();
     expectTypeOf(invalidPathOptions).not.toBeAny();
     expectTypeOf(invalidHealthPathOptions).not.toBeAny();
     expectTypeOf(invalidMetricsPathOptions).not.toBeAny();
@@ -525,9 +541,13 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidGrpcReconnectMax).not.toBeAny();
     expectTypeOf(invalidGrpcReconnectDelay).not.toBeAny();
     expectTypeOf(invalidGrpcOptionKey).not.toBeAny();
+    expectTypeOf(invalidTcpPublishPortOptions).not.toBeAny();
+    expectTypeOf(invalidTcpPublishMaxConnectionsOptions).not.toBeAny();
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("port");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("path");
-    expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("tcpPublishPort");
+    expectTypeOf<ViewServerRuntimeOptions>().toHaveProperty("tcpPublishMaxConnections");
+    expectTypeOf<ViewServerRuntimeOptions>().toHaveProperty("tcpPublishHost");
+    expectTypeOf<ViewServerRuntimeOptions>().toHaveProperty("tcpPublishPort");
     expectTypeOf<ViewServerRuntimeOptions>().toHaveProperty("grpc");
   });
 });

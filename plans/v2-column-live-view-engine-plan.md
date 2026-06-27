@@ -1202,16 +1202,34 @@ Default local/dev mode can allow anonymous access, but production docs must make
 
 ### TCP Publish API
 
-`tcpPublishPort` exists for non-browser publishers.
+`tcpPublishPort` exists for non-browser publishers. When configured, the runtime
+opens a plain TCP NDJSON endpoint and returns `tcpPublishUrl`.
 
-The first implementation should support a simple typed publish path:
+TCP publish has a separate `tcpPublishHost` and defaults to `127.0.0.1`. It must
+not inherit the public WebSocket/HTTP host because it is a mutation ingress, not
+a browser endpoint.
 
-- publish row
-- patch row
-- delete row
-- publish batch
+The TCP endpoint accepts one JSON command per line:
 
-It must use the same engine mutation path as Kafka. No second mutation implementation.
+```json
+{ "op": "publish", "topic": "orders", "row": { "id": "o1" } }
+{ "op": "publishMany", "topic": "orders", "rows": [{ "id": "o1" }] }
+{ "op": "patch", "topic": "orders", "key": "o1", "patch": { "status": "done" } }
+{ "op": "delete", "topic": "orders", "key": "o1" }
+```
+
+Each response is also one JSON line:
+
+```json
+{ "ok": true }
+{ "ok": false, "error": { "_tag": "ViewServerTcpPublishIngressError", "phase": "decode", "message": "..." } }
+```
+
+It uses the same runtime-core mutation path as Kafka, gRPC materialized ingress,
+and in-memory tests. No second mutation implementation exists.
+
+TCP publish is only for topics whose source of truth is the TCP publisher. The
+runtime must reject TCP mutations for Kafka-owned or gRPC-owned topics.
 
 TCP publish tests should cover:
 
@@ -1220,6 +1238,9 @@ TCP publish tests should cover:
 - delete -> remove
 - batch -> one coherent version range
 - invalid payload -> typed failure, no partial mutation unless explicitly documented
+- startup failure when the configured TCP port is unavailable
+- runtime shutdown closes the TCP endpoint
+- connection/line/queue bounds and source-owned topic rejection
 
 ### React Provider Contract
 

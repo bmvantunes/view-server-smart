@@ -25,6 +25,11 @@ export type ResolvedViewServerRuntimeOptions<
 > = {
   readonly runtimeCoreOptions: ViewServerRuntimeCoreOptionsFor<Topics>;
   readonly serverOptions: ViewServerWebSocketServerOptions;
+  readonly tcpPublishOptions?: {
+    readonly host?: string;
+    readonly maxConnections?: number;
+    readonly port: number;
+  };
   readonly kafkaOptions?: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>;
   readonly grpcOptions?: ResolvedViewServerGrpcRuntimeOptions<Topics, GrpcClients>;
 };
@@ -394,6 +399,16 @@ export const resolveViewServerRuntimeOptions: <
     ...(options.healthPath === undefined ? {} : { healthPath: options.healthPath }),
     ...(options.metricsPath === undefined ? {} : { metricsPath: options.metricsPath }),
   };
+  const tcpPublishOptions =
+    options.tcpPublishPort === undefined
+      ? undefined
+      : {
+          ...(options.tcpPublishHost === undefined ? {} : { host: options.tcpPublishHost }),
+          ...(options.tcpPublishMaxConnections === undefined
+            ? {}
+            : { maxConnections: options.tcpPublishMaxConnections }),
+          port: options.tcpPublishPort,
+        };
   const kafkaOptions =
     options.kafka === undefined ? undefined : yield* resolveKafkaOptions(options.kafka);
   const grpcOptions =
@@ -402,6 +417,7 @@ export const resolveViewServerRuntimeOptions: <
   return {
     runtimeCoreOptions,
     serverOptions,
+    ...(tcpPublishOptions === undefined ? {} : { tcpPublishOptions }),
     ...(kafkaOptions === undefined ? {} : { kafkaOptions }),
     ...(grpcOptions === undefined ? {} : { grpcOptions }),
   };

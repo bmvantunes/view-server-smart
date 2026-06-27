@@ -62,6 +62,9 @@ export type ViewServerRuntimeOptions<
 > = {
   readonly host?: string;
   readonly websocketPort?: number;
+  readonly tcpPublishHost?: string;
+  readonly tcpPublishMaxConnections?: number;
+  readonly tcpPublishPort?: number;
   readonly rpcPath?: RuntimeHttpPath;
   readonly healthPath?: RuntimeHttpPath;
   readonly metricsPath?: RuntimeHttpPath;
@@ -281,6 +284,7 @@ export type ViewServerRuntime<Topics extends ViewServerRuntimeTopicDefinitions> 
   readonly url: string;
   readonly healthUrl: string;
   readonly metricsUrl: string;
+  readonly tcpPublishUrl?: string;
   readonly client: ViewServerPublicRuntimeClient<Topics>;
   readonly liveClient: ViewServerLiveClient<Topics>;
   readonly health: () => Effect.Effect<ViewServerHealth<Topics>, ViewServerRuntimeError>;

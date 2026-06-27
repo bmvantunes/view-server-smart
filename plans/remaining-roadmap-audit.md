@@ -39,34 +39,34 @@ because it includes explicit future scope.
 
 ### Implemented Current Slice
 
-| Area                                                          | Status      | Evidence                                                                                                                                                                                          |
-| ------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Own in-memory live engine, no external analytical DB hot path | Implemented | `packages/column-live-view-engine`, `packages/runtime-core`; no chDB/Perspective runtime dependency.                                                                                              |
-| Explicit package seams                                        | Implemented | `packages/config`, `column-live-view-engine`, `runtime-core`, `client`, `protocol`, `in-memory`, `server`, `runtime`, `react`; `pnpm run check:package-exports`; `pnpm run check:internal-seams`. |
-| Typed public config/query API                                 | Implemented | Config type tests cover topic schemas, query select/where/order/group/aggregates, Kafka, and gRPC.                                                                                                |
-| Runtime URL in provider, not config                           | Implemented | React provider accepts runtime URL/client at provider boundary; browser bundles do not import runtime config.                                                                                     |
-| In-memory browser/test provider                               | Implemented | `@view-server/react/testing` and `@view-server/in-memory`; browser tests and in-memory benchmarks use real runtime-core/engine.                                                                   |
-| Effect RPC WebSocket production transport                     | Implemented | `packages/server`, `packages/client/remote.ts`, protocol package, WebSocket/runtime tests.                                                                                                        |
-| Health hook, `/health`, and `/metrics` endpoints              | Implemented | `useViewServerHealth`, runtime/server health tests, health codecs, metrics route/runtime tests, root/runtime README docs.                                                                         |
-| Kafka runtime ingress                                         | Implemented | `@platformatic/kafka`, JSON/protobuf/custom codecs, source mapping, Docker Apache Kafka e2e, restart/startFrom policy.                                                                            |
-| gRPC runtime ingress                                          | Implemented | Covered by `plans/grpc.md` implementation.                                                                                                                                                        |
-| Snapshot/delta convergence                                    | Implemented | Engine/runtime/client tests cover raw, grouped, retained deltas, cleanup, and convergence.                                                                                                        |
-| Grouped queries and aggregates                                | Implemented | Grouped query tests, grouped aggregate/write benchmarks and gates.                                                                                                                                |
-| Backpressure at subscription/transport boundary               | Implemented | `BackpressureExceeded` typed status, queue-capacity tests, remote/client/protocol tests.                                                                                                          |
-| Benchmark baseline automation                                 | Implemented | Smoke, raw read/write, active sharing, grouped, WebSocket, Kafka, and gRPC baseline scripts.                                                                                                      |
-| Pre-gRPC readiness gate                                       | Implemented | `pnpm run pre-grpc:gate`.                                                                                                                                                                         |
+| Area                                                          | Status      | Evidence                                                                                                                                                                                                                           |
+| ------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Own in-memory live engine, no external analytical DB hot path | Implemented | `packages/column-live-view-engine`, `packages/runtime-core`; no chDB/Perspective runtime dependency.                                                                                                                               |
+| Explicit package seams                                        | Implemented | `packages/config`, `column-live-view-engine`, `runtime-core`, `client`, `protocol`, `in-memory`, `server`, `runtime`, `react`; `pnpm run check:package-exports`; `pnpm run check:internal-seams`.                                  |
+| Typed public config/query API                                 | Implemented | Config type tests cover topic schemas, query select/where/order/group/aggregates, Kafka, and gRPC.                                                                                                                                 |
+| Runtime URL in provider, not config                           | Implemented | React provider accepts runtime URL/client at provider boundary; browser bundles do not import runtime config.                                                                                                                      |
+| In-memory browser/test provider                               | Implemented | `@view-server/react/testing` and `@view-server/in-memory`; browser tests and in-memory benchmarks use real runtime-core/engine.                                                                                                    |
+| Effect RPC WebSocket production transport                     | Implemented | `packages/server`, `packages/client/remote.ts`, protocol package, WebSocket/runtime tests.                                                                                                                                         |
+| Health hook, `/health`, and `/metrics` endpoints              | Implemented | `useViewServerHealth`, runtime/server health tests, health codecs, metrics route/runtime tests, root/runtime README docs.                                                                                                          |
+| Kafka runtime ingress                                         | Implemented | `@platformatic/kafka`, JSON/protobuf/custom codecs, source mapping, Docker Apache Kafka e2e, restart/startFrom policy.                                                                                                             |
+| gRPC runtime ingress                                          | Implemented | Covered by `plans/grpc.md` implementation.                                                                                                                                                                                         |
+| Snapshot/delta convergence                                    | Implemented | Engine/runtime/client tests cover raw, grouped, retained deltas, cleanup, and convergence.                                                                                                                                         |
+| Grouped queries and aggregates                                | Implemented | Grouped query tests, grouped aggregate/write benchmarks and gates.                                                                                                                                                                 |
+| Backpressure at subscription/transport boundary               | Implemented | `BackpressureExceeded` typed status, queue-capacity tests, remote/client/protocol tests.                                                                                                                                           |
+| Benchmark baseline automation                                 | Implemented | Smoke, raw read/write, active sharing, grouped, WebSocket, Kafka, and gRPC baseline scripts.                                                                                                                                       |
+| Pre-gRPC readiness gate                                       | Implemented | `pnpm run pre-grpc:gate`.                                                                                                                                                                                                          |
+| TCP publish API/runtime ingress                               | Implemented | `packages/runtime/src/tcp-publish-ingress.ts`, runtime TCP tests for publish/patch/delete/publishMany, schema decode errors, bounded line/queue backpressure, source-owned topic rejection, startup failure, and shutdown cleanup. |
 
 ### Production-Ready Next Items
 
 These are concrete gaps where the plan describes behavior that is still missing or
 currently only documented as a future seam.
 
-| Item                                 | Status                | Why it remains                                                                                   | Suggested first PR                                                                                                                      |
-| ------------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| TCP publish API/runtime ingress      | Production-ready next | `ViewServerRuntimeOptions` explicitly rejects `tcpPublishPort`; no TCP publish adapter exists.   | Add typed TCP publish ingress that uses runtime-core publish/patch/delete/publishMany, with tests for live deltas and invalid payloads. |
-| Runtime auth/session validation seam | Production-ready next | gRPC has system/shared session context; server/runtime do not expose `auth.validateRequest` yet. | Add optional server/runtime auth validation at WebSocket and health/admin boundaries, initially anonymous by default.                   |
-| Span/observability assertions        | Production-ready next | Code uses named `Effect.fn`, but tests do not prove key ingest -> engine -> fanout spans exist.  | Add one focused tracing test that captures span names for publish -> engine mutation -> subscription fanout.                            |
-| Example app                          | Production-ready next | Plan lists `apps/examples`; no `apps` files currently exist.                                     | Add a minimal example using real provider URL injection and in-memory provider test/demo path.                                          |
+| Item                                 | Status                | Why it remains                                                                                   | Suggested first PR                                                                                                    |
+| ------------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Runtime auth/session validation seam | Production-ready next | gRPC has system/shared session context; server/runtime do not expose `auth.validateRequest` yet. | Add optional server/runtime auth validation at WebSocket and health/admin boundaries, initially anonymous by default. |
+| Span/observability assertions        | Production-ready next | Code uses named `Effect.fn`, but tests do not prove key ingest -> engine -> fanout spans exist.  | Add one focused tracing test that captures span names for publish -> engine mutation -> subscription fanout.          |
+| Example app                          | Production-ready next | Plan lists `apps/examples`; no `apps` files currently exist.                                     | Add a minimal example using real provider URL injection and in-memory provider test/demo path.                        |
 
 ### Intentionally Deferred
 
@@ -83,17 +83,15 @@ These are in the plan, but should remain future work unless explicitly promoted.
 
 ### Stale Or Needs Rewrite
 
-| Plan text                                                              | Status            | Action                                                                 |
-| ---------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------- |
-| `createRuntime` examples still show `tcpPublishPort` as if implemented | Remove or rewrite | Keep as future TCP publish section until implemented.                  |
-| Some early examples show raw queries without `select`                  | Remove or rewrite | Public query API now requires explicit `select` or grouped aggregates. |
+| Plan text                                             | Status            | Action                                                                 |
+| ----------------------------------------------------- | ----------------- | ---------------------------------------------------------------------- |
+| Some early examples show raw queries without `select` | Remove or rewrite | Public query API now requires explicit `select` or grouped aggregates. |
 
 ## Recommended Implementation Order
 
-1. TCP publish API/runtime ingress.
-2. Runtime auth/session validation seam.
-3. Span/observability assertions.
-4. Minimal example app.
+1. Runtime auth/session validation seam.
+2. Span/observability assertions.
+3. Minimal example app.
 
 Do not reopen completed gRPC materialized/leased scope unless new tests reveal a real
 correctness gap.

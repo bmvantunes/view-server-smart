@@ -17,6 +17,7 @@ NodeRuntime.runMain(
   runViewServerRuntime(viewServer, {
     host: "127.0.0.1",
     websocketPort: 8080,
+    tcpPublishPort: 8081,
   }),
 );
 ```
@@ -24,6 +25,16 @@ NodeRuntime.runMain(
 The same-server `GET /health` endpoint serves the cached runtime health snapshot
 for deployment readiness checks. Internal `bigint` health fields, such as Kafka
 lag, are encoded as decimal strings in the JSON response.
+
+When `tcpPublishPort` is configured, the runtime also opens a non-browser TCP
+NDJSON publish endpoint and exposes its `tcpPublishUrl`. That endpoint supports
+`publish`, `publishMany`, `patch`, and `delete` commands and routes every
+mutation through the same Runtime Core path as Kafka, gRPC, and in-memory tests.
+TCP publish is for externally-published topics only; Kafka/gRPC-owned topics are
+rejected so one View Server topic has one source of truth. TCP publish has its
+own `tcpPublishHost` and defaults to `127.0.0.1`; it does not inherit the public
+WebSocket/HTTP host. The TCP endpoint is bounded by connection, line-size, and
+queued-command limits.
 
 The same-server `GET /metrics` endpoint serves Prometheus text exposition derived
 from the same cached health snapshot. It exposes scrape-safe runtime, transport,

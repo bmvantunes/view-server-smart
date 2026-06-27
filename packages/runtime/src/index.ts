@@ -3,6 +3,7 @@ import { Config, Effect } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
 import type { ViewServerGrpcIngressError } from "./grpc-ingress";
 import type { ViewServerKafkaIngressError } from "./kafka-ingress";
+import type { ViewServerTcpPublishIngressError } from "./tcp-publish-ingress";
 import {
   makeDefaultRuntimeDependencies,
   makeViewServerRuntimeWithDependencies,
@@ -22,6 +23,7 @@ export type {
 };
 export type { ViewServerKafkaIngressError };
 export type { ViewServerGrpcIngressError };
+export type { ViewServerTcpPublishIngressError } from "./tcp-publish-ingress";
 
 export const makeViewServerRuntime: <
   const Topics extends ViewServerRuntimeTopicDefinitions,
@@ -36,6 +38,7 @@ export const makeViewServerRuntime: <
   | ViewServerRuntimeError
   | ViewServerKafkaIngressError
   | ViewServerGrpcIngressError
+  | ViewServerTcpPublishIngressError
 > = Effect.fn("ViewServerRuntime.make")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
   const Options extends object,
@@ -64,6 +67,7 @@ export const runViewServerRuntime: <
   | ViewServerRuntimeError
   | ViewServerKafkaIngressError
   | ViewServerGrpcIngressError
+  | ViewServerTcpPublishIngressError
 > = Effect.fn("ViewServerRuntime.run")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
   const Options extends object,

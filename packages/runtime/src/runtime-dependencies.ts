@@ -30,6 +30,12 @@ import {
   type ViewServerKafkaIngress,
   type ViewServerKafkaIngressError,
 } from "./kafka-ingress";
+import {
+  makeViewServerTcpPublishIngress,
+  type ViewServerTcpPublishIngress,
+  type ViewServerTcpPublishIngressError,
+  type ViewServerTcpPublishIngressOptions,
+} from "./tcp-publish-ingress";
 import type {
   ResolvedViewServerGrpcRuntimeOptions,
   ResolvedViewServerKafkaRuntimeOptions,
@@ -61,6 +67,11 @@ export type ViewServerRuntimeDependencies<Topics extends ViewServerRuntimeTopicD
     options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
     health: ViewServerKafkaHealthLedger<Topics>,
   ) => Effect.Effect<ViewServerKafkaIngress, ViewServerKafkaIngressError>;
+  readonly makeTcpPublishIngress: (
+    config: ViewServerConfig<Topics>,
+    client: ViewServerRuntimeClient<Topics>,
+    options: ViewServerTcpPublishIngressOptions,
+  ) => Effect.Effect<ViewServerTcpPublishIngress, ViewServerTcpPublishIngressError>;
   readonly makeGrpcIngress: <const Clients extends GrpcRuntimeClients>(
     config: ViewServerConfig<Topics>,
     client: ViewServerRuntimeClient<Topics>,
@@ -106,5 +117,6 @@ export const makeDefaultRuntimeDependencies = <
       ),
     }),
   makeKafkaIngress: makeViewServerKafkaIngress,
+  makeTcpPublishIngress: makeViewServerTcpPublishIngress,
   makeGrpcIngress: makeViewServerGrpcIngress,
 });
