@@ -68,6 +68,13 @@ type GrpcMaterializedSample = {
   readonly totalRows: number;
 };
 
+class GrpcMaterializedBenchmarkConvergenceError extends Schema.TaggedErrorClass<GrpcMaterializedBenchmarkConvergenceError>()(
+  "GrpcMaterializedBenchmarkConvergenceError",
+  {
+    message: Schema.String,
+  },
+) {}
+
 const GrpcOrder = Schema.Struct({
   id: Schema.String,
   customerId: Schema.String,
@@ -97,6 +104,7 @@ const defaultIterations = 5;
 const defaultSeedRows = 1_000;
 const defaultWarmupIterations = 0;
 const defaultWarmupTimeMs = 0;
+const convergenceTimeout = "10 seconds";
 const memoryBefore = memorySnapshot();
 
 const positiveIntegerFromEnv = (name: string, fallback: number): number => {
@@ -376,6 +384,16 @@ const waitForTotalRows = Effect.fn("ViewServerRuntime.grpc.bench.totalRows.wait"
         schedule: Schedule.addDelay(Schedule.recurs(200), () => Effect.succeed("1 millis")),
         until: (snapshot) => snapshot.totalRows === expectedTotalRows,
       }),
+      Effect.timeout(convergenceTimeout),
+      Effect.flatMap((snapshot) =>
+        snapshot === undefined
+          ? Effect.fail(
+              new GrpcMaterializedBenchmarkConvergenceError({
+                message: `gRPC materialized benchmark did not converge to ${expectedTotalRows} rows within ${convergenceTimeout}.`,
+              }),
+            )
+          : Effect.succeed(snapshot),
+      ),
     );
 });
 

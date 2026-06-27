@@ -274,7 +274,10 @@ const cleanupLeakCountFromHealth = (health: ViewServerHealth<Topics>): number =>
   let leakCount = 0;
   for (const topicHealth of topicHealthValues(health)) {
     leakCount +=
-      topicHealth.activeSubscriptions + topicHealth.activeViews + topicHealth.queuedEvents;
+      topicHealth.activeSubscriptions +
+      topicHealth.activeViews +
+      topicHealth.queuedEvents +
+      topicHealth.rowCount;
   }
   return leakCount;
 };
