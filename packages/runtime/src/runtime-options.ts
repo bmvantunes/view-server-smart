@@ -23,6 +23,7 @@ export type ResolvedViewServerRuntimeOptions<
   Regions extends RuntimeRegions = RuntimeRegions,
   GrpcClients extends GrpcRuntimeClients = GrpcRuntimeClients,
 > = {
+  readonly auth?: ViewServerRuntimeOptions<Topics, Regions, GrpcClients>["auth"];
   readonly runtimeCoreOptions: ViewServerRuntimeCoreOptionsFor<Topics>;
   readonly serverOptions: ViewServerWebSocketServerOptions;
   readonly tcpPublishOptions?: {
@@ -415,6 +416,7 @@ export const resolveViewServerRuntimeOptions: <
     options.grpc === undefined ? undefined : yield* resolveGrpcOptions(options.grpc);
   yield* validateSourceOwnership(kafkaOptions, grpcOptions);
   return {
+    ...(options.auth === undefined ? {} : { auth: options.auth }),
     runtimeCoreOptions,
     serverOptions,
     ...(tcpPublishOptions === undefined ? {} : { tcpPublishOptions }),

@@ -25,7 +25,7 @@ truth, not plan text that predates later implementation work.
 | gRPC health/lifecycle                           | Implemented            | `packages/runtime/src/grpc-health.ts`, runtime health tests, `pnpm run grpc:gate`.                                    |
 | gRPC benchmark gates                            | Implemented            | `benchmarks/baselines/grpc-materialized.json`, `grpc-leased.json`, `grpc-leased-retained.json`, `pnpm run grpc:gate`. |
 | Public config migration to source constructors  | Deferred intentionally | Listed under `Deferred Decisions`; current source markers are accepted.                                               |
-| Session-scoped leased feeds and auth forwarding | Deferred intentionally | Current slice uses system-scoped shared feeds.                                                                        |
+| Session-scoped leased feeds and auth forwarding | Deferred intentionally | Runtime auth validates edge requests; gRPC feeds still use system-scoped shared feed identity.                        |
 | Generic non-gRPC stream-source API              | Deferred intentionally | Plan explicitly keeps ConnectRPC-specific public API.                                                                 |
 | Multi-source topics                             | Deferred intentionally | Requires a separate ordering/dedupe/restart contract.                                                                 |
 | Custom live-event transport                     | Deferred intentionally | Browser transport remains Effect RPC WebSocket + NDJSON.                                                              |
@@ -50,6 +50,7 @@ because it includes explicit future scope.
 | Health hook, `/health`, and `/metrics` endpoints              | Implemented | `useViewServerHealth`, runtime/server health tests, health codecs, metrics route/runtime tests, root/runtime README docs.                                                                                                          |
 | Kafka runtime ingress                                         | Implemented | `@platformatic/kafka`, JSON/protobuf/custom codecs, source mapping, Docker Apache Kafka e2e, restart/startFrom policy.                                                                                                             |
 | gRPC runtime ingress                                          | Implemented | Covered by `plans/grpc.md` implementation.                                                                                                                                                                                         |
+| Runtime auth/session validation seam                          | Implemented | Optional `auth.validateRequest` on server/runtime validates WebSocket upgrades, `/health`, and `/metrics`; default remains anonymous.                                                                                              |
 | Snapshot/delta convergence                                    | Implemented | Engine/runtime/client tests cover raw, grouped, retained deltas, cleanup, and convergence.                                                                                                                                         |
 | Grouped queries and aggregates                                | Implemented | Grouped query tests, grouped aggregate/write benchmarks and gates.                                                                                                                                                                 |
 | Backpressure at subscription/transport boundary               | Implemented | `BackpressureExceeded` typed status, queue-capacity tests, remote/client/protocol tests.                                                                                                                                           |
@@ -62,11 +63,10 @@ because it includes explicit future scope.
 These are concrete gaps where the plan describes behavior that is still missing or
 currently only documented as a future seam.
 
-| Item                                 | Status                | Why it remains                                                                                   | Suggested first PR                                                                                                    |
-| ------------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| Runtime auth/session validation seam | Production-ready next | gRPC has system/shared session context; server/runtime do not expose `auth.validateRequest` yet. | Add optional server/runtime auth validation at WebSocket and health/admin boundaries, initially anonymous by default. |
-| Span/observability assertions        | Production-ready next | Code uses named `Effect.fn`, but tests do not prove key ingest -> engine -> fanout spans exist.  | Add one focused tracing test that captures span names for publish -> engine mutation -> subscription fanout.          |
-| Example app                          | Production-ready next | Plan lists `apps/examples`; no `apps` files currently exist.                                     | Add a minimal example using real provider URL injection and in-memory provider test/demo path.                        |
+| Item                          | Status                | Why it remains                                                                                  | Suggested first PR                                                                                           |
+| ----------------------------- | --------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Span/observability assertions | Production-ready next | Code uses named `Effect.fn`, but tests do not prove key ingest -> engine -> fanout spans exist. | Add one focused tracing test that captures span names for publish -> engine mutation -> subscription fanout. |
+| Example app                   | Production-ready next | Plan lists `apps/examples`; no `apps` files currently exist.                                    | Add a minimal example using real provider URL injection and in-memory provider test/demo path.               |
 
 ### Intentionally Deferred
 
@@ -79,7 +79,7 @@ These are in the plan, but should remain future work unless explicitly promoted.
 | Custom live-event WebSocket protocol                     | Deferred intentionally | Effect RPC WebSocket + NDJSON remains current production transport.                                                   |
 | Rust/native/SIMD engine                                  | Deferred intentionally | TypeScript engine remains primary; native acceleration only if future benchmarks justify it.                          |
 | User-defined indexes                                     | Deferred intentionally | Product principle remains automatic optimization from schemas and controlled query DSL.                               |
-| Session-scoped gRPC leased feeds                         | Deferred intentionally | Needs real authenticated sessions first.                                                                              |
+| Session-scoped gRPC leased feeds                         | Deferred intentionally | Edge auth exists, but leased feeds still need a separate session partitioning/forwarding contract.                    |
 
 ### Stale Or Needs Rewrite
 
@@ -89,9 +89,8 @@ These are in the plan, but should remain future work unless explicitly promoted.
 
 ## Recommended Implementation Order
 
-1. Runtime auth/session validation seam.
-2. Span/observability assertions.
-3. Minimal example app.
+1. Span/observability assertions.
+2. Minimal example app.
 
 Do not reopen completed gRPC materialized/leased scope unless new tests reveal a real
 correctness gap.

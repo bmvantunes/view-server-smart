@@ -4,6 +4,7 @@ import type { Message } from "@bufbuild/protobuf";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { ColumnLiveViewEngineHealth } from "@view-server/column-live-view-engine";
 import { makeViewServerClient } from "@view-server/client/remote";
+import { ViewServerAuthError } from "@view-server/server";
 import {
   defineViewServerConfig,
   grpc,
@@ -84,6 +85,13 @@ class RuntimeHealthJsonParseError extends Schema.TaggedErrorClass<RuntimeHealthJ
   },
 ) {}
 
+class RuntimeJsonParseError extends Schema.TaggedErrorClass<RuntimeJsonParseError>()(
+  "RuntimeJsonParseError",
+  {
+    cause: Schema.Unknown,
+  },
+) {}
+
 class RuntimeTestFailure extends Schema.TaggedErrorClass<RuntimeTestFailure>()(
   "RuntimeTestFailure",
   {
@@ -110,6 +118,7 @@ const TcpPublishResponse = Schema.Union([
       code: Schema.optional(Schema.String),
       message: Schema.String,
       phase: Schema.optional(Schema.String),
+      status: Schema.optional(Schema.Number),
       topic: Schema.optional(Schema.String),
     }),
   }),
@@ -702,6 +711,24 @@ const order = (id: string, price: number): OrderRow => ({
   price,
 });
 
+const bearerAuth = {
+  validateRequest: (request: { readonly headers: Readonly<Record<string, string>> }) =>
+    request.headers["authorization"] === "Bearer view-server-test"
+      ? Effect.succeed({
+          forwardedHeaders: {
+            authorization: request.headers["authorization"],
+          },
+          id: "session-1",
+          systemHeaders: {},
+        })
+      : Effect.fail(
+          new ViewServerAuthError({
+            message: "Missing or invalid authorization header.",
+            status: 401,
+          }),
+        ),
+};
+
 const nullRecord = <Value>(
   entries: ReadonlyArray<readonly [string, Value]>,
 ): Record<string, Value> => {
@@ -727,6 +754,16 @@ const fetchText = Effect.fn("ViewServerRuntime.test.text.fetch")(function* (url:
   const response = yield* Effect.promise(() => fetch(url));
   const text = yield* Effect.promise(() => response.text());
   return { response, text };
+});
+
+const fetchJson = Effect.fn("ViewServerRuntime.test.json.fetch")(function* (url: string) {
+  const response = yield* Effect.promise(() => fetch(url));
+  const text = yield* Effect.promise(() => response.text());
+  const value = yield* Effect.try({
+    try: (): unknown => JSON.parse(text),
+    catch: (cause) => new RuntimeJsonParseError({ cause }),
+  });
+  return { response, value };
 });
 
 const tcpUrlConnectHost = (hostname: string): string =>
@@ -2592,6 +2629,98 @@ describe("@view-server/runtime", () => {
     }),
   );
 
+  it.live("requires auth for TCP publish mutations when runtime auth is configured", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeViewServerRuntime(viewServer, {
+        auth: bearerAuth,
+        host: "127.0.0.1",
+        tcpPublishPort: 0,
+        websocketPort: 0,
+      });
+      const tcpPublishUrl = yield* Effect.fromNullishOr(runtime.tcpPublishUrl);
+
+      const rejected = yield* sendTcpPublishCommand(tcpPublishUrl, {
+        op: "publish",
+        topic: "orders",
+        row: order("rejected", 10),
+      });
+      const accepted = yield* sendTcpPublishCommand(tcpPublishUrl, {
+        headers: {
+          authorization: "Bearer view-server-test",
+        },
+        op: "publish",
+        topic: "orders",
+        row: order("accepted", 20),
+      });
+      const snapshot = yield* runtime.client.snapshot("orders", {
+        select: ["id", "price"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(rejected).toStrictEqual({
+        ok: false,
+        error: {
+          _tag: "ViewServerAuthError",
+          message: "Missing or invalid authorization header.",
+          status: 401,
+        },
+      });
+      expect(accepted).toStrictEqual({ ok: true });
+      expect(snapshot).toStrictEqual({
+        rows: [{ id: "accepted", price: 20 }],
+        status: "ready",
+        statusCode: "Ready",
+        totalRows: 1,
+        version: 1,
+      });
+      yield* runtime.close;
+    }),
+  );
+
+  it.live("passes TCP publish peer address into auth validation", () =>
+    Effect.gen(function* () {
+      const remoteAddress = yield* Deferred.make<string>();
+      const runtime = yield* makeViewServerRuntime(viewServer, {
+        auth: {
+          validateRequest: (request) =>
+            Option.match(request.remoteAddress, {
+              onNone: () =>
+                Effect.fail(
+                  new ViewServerAuthError({
+                    message: "TCP auth did not receive a peer address.",
+                    status: 403,
+                  }),
+                ),
+              onSome: (address) =>
+                Deferred.succeed(remoteAddress, address).pipe(
+                  Effect.as({
+                    forwardedHeaders: {},
+                    id: "tcp-session",
+                    systemHeaders: {},
+                  }),
+                ),
+            }),
+        },
+        host: "127.0.0.1",
+        tcpPublishPort: 0,
+        websocketPort: 0,
+      });
+      const tcpPublishUrl = yield* Effect.fromNullishOr(runtime.tcpPublishUrl);
+
+      const accepted = yield* sendTcpPublishCommand(tcpPublishUrl, {
+        op: "publish",
+        topic: "orders",
+        row: order("accepted", 20),
+      });
+      const observedRemoteAddress = yield* Deferred.await(remoteAddress);
+
+      expect(accepted).toStrictEqual({ ok: true });
+      expect(observedRemoteAddress).toBe("127.0.0.1");
+      yield* runtime.close;
+    }),
+  );
+
   it.live("passes source-owned topics into TCP publish ingress rejection policy", () =>
     Effect.gen(function* () {
       type MixedTopics = typeof grpcAndKafkaViewServer.topics;
@@ -2685,12 +2814,19 @@ describe("@view-server/runtime", () => {
         websocketPort: 0,
       });
       const rejectedAcceptedSocket = new Net.Socket();
+      const partialAcceptedSocket = new Net.Socket();
+      const partialAcceptedSocketDestroyed: Array<"socket"> = [];
+      partialAcceptedSocket.destroy = () => {
+        partialAcceptedSocketDestroyed.push("socket");
+        return partialAcceptedSocket;
+      };
       installTcpPublishAcceptedSocket(
         rejectedAcceptedSocket,
         {
           activeChains: new Set(),
           activeFibers: new Set(),
           closed: true,
+          preCommandDeadlineMs: undefined,
           queuedCommands: 0,
           socketStates: new Map(),
           sockets: new Set(),
@@ -2699,8 +2835,67 @@ describe("@view-server/runtime", () => {
         runtime.client,
         { port: 0 },
       );
+      const partialAcceptedSocketState = {
+        activeChains: new Set<Promise<void>>(),
+        activeFibers: new Set<Fiber.Fiber<void, never>>(),
+        closed: false,
+        preCommandDeadlineMs: 1,
+        queuedCommands: 0,
+        socketStates: new Map(),
+        sockets: new Set<Net.Socket>(),
+      };
+      installTcpPublishAcceptedSocket(
+        partialAcceptedSocket,
+        partialAcceptedSocketState,
+        viewServer,
+        runtime.client,
+        { port: 0 },
+      );
+      partialAcceptedSocket.emit("data", "  ");
+      yield* Effect.sleep("20 millis");
+      const unauthorizedSocket = new Net.Socket();
+      const unauthorizedSocketResponses: Array<string> = [];
+      const unauthorizedSocketState = {
+        activeChains: new Set<Promise<void>>(),
+        activeFibers: new Set<Fiber.Fiber<void, never>>(),
+        closed: false,
+        preCommandDeadlineMs: 1_000,
+        queuedCommands: 0,
+        socketStates: new Map(),
+        sockets: new Set<Net.Socket>(),
+      };
+      Object.defineProperty(unauthorizedSocket, "write", {
+        value: (chunk: string, callback: () => void) => {
+          unauthorizedSocketResponses.push(chunk);
+          callback();
+          return true;
+        },
+      });
+      installTcpPublishAcceptedSocket(
+        unauthorizedSocket,
+        unauthorizedSocketState,
+        viewServer,
+        runtime.client,
+        {
+          auth: bearerAuth,
+          port: 0,
+        },
+      );
+      const initialUnauthorizedDeadline =
+        unauthorizedSocketState.socketStates.get(unauthorizedSocket)?.preCommandDeadline;
+      unauthorizedSocket.emit(
+        "data",
+        `${JSON.stringify({
+          op: "publish",
+          topic: "orders",
+          row: order("unauthorized", 10),
+        })}\n`,
+      );
+      yield* Effect.promise(() => Promise.allSettled(unauthorizedSocketState.activeChains));
       const slowPublishStarted = yield* Deferred.make<void>();
       const slowPublishInterrupted = yield* Deferred.make<void>();
+      const deadlineClearedPublishStarted = yield* Deferred.make<void>();
+      const deadlineClearedPublishInterrupted = yield* Deferred.make<void>();
       const globalPublishStarted = yield* Deferred.make<void>();
       const globalPublishInterrupted = yield* Deferred.make<void>();
       const disconnectedPublishStarted = yield* Deferred.make<void>();
@@ -2713,6 +2908,14 @@ describe("@view-server/runtime", () => {
           Deferred.succeed(slowPublishStarted, undefined).pipe(
             Effect.andThen(Effect.never),
             Effect.ensuring(Deferred.succeed(slowPublishInterrupted, undefined)),
+          ),
+      });
+      const deadlineClearedPublishClient = Object.create(runtime.client);
+      Object.defineProperty(deadlineClearedPublishClient, "publish", {
+        value: () =>
+          Deferred.succeed(deadlineClearedPublishStarted, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(deadlineClearedPublishInterrupted, undefined)),
           ),
       });
       const globalPublishClient = Object.create(runtime.client);
@@ -2744,6 +2947,72 @@ describe("@view-server/runtime", () => {
         topic: "orders",
         row: order("a", 10),
       })}\n`;
+      const deadlineClearedSocket = new Net.Socket();
+      const deadlineClearedSocketDestroyed: Array<"socket"> = [];
+      const deadlineClearedSocketState = {
+        activeChains: new Set<Promise<void>>(),
+        activeFibers: new Set<Fiber.Fiber<void, never>>(),
+        closed: false,
+        preCommandDeadlineMs: 1,
+        queuedCommands: 0,
+        socketStates: new Map(),
+        sockets: new Set<Net.Socket>(),
+      };
+      deadlineClearedSocket.destroy = () => {
+        deadlineClearedSocketDestroyed.push("socket");
+        deadlineClearedSocket.emit("close");
+        return deadlineClearedSocket;
+      };
+      installTcpPublishAcceptedSocket(
+        deadlineClearedSocket,
+        deadlineClearedSocketState,
+        viewServer,
+        deadlineClearedPublishClient,
+        { port: 0 },
+      );
+      deadlineClearedSocket.emit("data", compactCommandLine);
+      yield* Deferred.await(deadlineClearedPublishStarted).pipe(Effect.timeout("1 second"));
+      yield* Effect.sleep("20 millis");
+      const rearmedSocket = new Net.Socket();
+      const rearmedSocketDestroyed: Array<"socket"> = [];
+      const rearmedSocketResponses: Array<string> = [];
+      const rearmedSocketState = {
+        activeChains: new Set<Promise<void>>(),
+        activeFibers: new Set<Fiber.Fiber<void, never>>(),
+        closed: false,
+        preCommandDeadlineMs: 1,
+        queuedCommands: 0,
+        socketStates: new Map(),
+        sockets: new Set<Net.Socket>(),
+      };
+      rearmedSocket.destroy = () => {
+        rearmedSocketDestroyed.push("socket");
+        rearmedSocket.emit("close");
+        return rearmedSocket;
+      };
+      Object.defineProperty(rearmedSocket, "write", {
+        value: (chunk: string, callback: () => void) => {
+          rearmedSocketResponses.push(chunk);
+          callback();
+          return true;
+        },
+      });
+      installTcpPublishAcceptedSocket(
+        rearmedSocket,
+        rearmedSocketState,
+        viewServer,
+        runtime.client,
+        { port: 0 },
+      );
+      rearmedSocket.emit(
+        "data",
+        `${JSON.stringify({
+          op: "publish",
+          topic: "orders",
+          row: order("rearmed", 10),
+        })}\n`,
+      );
+      yield* Effect.sleep("20 millis");
       const oversizedIngress = yield* makeViewServerTcpPublishIngress(viewServer, runtime.client, {
         maxLineBytes: 8,
         port: 0,
@@ -2937,7 +3206,20 @@ describe("@view-server/runtime", () => {
       expect(oversizedCompleteLineSocket.destroyed).toBe(true);
       expect(rejectedConnectionCappedSocket.destroyed).toBe(true);
       expect(rejectedAcceptedSocket.destroyed).toBe(true);
+      expect(partialAcceptedSocketDestroyed).toStrictEqual(["socket"]);
+      expect(unauthorizedSocketResponses).toStrictEqual([
+        '{"ok":false,"error":{"_tag":"ViewServerAuthError","message":"Missing or invalid authorization header.","status":401}}\n',
+      ]);
+      expect(unauthorizedSocketState.socketStates.get(unauthorizedSocket)?.preCommandDeadline).toBe(
+        initialUnauthorizedDeadline,
+      );
+      expect(deadlineClearedSocketDestroyed).toStrictEqual([]);
+      expect(rearmedSocketResponses).toStrictEqual(['{"ok":true}\n']);
+      expect(rearmedSocketDestroyed).toStrictEqual(["socket"]);
 
+      deadlineClearedSocket.destroy();
+      unauthorizedSocket.destroy();
+      yield* Deferred.await(deadlineClearedPublishInterrupted).pipe(Effect.timeout("1 second"));
       heldConnectionCappedSocket.destroy();
       yield* connectionCappedIngress.close;
       yield* closedQueueIngress.close.pipe(Effect.timeout("1 second"));
@@ -2969,6 +3251,7 @@ describe("@view-server/runtime", () => {
         activeChains: new Set<Promise<void>>(),
         activeFibers: new Set<Fiber.Fiber<void, never>>(),
         closed: false,
+        preCommandDeadlineMs: undefined,
         queuedCommands: 0,
         socketStates: new Map(),
         sockets: new Set<Net.Socket>(),
@@ -2979,6 +3262,7 @@ describe("@view-server/runtime", () => {
         buffer: "",
         chain: Promise.resolve(),
         closed: false,
+        preCommandDeadline: undefined,
         queuedCommands: 0,
       };
 
@@ -3451,6 +3735,7 @@ describe("@view-server/runtime", () => {
       };
 
       const runtime = yield* makeViewServerRuntimeWithDependencies(dependencies, viewServer, {
+        auth: bearerAuth,
         groupedIncrementalAdmissionLimits: {
           maxGroups: 1,
         },
@@ -3477,7 +3762,9 @@ describe("@view-server/runtime", () => {
           streamOpenedType: typeof serverInput?.transport?.streamOpened,
           streamClosedType: typeof serverInput?.transport?.streamClosed,
         },
+        serverAuthType: typeof serverInput?.auth?.validateRequest,
         serverOptions,
+        tcpPublishAuthType: typeof tcpPublishOptions?.auth?.validateRequest,
         tcpPublishOptions,
         tcpPublishUrl: runtime.tcpPublishUrl,
       }).toStrictEqual({
@@ -3494,6 +3781,7 @@ describe("@view-server/runtime", () => {
           streamOpenedType: "object",
           streamClosedType: "object",
         },
+        serverAuthType: "function",
         serverOptions: {
           host: "0.0.0.0",
           port: 1234,
@@ -3501,7 +3789,9 @@ describe("@view-server/runtime", () => {
           healthPath: "/custom-health",
           metricsPath: "/custom-metrics",
         },
+        tcpPublishAuthType: "function",
         tcpPublishOptions: {
+          auth: bearerAuth,
           host: "127.0.0.1",
           maxConnections: 9,
           port: 1235,
@@ -3509,6 +3799,30 @@ describe("@view-server/runtime", () => {
         },
         tcpPublishUrl: "tcp://127.0.0.1:1235",
       });
+      yield* runtime.close;
+    }),
+  );
+
+  it.live("forwards runtime auth validation to operational HTTP endpoints", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeViewServerRuntime(viewServer, {
+        auth: bearerAuth,
+      });
+
+      const health = yield* fetchJson(runtime.healthUrl);
+      const metrics = yield* fetchJson(runtime.metricsUrl);
+
+      expect(health.response.status).toBe(401);
+      expect(health.value).toStrictEqual({
+        _tag: "ViewServerAuthError",
+        message: "Missing or invalid authorization header.",
+      });
+      expect(metrics.response.status).toBe(401);
+      expect(metrics.value).toStrictEqual({
+        _tag: "ViewServerAuthError",
+        message: "Missing or invalid authorization header.",
+      });
+
       yield* runtime.close;
     }),
   );

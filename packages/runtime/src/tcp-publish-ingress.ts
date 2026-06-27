@@ -4,7 +4,9 @@ import type {
   ViewServerRuntimeClient,
   ViewServerRuntimeError,
 } from "@view-server/config";
-import { Cause, Effect, Exit, Fiber, Result, Schema, SchemaAST } from "effect";
+import type { ViewServerAuth, ViewServerAuthRequest } from "@view-server/server";
+import { validateViewServerAuthRequest, ViewServerAuthError } from "@view-server/server";
+import { Cause, Effect, Exit, Fiber, Option, Result, Schema, SchemaAST } from "effect";
 import * as Net from "node:net";
 import type { ViewServerRuntimeTopicDefinitions } from "./runtime-types";
 
@@ -26,6 +28,7 @@ export type ViewServerTcpPublishIngressOptions = {
   readonly maxQueuedCommands?: number;
   readonly port: number;
   readonly rejectedTopics?: ReadonlySet<string>;
+  readonly auth?: ViewServerAuth;
 };
 
 export type ViewServerTcpPublishIngress = {
@@ -34,7 +37,10 @@ export type ViewServerTcpPublishIngress = {
 };
 
 type RuntimeMutationEffect = Effect.Effect<unknown, unknown, never>;
-type TcpPublishCommandError = ViewServerRuntimeError | ViewServerTcpPublishIngressError;
+type TcpPublishCommandError =
+  | ViewServerAuthError
+  | ViewServerRuntimeError
+  | ViewServerTcpPublishIngressError;
 
 const TcpAddress = Schema.Struct({
   address: Schema.String,
@@ -43,35 +49,43 @@ const TcpAddress = Schema.Struct({
 });
 
 const TcpJsonObject = Schema.Record(Schema.String, Schema.Json);
+const TcpHeaders = Schema.Record(Schema.String, Schema.String);
 
 const TcpPublishCommandSchema = Schema.Union([
   Schema.Struct({
+    headers: Schema.optional(TcpHeaders),
     op: Schema.Literal("publish"),
     topic: Schema.String,
     row: TcpJsonObject,
   }),
   Schema.Struct({
+    headers: Schema.optional(TcpHeaders),
     op: Schema.Literal("publishMany"),
     topic: Schema.String,
     rows: Schema.Array(TcpJsonObject),
   }),
   Schema.Struct({
+    headers: Schema.optional(TcpHeaders),
     op: Schema.Literal("patch"),
     topic: Schema.String,
     key: Schema.String,
     patch: TcpJsonObject,
   }),
   Schema.Struct({
+    headers: Schema.optional(TcpHeaders),
     op: Schema.Literal("delete"),
     topic: Schema.String,
     key: Schema.String,
   }),
 ]);
 
+type TcpPublishCommand = typeof TcpPublishCommandSchema.Type;
+
 type TcpPublishSocketState = {
   readonly activeFibers: Set<Fiber.Fiber<void, TcpPublishCommandError>>;
   buffer: string;
   closed: boolean;
+  preCommandDeadline: ReturnType<typeof globalThis.setTimeout> | undefined;
   queuedCommands: number;
   chain: Promise<void>;
 };
@@ -80,6 +94,7 @@ type TcpPublishServerState = {
   readonly activeChains: Set<Promise<void>>;
   closed: boolean;
   readonly activeFibers: Set<Fiber.Fiber<void, TcpPublishCommandError>>;
+  readonly preCommandDeadlineMs: number | undefined;
   queuedCommands: number;
   readonly socketStates: Map<Net.Socket, TcpPublishSocketState>;
   readonly sockets: Set<Net.Socket>;
@@ -109,6 +124,7 @@ const defaultMaxLineBytes = 1024 * 1024;
 const defaultMaxConnections = 1024;
 const defaultMaxGlobalQueuedCommands = 1024;
 const defaultMaxQueuedCommands = 1024;
+const acceptedSocketPreCommandDeadlineMs = 30_000;
 const rejectedSocketDestroyTimeoutMs = 1_000;
 const strictParseOptions = {
   onExcessProperty: "error",
@@ -168,6 +184,13 @@ const parseCommand = Effect.fn("ViewServerRuntime.tcpPublish.command.parse")(fun
         ),
     },
   );
+});
+
+const tcpAuthRequest = (command: TcpPublishCommand, socket: Net.Socket): ViewServerAuthRequest => ({
+  headers: command.headers ?? {},
+  method: "POST",
+  remoteAddress: Option.fromUndefinedOr(socket.remoteAddress),
+  url: "tcp://view-server/tcp-publish",
 });
 
 const runtimeCallFailed = (
@@ -438,12 +461,16 @@ const decodeTcpPatch = Effect.fn("ViewServerRuntime.tcpPublish.patch.decode")(fu
 const handleCommand = Effect.fn("ViewServerRuntime.tcpPublish.command.handle")(function* <
   const Topics extends ViewServerRuntimeTopicDefinitions,
 >(
+  socket: Net.Socket,
+  state: TcpPublishSocketState,
   config: ViewServerConfig<Topics>,
   client: ViewServerRuntimeClient<Topics>,
   options: ViewServerTcpPublishIngressOptions,
   line: string,
 ) {
   const command = yield* parseCommand(line);
+  yield* validateViewServerAuthRequest(options.auth, tcpAuthRequest(command, socket));
+  clearTcpPreCommandDeadline(state);
   yield* ensureTopicCanBeMutated(command.topic, options);
   if (command.op === "publish") {
     const row = yield* decodeTcpRow(config, command.topic, command.row);
@@ -490,6 +517,16 @@ const wireError = (cause: Cause.Cause<TcpPublishCommandError>): object => {
           code: failure.value.code,
           message: failure.value.message,
           ...(failure.value.topic === undefined ? {} : { topic: failure.value.topic }),
+        },
+      };
+    }
+    if (failure.value instanceof ViewServerAuthError) {
+      return {
+        ok: false,
+        error: {
+          _tag: failure.value._tag,
+          message: failure.value.message,
+          status: failure.value.status,
         },
       };
     }
@@ -640,7 +677,7 @@ const executeLine = async <const Topics extends ViewServerRuntimeTopicDefinition
     if (state.closed || serverState.closed) {
       return;
     }
-    const fiber = Effect.runFork(handleCommand(config, client, options, line));
+    const fiber = Effect.runFork(handleCommand(socket, state, config, client, options, line));
     serverState.activeFibers.add(fiber);
     state.activeFibers.add(fiber);
     const exit = await Effect.runPromise(Fiber.await(fiber));
@@ -657,6 +694,19 @@ const executeLine = async <const Topics extends ViewServerRuntimeTopicDefinition
   } finally {
     state.queuedCommands -= 1;
     serverState.queuedCommands -= 1;
+    if (
+      state.closed === false &&
+      serverState.closed === false &&
+      socket.destroyed === false &&
+      state.queuedCommands === 0 &&
+      state.preCommandDeadline === undefined
+    ) {
+      armTcpPreCommandDeadline(
+        socket,
+        state,
+        serverState.preCommandDeadlineMs ?? acceptedSocketPreCommandDeadlineMs,
+      );
+    }
   }
 };
 
@@ -709,6 +759,22 @@ const enqueueLine = <const Topics extends ViewServerRuntimeTopicDefinitions>(
     }
   };
   void chain.then(cleanup);
+};
+
+const clearTcpPreCommandDeadline = (state: TcpPublishSocketState): void => {
+  if (state.preCommandDeadline !== undefined) {
+    globalThis.clearTimeout(state.preCommandDeadline);
+    state.preCommandDeadline = undefined;
+  }
+};
+
+const armTcpPreCommandDeadline = (
+  socket: Net.Socket,
+  state: TcpPublishSocketState,
+  deadlineMs: number,
+): void => {
+  clearTcpPreCommandDeadline(state);
+  state.preCommandDeadline = globalThis.setTimeout(socket.destroy.bind(socket), deadlineMs);
 };
 
 const interruptSocketFibers = (state: TcpPublishSocketState): void => {
@@ -872,13 +938,20 @@ export const installTcpPublishAcceptedSocket = <
     buffer: "",
     chain: Promise.resolve(),
     closed: false,
+    preCommandDeadline: undefined,
     queuedCommands: 0,
   };
   state.sockets.add(socket);
   state.socketStates.set(socket, socketState);
   socket.on("error", socket.destroy.bind(socket));
+  armTcpPreCommandDeadline(
+    socket,
+    socketState,
+    state.preCommandDeadlineMs ?? acceptedSocketPreCommandDeadlineMs,
+  );
   socket.on("close", () => {
     socketState.closed = true;
+    clearTcpPreCommandDeadline(socketState);
     state.sockets.delete(socket);
     interruptSocketFibers(socketState);
     void socketState.chain.then(() => state.socketStates.delete(socket));
@@ -898,6 +971,7 @@ export const makeViewServerTcpPublishIngress = Effect.fn("ViewServerRuntime.tcpP
       activeChains: new Set(),
       activeFibers: new Set(),
       closed: false,
+      preCommandDeadlineMs: undefined,
       queuedCommands: 0,
       socketStates: new Map(),
       sockets: new Set(),

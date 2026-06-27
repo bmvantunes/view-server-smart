@@ -184,6 +184,7 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
       : yield* dependencies
           .makeTcpPublishIngress(config, runtimeClient, {
             ...resolvedOptions.tcpPublishOptions,
+            ...(resolvedOptions.auth === undefined ? {} : { auth: resolvedOptions.auth }),
             rejectedTopics: sourceOwnedTopics,
           })
           .pipe(
@@ -197,6 +198,7 @@ const makeViewServerRuntimeFromResolvedOptions = Effect.fn(
     .makeServer(
       config,
       {
+        ...(resolvedOptions.auth === undefined ? {} : { auth: resolvedOptions.auth }),
         liveClient: runtimeLiveClient,
         runtime: runtimeClient,
         transport: {

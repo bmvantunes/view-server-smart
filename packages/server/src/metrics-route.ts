@@ -1,7 +1,8 @@
 import type { TopicDefinitions, ViewServerConfig, ViewServerHealth } from "@view-server/config";
 import { viewServerDecodeHealth } from "@view-server/protocol";
 import { Effect } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { validateViewServerHttpRequest, viewServerAuthErrorResponse } from "./auth";
 import type { ViewServerWebSocketServerInput } from "./server-types";
 
 const metricContentType = "text/plain; version=0.0.4; charset=utf-8";
@@ -409,12 +410,24 @@ export const makeViewServerMetricsRoute = <const Topics extends TopicDefinitions
   HttpRouter.add(
     "GET",
     path,
-    input.runtime.health().pipe(
-      Effect.flatMap((health) => viewServerDecodeHealth(config, health)),
-      Effect.match({
-        onFailure: () =>
-          metricsResponse(200, compactLines([metricLine("view_server_metrics_error", 1)])),
-        onSuccess: (health) => metricsResponse(200, viewServerHealthMetrics(health)),
-      }),
-    ),
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      return yield* validateViewServerHttpRequest(input.auth, request).pipe(
+        Effect.matchEffect({
+          onFailure: (error) => Effect.succeed(viewServerAuthErrorResponse(error)),
+          onSuccess: () =>
+            Effect.gen(function* () {
+              const health = yield* input.runtime.health();
+              return yield* viewServerDecodeHealth(config, health);
+            }).pipe(
+              Effect.map((health) => metricsResponse(200, viewServerHealthMetrics(health))),
+              Effect.catchCause(() =>
+                Effect.succeed(
+                  metricsResponse(200, compactLines([metricLine("view_server_metrics_error", 1)])),
+                ),
+              ),
+            ),
+        }),
+      );
+    }),
   );

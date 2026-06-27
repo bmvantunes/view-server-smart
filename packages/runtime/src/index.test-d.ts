@@ -7,8 +7,9 @@ import {
   type GrpcRuntimeClients,
   type ViewServerRuntimeError,
 } from "@view-server/config";
-import type { Config, Effect } from "effect";
-import { Schema } from "effect";
+import type { ViewServerAuth } from "@view-server/server";
+import type { Config } from "effect";
+import { Effect, Schema } from "effect";
 import type { HttpServerError } from "effect/unstable/http";
 import {
   makeViewServerRuntime,
@@ -63,6 +64,16 @@ const runtimeWithGroupedAdmissionLimits = makeViewServerRuntime(viewServer, {
   groupedIncrementalAdmissionLimits: {
     maxGroups: 1,
   },
+});
+const runtimeWithAuth = makeViewServerRuntime(viewServer, {
+  auth: {
+    validateRequest: () =>
+      Effect.succeed({
+        forwardedHeaders: {},
+        id: null,
+        systemHeaders: {},
+      }),
+  } satisfies ViewServerAuth,
 });
 const runEffect = runViewServerRuntime(viewServer);
 declare const runtime: Effect.Success<typeof runtimeEffect>;
@@ -119,6 +130,9 @@ describe("runtime type contracts", () => {
       | ViewServerTcpPublishIngressError
     >();
     expectTypeOf<Effect.Success<typeof runtimeWithGroupedAdmissionLimits>>().toMatchTypeOf<
+      ViewServerRuntime<typeof viewServer.topics>
+    >();
+    expectTypeOf<Effect.Success<typeof runtimeWithAuth>>().toMatchTypeOf<
       ViewServerRuntime<typeof viewServer.topics>
     >();
 
@@ -245,6 +259,13 @@ describe("runtime type contracts", () => {
     const invalidPathOptions = makeViewServerRuntime(viewServer, {
       rpcPath: "runtime-rpc",
     });
+    const invalidAuthOptions = {
+      auth: {
+        validateRequest: () => "not an effect",
+      },
+    };
+    // @ts-expect-error runtime auth validator must return an Effect.
+    invalidAuthOptions satisfies ViewServerRuntimeOptions<typeof viewServer.topics>;
     // @ts-expect-error runtime health paths must be absolute HTTP paths.
     const invalidHealthPathOptions = makeViewServerRuntime(viewServer, {
       healthPath: "runtime-health",

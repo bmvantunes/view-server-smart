@@ -5,6 +5,13 @@ import { Context, Effect, Exit, Layer, ManagedRuntime, Scope } from "effect";
 import { HttpRouter, HttpServer, HttpServerError, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as Http from "node:http";
+import { validateViewServerHttpRequest, viewServerAuthErrorResponse } from "./auth";
+import type {
+  ViewServerAuth,
+  ViewServerAuthRequest,
+  ViewServerAuthValidator,
+  ViewServerSession,
+} from "./auth";
 import { makeViewServerHealthRoute } from "./health-route";
 import { makeViewServerMetricsRoute } from "./metrics-route";
 import { makeViewServerRpcHandlers } from "./rpc-handlers";
@@ -33,11 +40,17 @@ const makeTrackedWebSocketProtocol = Effect.fn("ViewServerServer.websocket.proto
     const { httpEffect, protocol } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
     const trackedHttpEffect = Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
-      return yield* httpEffect.pipe(
-        Effect.provideService(
-          HttpServerRequest.HttpServerRequest,
-          makeTrackedUpgradeRequest(request, clientOpened, clientClosed, activeSocketClosers),
-        ),
+      return yield* validateViewServerHttpRequest(input.auth, request).pipe(
+        Effect.matchEffect({
+          onFailure: (error) => Effect.succeed(viewServerAuthErrorResponse(error)),
+          onSuccess: () =>
+            httpEffect.pipe(
+              Effect.provideService(
+                HttpServerRequest.HttpServerRequest,
+                makeTrackedUpgradeRequest(request, clientOpened, clientClosed, activeSocketClosers),
+              ),
+            ),
+        }),
       );
     });
     yield* router.add("GET", path, trackedHttpEffect);
@@ -54,11 +67,20 @@ const makeTrackedWebSocketProtocolLayer = <const Topics extends TopicDefinitions
 
 export type {
   Jsonify,
+  ViewServerAuth,
+  ViewServerAuthRequest,
+  ViewServerAuthValidator,
   ViewServerHealthHttpJson,
+  ViewServerSession,
   ViewServerWebSocketServer,
   ViewServerWebSocketServerInput,
   ViewServerWebSocketServerOptions,
 };
+export {
+  ViewServerAuthError,
+  anonymousViewServerSession,
+  validateViewServerAuthRequest,
+} from "./auth";
 
 export const makeViewServerWebSocketServer: <const Topics extends TopicDefinitions>(
   config: ViewServerConfig<Topics>,

@@ -1,5 +1,6 @@
 import type { ViewServerLiveClient } from "@view-server/client";
 import type { GroupedIncrementalAdmissionLimits } from "@view-server/runtime-core";
+import type { ViewServerAuth } from "@view-server/server";
 import type {
   KafkaRuntimeTopicDefinition,
   LiveQueryRow,
@@ -68,6 +69,7 @@ export type ViewServerRuntimeOptions<
   readonly rpcPath?: RuntimeHttpPath;
   readonly healthPath?: RuntimeHttpPath;
   readonly metricsPath?: RuntimeHttpPath;
+  readonly auth?: ViewServerAuth;
   readonly kafka?: ViewServerKafkaRuntimeOptions<Topics, Regions>;
   readonly grpc?: ViewServerGrpcRuntimeOptions<Topics, GrpcClients>;
   readonly groupedIncrementalAdmissionLimits?: Partial<GroupedIncrementalAdmissionLimits>;

@@ -1,11 +1,25 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
 import { Effect } from "effect";
-import type { ViewServerWebSocketServerInput, ViewServerWebSocketServerOptions } from "./index";
+import type {
+  ViewServerAuth,
+  ViewServerAuthRequest,
+  ViewServerSession,
+  ViewServerWebSocketServerInput,
+  ViewServerWebSocketServerOptions,
+} from "./index";
 
 declare const serverInput: ViewServerWebSocketServerInput<never>;
 
 describe("server type contracts", () => {
   it("accepts omitted, empty, client-only, and stream-only transport hooks", () => {
+    const auth = {
+      validateRequest: (_request: ViewServerAuthRequest) =>
+        Effect.succeed({
+          forwardedHeaders: {},
+          id: "session-1",
+          systemHeaders: {},
+        }),
+    } satisfies ViewServerAuth;
     const noTransportInput = {
       liveClient: serverInput.liveClient,
       runtime: serverInput.runtime,
@@ -14,6 +28,11 @@ describe("server type contracts", () => {
       liveClient: serverInput.liveClient,
       runtime: serverInput.runtime,
       transport: {},
+    } satisfies ViewServerWebSocketServerInput<never>;
+    const authInput = {
+      auth,
+      liveClient: serverInput.liveClient,
+      runtime: serverInput.runtime,
     } satisfies ViewServerWebSocketServerInput<never>;
     const clientOnlyInput = {
       liveClient: serverInput.liveClient,
@@ -34,6 +53,8 @@ describe("server type contracts", () => {
 
     expectTypeOf(noTransportInput).not.toBeAny();
     expectTypeOf(emptyTransportInput).not.toBeAny();
+    expectTypeOf(authInput).toMatchTypeOf<ViewServerWebSocketServerInput<never>>();
+    expectTypeOf(authInput.auth.validateRequest).not.toBeAny();
     expectTypeOf(clientOnlyInput).not.toBeAny();
     expectTypeOf(streamOnlyInput).not.toBeAny();
   });
@@ -53,11 +74,37 @@ describe("server type contracts", () => {
         streamOpened: "not an effect",
       },
     };
+    const invalidAuthInput = {
+      auth: {
+        validateRequest: () => "not an effect",
+      },
+      liveClient: serverInput.liveClient,
+      runtime: serverInput.runtime,
+    };
 
     // @ts-expect-error clientOpened must be an Effect.
     invalidClientHookInput satisfies ViewServerWebSocketServerInput<never>;
     // @ts-expect-error streamOpened must be an Effect.
     invalidStreamHookInput satisfies ViewServerWebSocketServerInput<never>;
+    // @ts-expect-error auth validator must return an Effect.
+    invalidAuthInput satisfies ViewServerWebSocketServerInput<never>;
+  });
+
+  it("keeps session shape explicit", () => {
+    const session = {
+      forwardedHeaders: {
+        authorization: "Bearer forwarded",
+      },
+      id: "session-1",
+      systemHeaders: {
+        "x-system": "view-server",
+      },
+    } satisfies ViewServerSession;
+
+    expectTypeOf(session).toMatchTypeOf<ViewServerSession>();
+    expectTypeOf<ViewServerSession["id"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<ViewServerSession["forwardedHeaders"][string]>().toEqualTypeOf<string>();
+    expectTypeOf<ViewServerSession["systemHeaders"][string]>().toEqualTypeOf<string>();
   });
 
   it("only accepts concrete slash-prefixed connection paths", () => {

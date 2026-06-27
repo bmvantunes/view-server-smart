@@ -5,6 +5,7 @@ import type {
   ViewServerRuntimeClient,
 } from "@view-server/config";
 import type { Effect } from "effect";
+import type { ViewServerAuth } from "./auth";
 
 export type ViewServerServerRuntime<Topics extends TopicDefinitions> = Pick<
   ViewServerRuntimeClient<Topics>,
@@ -12,6 +13,7 @@ export type ViewServerServerRuntime<Topics extends TopicDefinitions> = Pick<
 >;
 
 export type ViewServerWebSocketServerInput<Topics extends TopicDefinitions> = {
+  readonly auth?: ViewServerAuth;
   readonly liveClient: ViewServerRuntimeLiveClient<Topics>;
   readonly runtime: ViewServerServerRuntime<Topics>;
   readonly transport?: {

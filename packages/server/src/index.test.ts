@@ -40,7 +40,8 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import * as Socket from "effect/unstable/socket/Socket";
 import * as Net from "node:net";
-import { makeViewServerWebSocketServer } from "./index";
+import { makeViewServerWebSocketServer, ViewServerAuthError } from "./index";
+import type { ViewServerAuth } from "./index";
 import { makeViewServerRpcHandlers } from "./rpc-handlers";
 import { closeTrackedSockets, makeTrackedSocket } from "./websocket-tracking";
 
@@ -161,6 +162,24 @@ const kafkaStartFromHealth = {
   mode: "latest",
 } as const;
 
+const bearerAuth: ViewServerAuth = {
+  validateRequest: (request) =>
+    request.headers["authorization"] === "Bearer view-server-test"
+      ? Effect.succeed({
+          forwardedHeaders: {
+            authorization: request.headers["authorization"],
+          },
+          id: "session-1",
+          systemHeaders: {},
+        })
+      : Effect.fail(
+          new ViewServerAuthError({
+            message: "Missing or invalid authorization header.",
+            status: 401,
+          }),
+        ),
+};
+
 type OrderRow = typeof Order.Type;
 type TradeRow = typeof Trade.Type;
 type QuoteRow = typeof Quote.Type;
@@ -234,6 +253,38 @@ const fetchText = Effect.fn("ViewServerServer.test.fetchText")(function* (url: s
   const text = yield* Effect.promise(() => response.text());
   return { response, text };
 });
+
+const fetchJsonWithAuthorization = Effect.fn("ViewServerServer.test.fetchJsonWithAuthorization")(
+  function* (url: string, authorization: string) {
+    const response = yield* Effect.promise(() =>
+      fetch(url, {
+        headers: {
+          authorization,
+        },
+      }),
+    );
+    const text = yield* Effect.promise(() => response.text());
+    const value = yield* Effect.try({
+      try: (): unknown => JSON.parse(text),
+      catch: (cause) => new ServerTestJsonParseError({ cause }),
+    });
+    return { response, value };
+  },
+);
+
+const fetchTextWithAuthorization = Effect.fn("ViewServerServer.test.fetchTextWithAuthorization")(
+  function* (url: string, authorization: string) {
+    const response = yield* Effect.promise(() =>
+      fetch(url, {
+        headers: {
+          authorization,
+        },
+      }),
+    );
+    const text = yield* Effect.promise(() => response.text());
+    return { response, text };
+  },
+);
 
 const reserveTcpPort = Effect.fn("ViewServerServer.test.tcp.reservePort")(function* () {
   const server = yield* Effect.acquireRelease(
@@ -700,6 +751,88 @@ describe("@view-server/server", () => {
     }),
   );
 
+  it.live("requires auth for GET /health when an auth validator is configured", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        auth: bearerAuth,
+        liveClient: inMemory.liveClient,
+        runtime: inMemory.client,
+      });
+
+      const deniedHealth = yield* fetchJson(server.healthUrl);
+      const acceptedHealth = yield* fetchJsonWithAuthorization(
+        server.healthUrl,
+        "Bearer view-server-test",
+      );
+      const acceptedBody = yield* Schema.decodeUnknownEffect(HealthJson)(acceptedHealth.value);
+
+      expect(deniedHealth.response.status).toBe(401);
+      expect(deniedHealth.value).toStrictEqual({
+        _tag: "ViewServerAuthError",
+        message: "Missing or invalid authorization header.",
+      });
+      expect(acceptedHealth.response.status).toBe(200);
+      expect(acceptedBody.status).toBe("ready");
+
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("requires auth for GET /metrics when an auth validator is configured", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        auth: bearerAuth,
+        liveClient: inMemory.liveClient,
+        runtime: inMemory.client,
+      });
+
+      const deniedMetrics = yield* fetchJson(server.metricsUrl);
+      const acceptedMetrics = yield* fetchTextWithAuthorization(
+        server.metricsUrl,
+        "Bearer view-server-test",
+      );
+
+      expect(deniedMetrics.response.status).toBe(401);
+      expect(deniedMetrics.value).toStrictEqual({
+        _tag: "ViewServerAuthError",
+        message: "Missing or invalid authorization header.",
+      });
+      expect(acceptedMetrics.response.status).toBe(200);
+      expect(acceptedMetrics.text).toContain("# TYPE view_server_runtime_status gauge");
+
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("rejects websocket upgrades when auth validation fails", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      let openedClients = 0;
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        auth: bearerAuth,
+        liveClient: inMemory.liveClient,
+        runtime: inMemory.client,
+        transport: {
+          clientOpened: Effect.sync(() => {
+            openedClients += 1;
+          }),
+        },
+      });
+
+      const socketExit = yield* Effect.exit(openRawWebSocket(server.url));
+
+      expect(Exit.isFailure(socketExit)).toBe(true);
+      expect(openedClients).toBe(0);
+
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
   it.live("composes with the public runtime-core live client", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -812,6 +945,26 @@ describe("@view-server/server", () => {
       expect(health.value).toStrictEqual(healthError);
       expect(metrics.response.status).toBe(200);
       expect(metrics.text).toBe("view_server_metrics_error 1\n");
+
+      yield* server.close;
+      yield* inMemory.close;
+    }),
+  );
+
+  it.live("returns 500 when runtime health defects", () =>
+    Effect.gen(function* () {
+      const inMemory = createServerTestRuntime(viewServer);
+      const server = yield* makeViewServerWebSocketServer(viewServer, {
+        liveClient: inMemory.liveClient,
+        runtime: {
+          health: () => Effect.die("health defect"),
+        },
+      });
+
+      const health = yield* fetchJson(server.healthUrl);
+
+      expect(health.response.status).toBe(500);
+      expect(health.value).toContain("Error: health defect");
 
       yield* server.close;
       yield* inMemory.close;
