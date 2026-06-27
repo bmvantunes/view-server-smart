@@ -1050,7 +1050,7 @@ packages/in-memory
 packages/server
 packages/runtime
 packages/react
-apps/examples
+apps/example
 ```
 
 Responsibilities:
@@ -1064,9 +1064,9 @@ Responsibilities:
 - `packages/server`: Effect RPC WebSocket server and same-server HTTP health endpoint.
 - `packages/runtime`: production composition of `runtime-core`, server, health URL, lifecycle, and future Kafka/TCP/gRPC ingress adapters.
 - `packages/react`: production React provider/hooks plus a separate testing entrypoint for the in-memory provider.
-- `apps/examples`: minimal real app proving browser usage and runtime URL injection.
+- `apps/example`: minimal real app proving browser usage and runtime URL injection.
 
-All packages must have explicit public exports. Do not leak internals accidentally.
+All publishable `packages/*` must have explicit public exports. Do not leak internals accidentally.
 
 ### First Production Milestone
 
@@ -1992,7 +1992,7 @@ Production docs required before calling the slice done:
 
 The production e2e implementation is not done until:
 
-- example app works with real runtime
+- example app keeps real runtime URL injection at the provider boundary
 - example app works with `ViewServerInMemoryProvider`
 - Kafka ingest works with protobuf value and optional protobuf key
 - `useLiveQuery` works for raw and grouped queries

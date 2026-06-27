@@ -115,6 +115,58 @@ importers:
         specifier: npm:@voidzero-dev/vite-plus-test@0.1.23
         version: '@voidzero-dev/vite-plus-test@0.1.23(@types/node@25.9.1)(@vitest/coverage-istanbul@4.1.6)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(yaml@2.9.0))(yaml@2.9.0)'
 
+  apps/example:
+    dependencies:
+      '@view-server/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@view-server/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.70(@voidzero-dev/vite-plus-test@0.1.23)(effect@4.0.0-beta.70)
+      '@types/react':
+        specifier: 19.2.15
+        version: 19.2.15
+      '@types/react-dom':
+        specifier: 19.2.3
+        version: 19.2.3(@types/react@19.2.15)
+      '@view-server/in-memory':
+        specifier: workspace:*
+        version: link:../../packages/in-memory
+      '@vitest/browser':
+        specifier: 4.1.6
+        version: 4.1.6(@voidzero-dev/vite-plus-test@0.1.23)(vite@8.0.14(@types/node@25.9.1)(yaml@2.9.0))
+      '@vitest/coverage-istanbul':
+        specifier: 'catalog:'
+        version: 4.1.6(@voidzero-dev/vite-plus-test@0.1.23)
+      '@vitest/runner':
+        specifier: 'catalog:'
+        version: 4.1.6
+      playwright:
+        specifier: 1.60.0
+        version: 1.60.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: npm:@voidzero-dev/vite-plus-test@0.1.23
+        version: '@voidzero-dev/vite-plus-test@0.1.23(@types/node@25.9.1)(@vitest/coverage-istanbul@4.1.6)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(yaml@2.9.0))(yaml@2.9.0)'
+      vitest-browser-react:
+        specifier: 'catalog:'
+        version: 2.2.0(@types/react-dom@19.2.3(@types/react@19.2.15))(@types/react@19.2.15)(@voidzero-dev/vite-plus-test@0.1.23)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+
   packages/client:
     dependencies:
       '@effect/platform-browser':

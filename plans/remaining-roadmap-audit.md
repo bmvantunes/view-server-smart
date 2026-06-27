@@ -58,15 +58,12 @@ because it includes explicit future scope.
 | Pre-gRPC readiness gate                                       | Implemented | `pnpm run pre-grpc:gate`.                                                                                                                                                                                                          |
 | TCP publish API/runtime ingress                               | Implemented | `packages/runtime/src/tcp-publish-ingress.ts`, runtime TCP tests for publish/patch/delete/publishMany, schema decode errors, bounded line/queue backpressure, source-owned topic rejection, startup failure, and shutdown cleanup. |
 | Runtime-core span/observability assertions                    | Implemented | Runtime-core tracing test captures client publish -> engine publish -> topic-store mutation/fanout -> live-subscription spans with real span-id parent links and topic/query attributes.                                           |
+| Minimal example app                                           | Implemented | `apps/example` defines typed config, production provider URL boundary, in-memory testing provider path, browser e2e test, type tests, and workspace build/check.                                                                   |
 
 ### Production-Ready Next Items
 
-These are concrete gaps where the plan describes behavior that is still missing or
-currently only documented as a future seam.
-
-| Item        | Status                | Why it remains                                               | Suggested first PR                                                                             |
-| ----------- | --------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Example app | Production-ready next | Plan lists `apps/examples`; no `apps` files currently exist. | Add a minimal example using real provider URL injection and in-memory provider test/demo path. |
+No production-ready next items remain in the current accepted scope. Future work
+below stays intentionally deferred unless explicitly promoted.
 
 ### Intentionally Deferred
 
@@ -89,7 +86,8 @@ These are in the plan, but should remain future work unless explicitly promoted.
 
 ## Recommended Implementation Order
 
-1. Minimal example app.
+No current-scope roadmap implementation items remain. Next work should come from a new
+explicit product decision or from promoting one intentionally deferred item.
 
 Do not reopen completed gRPC materialized/leased scope unless new tests reveal a real
 correctness gap.

@@ -1,0 +1,30 @@
+{
+  "name": "@view-server/example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vp run -t @view-server/react#build && vp check",
+    "test": "vp run -t @view-server/react#build && vp test run --coverage --typecheck"
+  },
+  "dependencies": {
+    "@view-server/config": "workspace:*",
+    "@view-server/react": "workspace:*",
+    "effect": "catalog:",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "@view-server/in-memory": "workspace:*",
+    "@vitest/browser": "4.1.6",
+    "@vitest/coverage-istanbul": "catalog:",
+    "@vitest/runner": "catalog:",
+    "playwright": "1.60.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vitest-browser-react": "catalog:"
+  }
+}

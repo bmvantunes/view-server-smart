@@ -67,6 +67,11 @@ const Order = Schema.Struct({
   price: Schema.Number,
 });
 
+const Trade = Schema.Struct({
+  id: Schema.String,
+  symbol: Schema.String,
+});
+
 const HealthJson = Schema.Struct({
   status: Schema.Literals(["ready", "degraded", "starting", "stopping"]),
   engine: Schema.Struct({
@@ -2196,6 +2201,95 @@ describe("@view-server/runtime", () => {
       });
 
       expect(response).toStrictEqual({
+        ok: false,
+        error: {
+          _tag: "ViewServerTcpPublishIngressError",
+          message: "TCP publish row did not match View Server topic orders.",
+          phase: "decode",
+          topic: "orders",
+        },
+      });
+      expect(snapshot).toStrictEqual({
+        rows: [],
+        totalRows: 0,
+        version: 0,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      yield* runtime.close;
+    }),
+  );
+
+  it.live("rejects TCP publish rows that do not match the target topic schema", () =>
+    Effect.gen(function* () {
+      const schemaSafetyViewServer = defineViewServerConfig({
+        topics: {
+          orders: {
+            schema: Order,
+            key: "id",
+          },
+          trades: {
+            schema: Trade,
+            key: "id",
+          },
+        },
+      });
+      const runtime = yield* makeViewServerRuntime(schemaSafetyViewServer, {
+        host: "127.0.0.1",
+        tcpPublishPort: 0,
+        websocketPort: 0,
+      });
+      const tcpPublishUrl = yield* Effect.fromNullishOr(runtime.tcpPublishUrl);
+
+      const tradeShapedOrderResponse = yield* sendTcpPublishCommand(tcpPublishUrl, {
+        op: "publish",
+        topic: "orders",
+        row: {
+          id: "trade-1",
+          symbol: "AAPL",
+        },
+      });
+      const extraFieldOrderResponse = yield* sendTcpPublishCommand(tcpPublishUrl, {
+        op: "publish",
+        topic: "orders",
+        row: {
+          id: "order-1",
+          price: 10,
+          symbol: "AAPL",
+        },
+      });
+      const missingRequiredOrderResponse = yield* sendTcpPublishCommand(tcpPublishUrl, {
+        op: "publish",
+        topic: "orders",
+        row: {
+          id: "order-2",
+        },
+      });
+      const snapshot = yield* runtime.client.snapshot("orders", {
+        select: ["id", "price"],
+        orderBy: [{ field: "price", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(tradeShapedOrderResponse).toStrictEqual({
+        ok: false,
+        error: {
+          _tag: "ViewServerTcpPublishIngressError",
+          message: "TCP publish row did not match View Server topic orders.",
+          phase: "decode",
+          topic: "orders",
+        },
+      });
+      expect(extraFieldOrderResponse).toStrictEqual({
+        ok: false,
+        error: {
+          _tag: "ViewServerTcpPublishIngressError",
+          message: "TCP publish row did not match View Server topic orders.",
+          phase: "decode",
+          topic: "orders",
+        },
+      });
+      expect(missingRequiredOrderResponse).toStrictEqual({
         ok: false,
         error: {
           _tag: "ViewServerTcpPublishIngressError",
