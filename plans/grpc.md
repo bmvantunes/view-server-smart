@@ -792,6 +792,7 @@ Current leased benchmark profiles:
 - leased same-route reuse latency
 - leased local-filter live convergence over the configured rows per feed
 - leased partitioned write convergence over `routeCount` active routed feeds
+- leased health refresh overhead while `routeCount` routed feeds remain active
 - retained local-filter snapshot report metadata over the configured retained rows. The direct
   `bench:grpc-leased` script defaults this retained case to 50k rows; the committed
   `grpc:gate` smoke baseline intentionally overrides it to 500 rows until repeated
@@ -803,7 +804,6 @@ Current leased benchmark profiles:
 
 Future leased benchmark profiles:
 
-- dedicated health refresh overhead profile with many active leased feeds
 - repeated-run stability for the direct 50k retained local-filter snapshot before
   promoting that heavier case into the smoke gate
 - repeated-run stability before tightening inner-operation max-latency gates
