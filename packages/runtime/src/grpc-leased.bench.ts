@@ -1033,6 +1033,10 @@ beforeAll(async () => {
           feeds: {
             ordersLease: grpcLeasedFeed(queues),
           },
+          materializedReconnect: {
+            delay: "1 second",
+            maxReconnects: 60,
+          },
         },
         health,
       );

@@ -20,7 +20,7 @@ import type {
   GrpcFeedDefinition,
   GrpcRuntimeClients,
 } from "@view-server/config";
-import type { Effect, Schema } from "effect";
+import type { Duration, Effect, Schema } from "effect";
 
 export type ViewServerRuntimeTopicDefinitions = TopicDefinitions &
   Record<
@@ -49,6 +49,10 @@ export type ViewServerGrpcRuntimeOptions<
 > = {
   readonly clients: Clients;
   readonly feeds: Record<string, GrpcFeedDefinition<Topics, Clients>>;
+  readonly materializedReconnect?: {
+    readonly maxReconnects?: number;
+    readonly delay?: Duration.Input;
+  };
 };
 
 export type ViewServerRuntimeOptions<
@@ -155,6 +159,24 @@ type RuntimeGrpcFeedConstraint<
     }
   : unknown;
 
+type RuntimeGrpcMaterializedReconnectExactKeysConstraint<Options> = Options extends {
+  readonly grpc: {
+    readonly materializedReconnect: infer CandidateReconnect;
+  };
+}
+  ? {
+      readonly grpc: {
+        readonly materializedReconnect: CandidateReconnect &
+          RejectExtraKeys<
+            CandidateReconnect,
+            NonNullable<
+              ViewServerGrpcRuntimeOptions<ViewServerRuntimeTopicDefinitions>["materializedReconnect"]
+            >
+          >;
+      };
+    }
+  : unknown;
+
 type RuntimeGroupedIncrementalAdmissionLimitsExactKeysConstraint<Options> = Options extends {
   readonly groupedIncrementalAdmissionLimits: infer CandidateLimits;
 }
@@ -194,6 +216,7 @@ export type ViewServerRuntimeOptionsInput<
   RuntimeKafkaStartFromExactKeysConstraint<Options> &
   RuntimeGrpcExactKeysConstraint<Options> &
   RuntimeGrpcFeedConstraint<Topics, Options> &
+  RuntimeGrpcMaterializedReconnectExactKeysConstraint<Options> &
   RuntimeGroupedIncrementalAdmissionLimitsExactKeysConstraint<Options>;
 
 type RuntimePublicMutationTopic<Topics extends object> = Extract<

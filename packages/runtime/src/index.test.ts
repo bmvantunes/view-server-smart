@@ -655,6 +655,11 @@ const grpcHealthFeed = (health: ViewServerHealth<GrpcTopics>) =>
 
 const grpcHealthClient = (health: ViewServerHealth<GrpcTopics>) => health.grpc?.clients["orders"];
 
+const fastGrpcMaterializedReconnect = {
+  delay: "10 millis",
+  maxReconnects: 3,
+} satisfies ResolvedViewServerGrpcRuntimeOptions<GrpcTopics>["materializedReconnect"];
+
 const resolveGrpcRuntimeOptions = Effect.fn("ViewServerRuntime.test.grpc.options.resolve")(
   function* (feed: ReturnType<typeof grpcMaterializedFeed>) {
     const options = yield* resolveViewServerRuntimeOptions<
@@ -667,6 +672,7 @@ const resolveGrpcRuntimeOptions = Effect.fn("ViewServerRuntime.test.grpc.options
         feeds: {
           ordersFeed: feed,
         },
+        materializedReconnect: fastGrpcMaterializedReconnect,
       },
     });
     return yield* Effect.fromNullishOr(options.grpcOptions);
@@ -686,6 +692,7 @@ const resolveLeasedGrpcRuntimeOptions = Effect.fn(
       feeds: {
         ordersLease: feed,
       },
+      materializedReconnect: fastGrpcMaterializedReconnect,
     },
   });
   return yield* Effect.fromNullishOr(options.grpcOptions);
@@ -1109,6 +1116,7 @@ describe("@view-server/runtime", () => {
                 }
               >
             >;
+            readonly materializedReconnect: ResolvedViewServerGrpcRuntimeOptions<GrpcTopics>["materializedReconnect"];
           }
         | undefined;
       let grpcHealthLedgerCreated = false;
@@ -1141,6 +1149,7 @@ describe("@view-server/runtime", () => {
                 },
               ]),
             ),
+            materializedReconnect: options.materializedReconnect,
           };
           return Effect.succeed({
             close: Effect.void,
@@ -1153,6 +1162,10 @@ describe("@view-server/runtime", () => {
           clients: grpcClients,
           feeds: {
             ordersFeed: feed,
+          },
+          materializedReconnect: {
+            delay: "100 millis",
+            maxReconnects: 5,
           },
         },
       };
@@ -1167,6 +1180,7 @@ describe("@view-server/runtime", () => {
         clientBaseUrls: grpcOptionsSummary?.clientBaseUrls,
         clientNames: grpcOptionsSummary?.clientNames,
         feeds: grpcOptionsSummary?.feeds,
+        materializedReconnect: grpcOptionsSummary?.materializedReconnect,
       }).toStrictEqual({
         clientBaseUrls: nullRecord([["orders", "https://orders.example.test"]]),
         clientNames: ["orders"],
@@ -1177,6 +1191,10 @@ describe("@view-server/runtime", () => {
             method: "streamOrders",
             topic: "orders",
           },
+        },
+        materializedReconnect: {
+          delay: "100 millis",
+          maxReconnects: 5,
         },
       });
 
@@ -1240,6 +1258,85 @@ describe("@view-server/runtime", () => {
       });
 
       expect(options.grpcOptions?.feeds["ordersLease"]).toBe(feed);
+    }),
+  );
+
+  it.live("rejects invalid materialized gRPC reconnect maxReconnects", () =>
+    Effect.gen(function* () {
+      const error = yield* makeViewServerRuntime(grpcViewServer, {
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: grpcMaterializedFeed(Stream.never),
+          },
+          materializedReconnect: {
+            delay: "10 millis",
+            maxReconnects: Infinity,
+          },
+        },
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(ViewServerGrpcIngressError);
+      expect(error).toStrictEqual(
+        new ViewServerGrpcIngressError({
+          message:
+            "gRPC materialized reconnect maxReconnects must be a finite non-negative integer.",
+          cause: Infinity,
+          phase: "configuration",
+        }),
+      );
+    }),
+  );
+
+  it.live("rejects invalid materialized gRPC reconnect delay", () =>
+    Effect.gen(function* () {
+      const error = yield* makeViewServerRuntime(grpcViewServer, {
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: grpcMaterializedFeed(Stream.never),
+          },
+          materializedReconnect: {
+            delay: "Infinity",
+            maxReconnects: 3,
+          },
+        },
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(ViewServerGrpcIngressError);
+      expect(error).toStrictEqual(
+        new ViewServerGrpcIngressError({
+          message: "gRPC materialized reconnect delay must be finite and positive.",
+          cause: "Infinity",
+          phase: "configuration",
+        }),
+      );
+    }),
+  );
+
+  it.live("rejects zero materialized gRPC reconnect delay", () =>
+    Effect.gen(function* () {
+      const error = yield* makeViewServerRuntime(grpcViewServer, {
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: grpcMaterializedFeed(Stream.never),
+          },
+          materializedReconnect: {
+            delay: 0,
+            maxReconnects: 3,
+          },
+        },
+      }).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(ViewServerGrpcIngressError);
+      expect(error).toStrictEqual(
+        new ViewServerGrpcIngressError({
+          message: "gRPC materialized reconnect delay must be finite and positive.",
+          cause: 0,
+          phase: "configuration",
+        }),
+      );
     }),
   );
 
@@ -1960,6 +2057,7 @@ describe("@view-server/runtime", () => {
         feeds: {
           ordersFeed: feed,
         },
+        materializedReconnect: fastGrpcMaterializedReconnect,
       };
       const nullTopicError = yield* validateGrpcSourceFeeds(nullTopicConfig, grpcOptions).pipe(
         Effect.flip,
@@ -2008,6 +2106,7 @@ describe("@view-server/runtime", () => {
           feeds: {
             ordersFeed: feed,
           },
+          materializedReconnect: fastGrpcMaterializedReconnect,
         };
 
         const error = yield* validateGrpcSourceFeeds(grpcViewServer, grpcOptions).pipe(Effect.flip);
@@ -5792,6 +5891,7 @@ describe("@view-server/runtime", () => {
           feeds: {
             ordersLease: feed,
           },
+          materializedReconnect: fastGrpcMaterializedReconnect,
         },
         health,
       );
@@ -6542,6 +6642,7 @@ describe("@view-server/runtime", () => {
           clients: grpcClients,
           clientBaseUrls: nullRecord([["orders", "https://orders.example.test"]]),
           feeds: {},
+          materializedReconnect: fastGrpcMaterializedReconnect,
         },
         health,
       );
@@ -6875,10 +6976,156 @@ describe("@view-server/runtime", () => {
       }),
   );
 
-  it.live("marks materialized gRPC feed degraded when the stream completes", () =>
+  it.live("marks materialized gRPC feed degraded when stream completion exhausts reconnects", () =>
     Effect.gen(function* () {
       const feed = grpcMaterializedFeed(Stream.make(grpcOrderValue("order-1", 10)));
       const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const degradedHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => {
+            const feedHealth = grpcHealthFeed(currentHealth);
+            return (
+              feedHealth?.status === "degraded" &&
+              feedHealth.reconnects === 3 &&
+              feedHealth.lastError === "gRPC feed ordersFeed completed unexpectedly."
+            );
+          },
+        }),
+      );
+
+      expect(grpcHealthFeed(degradedHealth)?.lastError).toBe(
+        "gRPC feed ordersFeed completed unexpectedly.",
+      );
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(3);
+      expect(grpcHealthClient(degradedHealth)?.activeFeeds).toBe(0);
+      yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live(
+    "marks materialized gRPC feed degraded when delayed stream completion exhausts reconnects",
+    () =>
+      Effect.gen(function* () {
+        let acquireCount = 0;
+        const streams = [
+          Stream.fromEffect(Effect.sleep("20 millis")).pipe(Stream.drain),
+          Stream.fromEffect(Effect.sleep("20 millis")).pipe(Stream.drain),
+        ];
+        const feed = grpcFeed.materializedFeed({
+          topic: "orders",
+          client: "orders",
+          method: "streamOrders",
+          request: () => ({ orderId: "all" }),
+          acquire: () => {
+            const stream = streams[acquireCount] ?? Stream.never;
+            acquireCount += 1;
+            return stream;
+          },
+          map: ({ value }) => ({
+            id: value.customerId,
+            customerId: value.customerId,
+            status: value.status,
+            price: value.price,
+            region: "usa",
+            updatedAt: value.updatedAt,
+          }),
+        });
+        const options = yield* resolveViewServerRuntimeOptions<
+          GrpcTopics,
+          Record<string, string>,
+          typeof grpcClients
+        >({
+          grpc: {
+            clients: grpcClients,
+            feeds: {
+              ordersFeed: feed,
+            },
+            materializedReconnect: {
+              delay: "10 millis",
+              maxReconnects: 1,
+            },
+          },
+        });
+        const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
+        const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+        const health = makeGrpcHealth(grpcOptions);
+        const ingress = yield* makeViewServerGrpcIngress(
+          grpcViewServer,
+          runtimeCore.client,
+          Effect.void,
+          grpcOptions,
+          health,
+        );
+
+        const degradedHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+          Effect.repeat({
+            schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+            until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "degraded",
+          }),
+        );
+
+        expect(grpcHealthFeed(degradedHealth)?.lastError).toBe(
+          "gRPC feed ordersFeed completed unexpectedly.",
+        );
+        expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(1);
+        expect(acquireCount).toBe(2);
+        yield* ingress.close;
+        yield* runtimeCore.close;
+      }),
+  );
+
+  it.live("uses one materialized gRPC reconnect budget across completion and failure", () =>
+    Effect.gen(function* () {
+      let acquireCount = 0;
+      const streams = [Stream.empty, Stream.fail("upstream down"), Stream.never];
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => {
+          const stream = streams[acquireCount] ?? Stream.never;
+          acquireCount += 1;
+          return stream;
+        },
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const options = yield* resolveViewServerRuntimeOptions<
+        GrpcTopics,
+        Record<string, string>,
+        typeof grpcClients
+      >({
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: feed,
+          },
+          materializedReconnect: {
+            delay: "10 millis",
+            maxReconnects: 1,
+          },
+        },
+      });
+      const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
       const health = makeGrpcHealth(grpcOptions);
       const ingress = yield* makeViewServerGrpcIngress(
@@ -6896,10 +7143,16 @@ describe("@view-server/runtime", () => {
         }),
       );
 
-      expect(grpcHealthFeed(degradedHealth)?.lastError).toBe(
-        "gRPC feed ordersFeed completed unexpectedly.",
-      );
-      expect(grpcHealthClient(degradedHealth)?.activeFeeds).toBe(0);
+      expect({
+        acquireCount,
+        lastError: grpcHealthFeed(degradedHealth)?.lastError,
+        reconnects: grpcHealthFeed(degradedHealth)?.reconnects,
+      }).toStrictEqual({
+        acquireCount: 2,
+        lastError:
+          "gRPC feed ordersFeed failed: gRPC feed stream failed for ordersFeed: upstream down",
+        reconnects: 1,
+      });
       yield* ingress.close;
       yield* runtimeCore.close;
     }),
@@ -6932,6 +7185,113 @@ describe("@view-server/runtime", () => {
     }),
   );
 
+  it.live("keeps materialized gRPC stream interruption terminal when release fails", () =>
+    Effect.gen(function* () {
+      let releaseCount = 0;
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => Stream.failCause(Cause.interrupt()),
+        release: () =>
+          Effect.gen(function* () {
+            releaseCount += 1;
+            return yield* Effect.fail("release down");
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const stoppingHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "stopping",
+        }),
+      );
+
+      expect({
+        lastError: grpcHealthFeed(stoppingHealth)?.lastError,
+        reconnects: grpcHealthFeed(stoppingHealth)?.reconnects,
+        releaseCount,
+      }).toStrictEqual({
+        lastError: null,
+        reconnects: 0,
+        releaseCount: 1,
+      });
+      yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live(
+    "does not reconnect materialized gRPC feed when failure cause includes interruption",
+    () =>
+      Effect.gen(function* () {
+        const feed = grpcMaterializedFeed(
+          Stream.failCause(
+            Cause.fromReasons([
+              Cause.makeFailReason("upstream down during shutdown"),
+              Cause.makeInterruptReason(),
+            ]),
+          ),
+        );
+        const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+        const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+        const health = makeGrpcHealth(grpcOptions);
+        const ingress = yield* makeViewServerGrpcIngress(
+          grpcViewServer,
+          runtimeCore.client,
+          Effect.void,
+          grpcOptions,
+          health,
+        );
+
+        const stoppingHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+          Effect.repeat({
+            schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+            until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "stopping",
+          }),
+        );
+
+        expect(grpcHealthFeed(stoppingHealth)).toStrictEqual({
+          status: "stopping",
+          lifecycle: "materialized",
+          feedName: "ordersFeed",
+          feedKey: "orders/ordersFeed/materialized",
+          topic: "orders",
+          subscriberCount: 0,
+          rowCount: 0,
+          messagesPerSecond: 0,
+          rowsPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          publishFailuresPerSecond: 0,
+          reconnects: 0,
+          lastMessageAt: null,
+          lastError: null,
+        });
+        yield* ingress.close;
+        yield* runtimeCore.close;
+      }),
+  );
+
   it.live("publishes materialized gRPC stream rows into runtime core and health", () =>
     Effect.gen(function* () {
       const feed = grpcMaterializedFeed(
@@ -6939,7 +7299,6 @@ describe("@view-server/runtime", () => {
       );
       const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
-      let healthRefreshCount = 0;
       const health = makeViewServerGrpcHealthLedger<GrpcTopics>({
         clients: grpcOptions.clientBaseUrls,
         feeds: {
@@ -6953,9 +7312,7 @@ describe("@view-server/runtime", () => {
       const ingress = yield* makeViewServerGrpcIngress(
         grpcViewServer,
         runtimeCore.client,
-        Effect.sync(() => {
-          healthRefreshCount += 1;
-        }),
+        Effect.void,
         grpcOptions,
         health,
       );
@@ -7001,7 +7358,6 @@ describe("@view-server/runtime", () => {
       });
       expect(typeof clientHealth?.lastConnectedAt).toBe("number");
       expect(typeof feedHealth?.lastMessageAt).toBe("number");
-      expect(healthRefreshCount).toBe(2);
 
       yield* ingress.close;
       const stoppedHealth = health.healthOverlay(yield* runtimeCore.client.health(), 2_000);
@@ -7074,6 +7430,523 @@ describe("@view-server/runtime", () => {
 
       expect(grpcHealthFeed(degradedHealth)?.lastError).toContain("gRPC feed ordersFeed failed:");
       expect(grpcHealthFeed(degradedHealth)?.lastError).toContain("defect down");
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(0);
+      yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("does not reset materialized gRPC reconnect budget during slow release", () =>
+    Effect.gen(function* () {
+      let acquireCount = 0;
+      let releaseCount = 0;
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => {
+          acquireCount += 1;
+          return Stream.fail("upstream down");
+        },
+        release: () =>
+          Effect.gen(function* () {
+            releaseCount += 1;
+            yield* Effect.sleep("25 millis");
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const options = yield* resolveViewServerRuntimeOptions<
+        GrpcTopics,
+        Record<string, string>,
+        typeof grpcClients
+      >({
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: feed,
+          },
+          materializedReconnect: {
+            delay: "10 millis",
+            maxReconnects: 1,
+          },
+        },
+      });
+      const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const degradedHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "degraded",
+        }),
+      );
+
+      expect({
+        acquireCount,
+        releaseCount,
+        reconnects: grpcHealthFeed(degradedHealth)?.reconnects,
+      }).toStrictEqual({
+        acquireCount: 2,
+        releaseCount: 2,
+        reconnects: 1,
+      });
+      yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("resets materialized gRPC reconnect failure streak after publishing a batch", () =>
+    Effect.gen(function* () {
+      let acquireCount = 0;
+      const failAfterProgress = yield* Deferred.make<void>();
+      const streams = [
+        Stream.fail("first transient failure"),
+        Stream.make(grpcOrderValue("progress-row", 11)).pipe(
+          Stream.concat(
+            Stream.fromEffect(Deferred.await(failAfterProgress)).pipe(
+              Stream.drain,
+              Stream.concat(Stream.fail("second transient failure after progress")),
+            ),
+          ),
+        ),
+        longRunningGrpcStream([grpcOrderValue("final-row", 12)]),
+      ];
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => {
+          const stream = streams[acquireCount] ?? Stream.never;
+          acquireCount += 1;
+          return stream;
+        },
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const options = yield* resolveViewServerRuntimeOptions<
+        GrpcTopics,
+        Record<string, string>,
+        typeof grpcClients
+      >({
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: feed,
+          },
+          materializedReconnect: {
+            delay: "10 millis",
+            maxReconnects: 1,
+          },
+        },
+      });
+      const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const progressSnapshot = yield* waitForGrpcSnapshotRows(runtimeCore.client, 1);
+      yield* Deferred.succeed(failAfterProgress, undefined);
+      const finalSnapshot = yield* waitForGrpcSnapshotRows(runtimeCore.client, 2);
+      const finalHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.reconnects === 2,
+        }),
+      );
+
+      expect(progressSnapshot).toStrictEqual({
+        rows: [{ id: "progress-row", price: 11 }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      expect(finalSnapshot).toStrictEqual({
+        rows: [
+          { id: "progress-row", price: 11 },
+          { id: "final-row", price: 12 },
+        ],
+        totalRows: 2,
+        version: 2,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      expect(grpcHealthFeed(finalHealth)?.reconnects).toBe(2);
+      expect(acquireCount).toBe(3);
+
+      yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live(
+    "resets materialized gRPC reconnect failure streak after staying open for one delay",
+    () =>
+      Effect.gen(function* () {
+        let acquireCount = 0;
+        const streams = [
+          Stream.fail("first transient failure"),
+          Stream.fromEffect(Effect.sleep("20 millis")).pipe(
+            Stream.drain,
+            Stream.concat(Stream.fail("second transient failure after stable open")),
+          ),
+          longRunningGrpcStream([grpcOrderValue("stable-reset-row", 13)]),
+        ];
+        const feed = grpcFeed.materializedFeed({
+          topic: "orders",
+          client: "orders",
+          method: "streamOrders",
+          request: () => ({ orderId: "all" }),
+          acquire: () => {
+            const stream = streams[acquireCount] ?? Stream.never;
+            acquireCount += 1;
+            return stream;
+          },
+          map: ({ value }) => ({
+            id: value.customerId,
+            customerId: value.customerId,
+            status: value.status,
+            price: value.price,
+            region: "usa",
+            updatedAt: value.updatedAt,
+          }),
+        });
+        const options = yield* resolveViewServerRuntimeOptions<
+          GrpcTopics,
+          Record<string, string>,
+          typeof grpcClients
+        >({
+          grpc: {
+            clients: grpcClients,
+            feeds: {
+              ordersFeed: feed,
+            },
+            materializedReconnect: {
+              delay: "10 millis",
+              maxReconnects: 1,
+            },
+          },
+        });
+        const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
+        const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+        const health = makeGrpcHealth(grpcOptions);
+        const ingress = yield* makeViewServerGrpcIngress(
+          grpcViewServer,
+          runtimeCore.client,
+          Effect.void,
+          grpcOptions,
+          health,
+        );
+
+        const snapshot = yield* waitForGrpcSnapshotRows(runtimeCore.client, 1);
+        const finalHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+          Effect.repeat({
+            schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+            until: (currentHealth) => grpcHealthFeed(currentHealth)?.reconnects === 2,
+          }),
+        );
+
+        expect(snapshot).toStrictEqual({
+          rows: [{ id: "stable-reset-row", price: 13 }],
+          totalRows: 1,
+          version: 1,
+          status: "ready",
+          statusCode: "Ready",
+        });
+        expect(grpcHealthFeed(finalHealth)?.reconnects).toBe(2);
+        expect(acquireCount).toBe(3);
+
+        yield* ingress.close;
+        yield* runtimeCore.close;
+      }),
+  );
+
+  it.live("reconnects materialized gRPC feed after a transient upstream failure", () =>
+    Effect.gen(function* () {
+      let acquireCount = 0;
+      let releaseCount = 0;
+      const streams = [
+        Stream.fail("upstream down"),
+        longRunningGrpcStream([grpcOrderValue("order-after-reconnect", 10)]),
+      ];
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => {
+          const stream = streams[acquireCount] ?? Stream.never;
+          acquireCount += 1;
+          return stream;
+        },
+        release: () =>
+          Effect.sync(() => {
+            releaseCount += 1;
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const readyHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => {
+            const currentFeed = grpcHealthFeed(currentHealth);
+            return (
+              currentFeed?.status === "ready" &&
+              currentFeed.reconnects === 1 &&
+              currentFeed.rowCount === 1
+            );
+          },
+        }),
+      );
+      const snapshot = yield* waitForGrpcSnapshotRows(runtimeCore.client, 1);
+      const feedHealth = grpcHealthFeed(readyHealth);
+
+      expect(snapshot).toStrictEqual({
+        rows: [{ id: "order-after-reconnect", price: 10 }],
+        totalRows: 1,
+        version: 1,
+        status: "ready",
+        statusCode: "Ready",
+      });
+      expect(feedHealth).toStrictEqual({
+        status: "ready",
+        lifecycle: "materialized",
+        feedName: "ordersFeed",
+        feedKey: "orders/ordersFeed/materialized",
+        topic: "orders",
+        subscriberCount: 0,
+        rowCount: 1,
+        messagesPerSecond: 1,
+        rowsPerSecond: 1,
+        decodeFailuresPerSecond: 0,
+        mappingFailuresPerSecond: 0,
+        publishFailuresPerSecond: 0,
+        reconnects: 1,
+        lastMessageAt: feedHealth?.lastMessageAt,
+        lastError: null,
+      });
+      expect(acquireCount).toBe(2);
+      expect(releaseCount).toBe(1);
+
+      yield* ingress.close;
+      expect(releaseCount).toBe(2);
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("marks materialized gRPC feed degraded when release fails after stream failure", () =>
+    Effect.gen(function* () {
+      let acquireCount = 0;
+      let releaseCount = 0;
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => {
+          acquireCount += 1;
+          return Stream.fail("upstream down");
+        },
+        release: () =>
+          Effect.gen(function* () {
+            releaseCount += 1;
+            return yield* Effect.fail("release down");
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const options = yield* resolveViewServerRuntimeOptions<
+        GrpcTopics,
+        Record<string, string>,
+        typeof grpcClients
+      >({
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: feed,
+          },
+          materializedReconnect: {
+            delay: "10 millis",
+            maxReconnects: 3,
+          },
+        },
+      });
+      const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const degradedHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "degraded",
+        }),
+      );
+
+      expect(grpcHealthFeed(degradedHealth)?.lastError).toBe(
+        "gRPC feed ordersFeed failed: gRPC feed release failed for ordersFeed: release down",
+      );
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(0);
+      expect(acquireCount).toBe(1);
+      expect(releaseCount).toBe(1);
+      yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("marks materialized gRPC feed degraded when release defects after completion", () =>
+    Effect.gen(function* () {
+      let releaseCount = 0;
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => Stream.empty,
+        release: () =>
+          Effect.gen(function* () {
+            releaseCount += 1;
+            return yield* Effect.die("release defect");
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const degradedHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "degraded",
+        }),
+      );
+
+      expect(grpcHealthFeed(degradedHealth)?.lastError).toContain("gRPC feed ordersFeed failed:");
+      expect(grpcHealthFeed(degradedHealth)?.lastError).toContain("release defect");
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(0);
+      expect(releaseCount).toBe(1);
+      yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("marks materialized gRPC feed stopping when release is interrupted", () =>
+    Effect.gen(function* () {
+      let releaseCount = 0;
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => Stream.fail("upstream down"),
+        release: () =>
+          Effect.gen(function* () {
+            releaseCount += 1;
+            return yield* Effect.interrupt;
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      const stoppingHealth = yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "stopping",
+        }),
+      );
+
+      expect(grpcHealthFeed(stoppingHealth)?.lastError).toBe(null);
+      expect(grpcHealthFeed(stoppingHealth)?.reconnects).toBe(0);
+      expect(releaseCount).toBe(1);
       yield* ingress.close;
       yield* runtimeCore.close;
     }),
@@ -7082,9 +7955,24 @@ describe("@view-server/runtime", () => {
   it.live("marks materialized gRPC feed health degraded when the stream fails", () =>
     Effect.gen(function* () {
       const feed = grpcMaterializedFeed(Stream.fail("upstream down"));
-      const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const options = yield* resolveViewServerRuntimeOptions<
+        GrpcTopics,
+        Record<string, string>,
+        typeof grpcClients
+      >({
+        grpc: {
+          clients: grpcClients,
+          feeds: {
+            ordersFeed: feed,
+          },
+          materializedReconnect: {
+            delay: "10 millis",
+            maxReconnects: 0,
+          },
+        },
+      });
+      const grpcOptions = yield* Effect.fromNullishOr(options.grpcOptions);
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
-      let healthRefreshCount = 0;
       const health = makeViewServerGrpcHealthLedger<GrpcTopics>({
         clients: grpcOptions.clientBaseUrls,
         feeds: {
@@ -7098,9 +7986,7 @@ describe("@view-server/runtime", () => {
       const ingress = yield* makeViewServerGrpcIngress(
         grpcViewServer,
         runtimeCore.client,
-        Effect.sync(() => {
-          healthRefreshCount += 1;
-        }),
+        Effect.void,
         grpcOptions,
         health,
       );
@@ -7121,7 +8007,7 @@ describe("@view-server/runtime", () => {
       expect(degradedHealth.grpc?.feeds["orders"]?.materialized["ordersFeed"]?.lastError).toBe(
         "gRPC feed ordersFeed failed: gRPC feed stream failed for ordersFeed: upstream down",
       );
-      expect(healthRefreshCount).toBe(2);
+      expect(degradedHealth.grpc?.feeds["orders"]?.materialized["ordersFeed"]?.reconnects).toBe(0);
 
       yield* ingress.close;
       yield* runtimeCore.close;
@@ -7148,6 +8034,228 @@ describe("@view-server/runtime", () => {
 
       yield* ingress.close;
       yield* Deferred.await(released);
+      expect(
+        grpcHealthFeed(health.healthOverlay(yield* runtimeCore.client.health(), 2_000)),
+      ).toStrictEqual({
+        status: "stopping",
+        lifecycle: "materialized",
+        feedName: "ordersFeed",
+        feedKey: "orders/ordersFeed/materialized",
+        topic: "orders",
+        subscriberCount: 0,
+        rowCount: 0,
+        messagesPerSecond: 0,
+        rowsPerSecond: 0,
+        decodeFailuresPerSecond: 0,
+        mappingFailuresPerSecond: 0,
+        publishFailuresPerSecond: 0,
+        reconnects: 0,
+        lastMessageAt: null,
+        lastError: null,
+      });
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live(
+    "does not reconnect completed materialized gRPC feed when close starts during release",
+    () =>
+      Effect.gen(function* () {
+        let releaseCount = 0;
+        const releaseStarted = yield* Deferred.make<void>();
+        const releaseContinue = yield* Deferred.make<void>();
+        const feed = grpcFeed.materializedFeed({
+          topic: "orders",
+          client: "orders",
+          method: "streamOrders",
+          request: () => ({ orderId: "all" }),
+          acquire: () => Stream.empty,
+          release: () =>
+            Effect.gen(function* () {
+              releaseCount += 1;
+              yield* Deferred.succeed(releaseStarted, undefined);
+              yield* Deferred.await(releaseContinue);
+            }),
+          map: ({ value }) => ({
+            id: value.customerId,
+            customerId: value.customerId,
+            status: value.status,
+            price: value.price,
+            region: "usa",
+            updatedAt: value.updatedAt,
+          }),
+        });
+        const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+        const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+        const health = makeGrpcHealth(grpcOptions);
+        const ingress = yield* makeViewServerGrpcIngress(
+          grpcViewServer,
+          runtimeCore.client,
+          Effect.void,
+          grpcOptions,
+          health,
+        );
+
+        yield* Deferred.await(releaseStarted);
+        const closeFiber = yield* ingress.close.pipe(Effect.forkChild);
+        yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+          Effect.repeat({
+            schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+            until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "stopping",
+          }),
+        );
+        yield* Deferred.succeed(releaseContinue, undefined);
+        yield* Fiber.join(closeFiber);
+
+        expect(releaseCount).toBe(1);
+        expect(
+          grpcHealthFeed(health.healthOverlay(yield* runtimeCore.client.health(), 2_000)),
+        ).toStrictEqual({
+          status: "stopping",
+          lifecycle: "materialized",
+          feedName: "ordersFeed",
+          feedKey: "orders/ordersFeed/materialized",
+          topic: "orders",
+          subscriberCount: 0,
+          rowCount: 0,
+          messagesPerSecond: 0,
+          rowsPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          publishFailuresPerSecond: 0,
+          reconnects: 0,
+          lastMessageAt: null,
+          lastError: null,
+        });
+        yield* runtimeCore.close;
+      }),
+  );
+
+  it.live("ignores materialized gRPC release failure when close starts during release", () =>
+    Effect.gen(function* () {
+      let releaseCount = 0;
+      const releaseStarted = yield* Deferred.make<void>();
+      const releaseContinue = yield* Deferred.make<void>();
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => Stream.empty,
+        release: () =>
+          Effect.gen(function* () {
+            releaseCount += 1;
+            yield* Deferred.succeed(releaseStarted, undefined);
+            yield* Deferred.await(releaseContinue);
+            return yield* Effect.fail("release down after close");
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      yield* Deferred.await(releaseStarted);
+      const closeFiber = yield* ingress.close.pipe(Effect.forkChild);
+      yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "stopping",
+        }),
+      );
+      yield* Deferred.succeed(releaseContinue, undefined);
+      yield* Fiber.join(closeFiber);
+
+      expect({
+        releaseCount,
+        feed: grpcHealthFeed(health.healthOverlay(yield* runtimeCore.client.health(), 2_000)),
+      }).toStrictEqual({
+        releaseCount: 1,
+        feed: {
+          status: "stopping",
+          lifecycle: "materialized",
+          feedName: "ordersFeed",
+          feedKey: "orders/ordersFeed/materialized",
+          topic: "orders",
+          subscriberCount: 0,
+          rowCount: 0,
+          messagesPerSecond: 0,
+          rowsPerSecond: 0,
+          decodeFailuresPerSecond: 0,
+          mappingFailuresPerSecond: 0,
+          publishFailuresPerSecond: 0,
+          reconnects: 0,
+          lastMessageAt: null,
+          lastError: null,
+        },
+      });
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("does not reconnect failed materialized gRPC feed when close starts during release", () =>
+    Effect.gen(function* () {
+      let releaseCount = 0;
+      const releaseStarted = yield* Deferred.make<void>();
+      const releaseContinue = yield* Deferred.make<void>();
+      const feed = grpcFeed.materializedFeed({
+        topic: "orders",
+        client: "orders",
+        method: "streamOrders",
+        request: () => ({ orderId: "all" }),
+        acquire: () => Stream.fail("upstream down"),
+        release: () =>
+          Effect.gen(function* () {
+            releaseCount += 1;
+            yield* Deferred.succeed(releaseStarted, undefined);
+            yield* Deferred.await(releaseContinue);
+          }),
+        map: ({ value }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region: "usa",
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+      const ingress = yield* makeViewServerGrpcIngress(
+        grpcViewServer,
+        runtimeCore.client,
+        Effect.void,
+        grpcOptions,
+        health,
+      );
+
+      yield* Deferred.await(releaseStarted);
+      const closeFiber = yield* ingress.close.pipe(Effect.forkChild);
+      yield* readGrpcHealthOverlayNow(runtimeCore.client, health).pipe(
+        Effect.repeat({
+          schedule: Schedule.addDelay(Schedule.recurs(50), () => Effect.succeed("5 millis")),
+          until: (currentHealth) => grpcHealthFeed(currentHealth)?.status === "stopping",
+        }),
+      );
+      yield* Deferred.succeed(releaseContinue, undefined);
+      yield* Fiber.join(closeFiber);
+
+      expect(releaseCount).toBe(1);
       expect(
         grpcHealthFeed(health.healthOverlay(yield* runtimeCore.client.health(), 2_000)),
       ).toStrictEqual({
@@ -7215,14 +8323,11 @@ describe("@view-server/runtime", () => {
       const feed = grpcMaterializedFeed(Stream.never);
       const grpcOptions = yield* resolveGrpcRuntimeOptions(feed);
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
-      let healthRefreshCount = 0;
       const health = makeGrpcHealth(grpcOptions);
       const ingress = yield* makeViewServerGrpcIngress(
         grpcViewServer,
         runtimeCore.client,
-        Effect.sync(() => {
-          healthRefreshCount += 1;
-        }),
+        Effect.void,
         grpcOptions,
         health,
       );
@@ -7230,8 +8335,37 @@ describe("@view-server/runtime", () => {
       const readyHealth = health.healthOverlay(yield* runtimeCore.client.health(), 2_000);
       expect(grpcHealthFeed(readyHealth)?.status).toBe("ready");
       expect(grpcHealthClient(readyHealth)?.activeFeeds).toBe(1);
-      expect(healthRefreshCount).toBe(1);
       yield* ingress.close;
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.live("ignores reconnect health updates for unknown gRPC feeds", () =>
+    Effect.gen(function* () {
+      const grpcOptions = yield* resolveGrpcRuntimeOptions(grpcMaterializedFeed(Stream.never));
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
+      const health = makeGrpcHealth(grpcOptions);
+
+      yield* health.feedReconnecting("missingFeed", "ignored reconnect");
+      const currentHealth = health.healthOverlay(yield* runtimeCore.client.health(), 2_000);
+
+      expect(grpcHealthFeed(currentHealth)).toStrictEqual({
+        status: "starting",
+        lifecycle: "materialized",
+        feedName: "ordersFeed",
+        feedKey: "orders/ordersFeed/materialized",
+        topic: "orders",
+        subscriberCount: 0,
+        rowCount: 0,
+        messagesPerSecond: 0,
+        rowsPerSecond: 0,
+        decodeFailuresPerSecond: 0,
+        mappingFailuresPerSecond: 0,
+        publishFailuresPerSecond: 0,
+        reconnects: 0,
+        lastMessageAt: null,
+        lastError: null,
+      });
       yield* runtimeCore.close;
     }),
   );
@@ -7305,6 +8439,7 @@ describe("@view-server/runtime", () => {
         feeds: {
           ordersLease: feed,
         },
+        materializedReconnect: fastGrpcMaterializedReconnect,
       };
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(leasedGrpcViewServer, {});
       const health = makeViewServerGrpcHealthLedger<typeof leasedGrpcViewServer.topics>({
@@ -7343,6 +8478,7 @@ describe("@view-server/runtime", () => {
           runningFeed,
           failingFeed,
         },
+        materializedReconnect: fastGrpcMaterializedReconnect,
       };
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
       const health = makeViewServerGrpcHealthLedger<GrpcTopics>({
@@ -7392,6 +8528,7 @@ describe("@view-server/runtime", () => {
         feeds: {
           ordersFeed: feed,
         },
+        materializedReconnect: fastGrpcMaterializedReconnect,
       };
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
       const health = makeViewServerGrpcHealthLedger<GrpcTopics>({
@@ -7430,6 +8567,7 @@ describe("@view-server/runtime", () => {
         feeds: {
           ordersFeed: feed,
         },
+        materializedReconnect: fastGrpcMaterializedReconnect,
       };
       const runtimeCore = yield* makeViewServerRuntimeCoreInternal(grpcViewServer, {});
       const health = makeViewServerGrpcHealthLedger<GrpcTopics>({
@@ -7486,6 +8624,7 @@ describe("@view-server/runtime", () => {
       expect(grpcHealthFeed(degradedHealth)?.lastError).toBe(
         "gRPC feed ordersFeed failed: gRPC feed acquire failed for ordersFeed: acquire exploded",
       );
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(3);
       yield* ingress.close;
       yield* runtimeCore.close;
     }),
@@ -7517,6 +8656,7 @@ describe("@view-server/runtime", () => {
       expect(degradedHealth.status).toBe("degraded");
       expect(grpcHealthFeed(degradedHealth)?.mappingFailuresPerSecond).toBe(1);
       expect(grpcHealthFeed(degradedHealth)?.publishFailuresPerSecond).toBe(0);
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(0);
       expect(grpcHealthFeed(degradedHealth)?.lastError).toBe(
         "gRPC feed ordersFeed failed: gRPC feed mapping failed for ordersFeed: mapping exploded",
       );
@@ -7567,6 +8707,7 @@ describe("@view-server/runtime", () => {
       expect(degradedHealth.status).toBe("degraded");
       expect(grpcHealthFeed(degradedHealth)?.mappingFailuresPerSecond).toBe(1);
       expect(grpcHealthFeed(degradedHealth)?.publishFailuresPerSecond).toBe(0);
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(0);
       expect(grpcHealthFeed(degradedHealth)?.lastError).toContain(
         "gRPC feed mapping produced an invalid row for ordersFeed",
       );
@@ -7609,6 +8750,7 @@ describe("@view-server/runtime", () => {
       expect(degradedHealth.status).toBe("degraded");
       expect(grpcHealthFeed(degradedHealth)?.mappingFailuresPerSecond).toBe(0);
       expect(grpcHealthFeed(degradedHealth)?.publishFailuresPerSecond).toBe(1);
+      expect(grpcHealthFeed(degradedHealth)?.reconnects).toBe(0);
       expect(grpcHealthFeed(degradedHealth)?.lastError).toBe(
         "gRPC feed ordersFeed failed: gRPC feed publish failed for ordersFeed: publish unavailable",
       );

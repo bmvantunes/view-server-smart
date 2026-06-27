@@ -8,7 +8,8 @@ import type {
   ViewServerConfig,
   ViewServerKafkaStartFrom,
 } from "@view-server/config";
-import { Config, Effect } from "effect";
+import type { Duration } from "effect";
+import { Config, Duration as EffectDuration, Effect, Option } from "effect";
 import type {
   ViewServerKafkaRuntimeOptions,
   ViewServerGrpcRuntimeOptions,
@@ -46,6 +47,10 @@ export type ResolvedViewServerGrpcRuntimeOptions<
   readonly clients: Clients;
   readonly clientBaseUrls: Record<string, string>;
   readonly feeds: ViewServerGrpcRuntimeOptions<Topics, Clients>["feeds"];
+  readonly materializedReconnect: {
+    readonly maxReconnects: number;
+    readonly delay: Duration.Input;
+  };
 };
 
 const resolveRuntimeValue = <A>(value: RuntimeValue<A>): Effect.Effect<A, Config.ConfigError> =>
@@ -54,6 +59,45 @@ const resolveRuntimeValue = <A>(value: RuntimeValue<A>): Effect.Effect<A, Config
 const defaultKafkaStartFrom = (consumerGroupId: string): ViewServerKafkaStartFrom => ({
   committedConsumerGroup: consumerGroupId,
 });
+
+const defaultGrpcMaterializedReconnect = {
+  delay: "1 second",
+  maxReconnects: 60,
+} satisfies ResolvedViewServerGrpcRuntimeOptions<ViewServerRuntimeTopicDefinitions>["materializedReconnect"];
+
+const validateGrpcMaterializedMaxReconnects = (
+  maxReconnects: number,
+): Effect.Effect<number, ViewServerGrpcIngressError> => {
+  if (Number.isSafeInteger(maxReconnects) && maxReconnects >= 0) {
+    return Effect.succeed(maxReconnects);
+  }
+  return Effect.fail(
+    new ViewServerGrpcIngressError({
+      message: "gRPC materialized reconnect maxReconnects must be a finite non-negative integer.",
+      cause: maxReconnects,
+      phase: "configuration",
+    }),
+  );
+};
+
+const validateGrpcMaterializedReconnectDelay = (
+  delay: Duration.Input,
+): Effect.Effect<Duration.Input, ViewServerGrpcIngressError> => {
+  const duration = EffectDuration.fromInput(delay);
+  if (Option.isSome(duration) && EffectDuration.isFinite(duration.value)) {
+    const millis = EffectDuration.toMillis(duration.value);
+    if (Number.isFinite(millis) && millis > 0) {
+      return Effect.succeed(delay);
+    }
+  }
+  return Effect.fail(
+    new ViewServerGrpcIngressError({
+      message: "gRPC materialized reconnect delay must be finite and positive.",
+      cause: delay,
+      phase: "configuration",
+    }),
+  );
+};
 
 const normalizeKafkaConsumePolicy = (
   consumerGroupId: string,
@@ -139,6 +183,12 @@ const resolveGrpcOptions: <
   for (const [clientName, client] of entries) {
     clientBaseUrls[clientName] = client.baseUrl;
   }
+  const materializedReconnectDelay = yield* validateGrpcMaterializedReconnectDelay(
+    options.materializedReconnect?.delay ?? defaultGrpcMaterializedReconnect.delay,
+  );
+  const materializedReconnectMaxReconnects = yield* validateGrpcMaterializedMaxReconnects(
+    options.materializedReconnect?.maxReconnects ?? defaultGrpcMaterializedReconnect.maxReconnects,
+  );
   const feedTopics = new Map<string, string>();
   for (const [feedName, feed] of Object.entries(options.feeds)) {
     const previousFeedName = feedTopics.get(feed.topic);
@@ -156,6 +206,10 @@ const resolveGrpcOptions: <
     clients: options.clients,
     clientBaseUrls,
     feeds: options.feeds,
+    materializedReconnect: {
+      delay: materializedReconnectDelay,
+      maxReconnects: materializedReconnectMaxReconnects,
+    },
   };
 });
 

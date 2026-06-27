@@ -15,7 +15,7 @@ import {
   type ViewServerRuntimeClient,
 } from "@view-server/config";
 import { ignoreLoggedTypedFailuresPreserveNonTypedFailures } from "@view-server/effect-utils";
-import { Cause, Clock, Effect, Exit, Option, Schema, Scope, Stream } from "effect";
+import { Cause, Clock, Effect, Exit, Fiber, Option, Schema, Scope, Stream } from "effect";
 import type { ViewServerGrpcHealthLedger } from "./grpc-health";
 import type { ResolvedViewServerGrpcRuntimeOptions } from "./runtime-options";
 import type { ViewServerRuntimeTopicDefinitions } from "./runtime-types";
@@ -25,6 +25,18 @@ export class ViewServerGrpcIngressError extends Schema.TaggedErrorClass<ViewServ
   {
     message: Schema.String,
     cause: Schema.Unknown,
+    phase: Schema.optionalKey(
+      Schema.Literals([
+        "configuration",
+        "client",
+        "request",
+        "acquire",
+        "stream",
+        "mapping",
+        "publish",
+        "release",
+      ]),
+    ),
     feedName: Schema.optionalKey(Schema.String),
     topic: Schema.optionalKey(Schema.String),
   },
@@ -70,12 +82,14 @@ export function makeDefaultGrpcClient(definition: GrpcConnectClientDefinition, b
 const grpcIngressError = (input: {
   readonly message: string;
   readonly cause: unknown;
+  readonly phase: NonNullable<ViewServerGrpcIngressError["phase"]>;
   readonly feedName: string;
   readonly topic: string;
 }) =>
   new ViewServerGrpcIngressError({
     message: input.message,
     cause: input.cause,
+    phase: input.phase,
     feedName: input.feedName,
     topic: input.topic,
   });
@@ -87,6 +101,13 @@ const hasMessage = (value: unknown): value is { readonly message: string } =>
   typeof value.message === "string";
 
 const messageFromUnknown = (value: unknown): string => {
+  if (Cause.isCause(value)) {
+    const failure = value.reasons.find(Cause.isFailReason);
+    if (failure !== undefined) {
+      return messageFromUnknown(failure.error);
+    }
+    return Cause.pretty(value);
+  }
   if (value instanceof Error) {
     return value.message;
   }
@@ -109,6 +130,54 @@ const feedFailureMessage = (feedName: string, cause: Cause.Cause<unknown>): stri
 
 const unexpectedFeedCompletionMessage = (feedName: string): string =>
   `gRPC feed ${feedName} completed unexpectedly.`;
+
+const isRestartableMaterializedFeedError = (error: ViewServerGrpcIngressError): boolean =>
+  (error.phase === "acquire" || error.phase === "stream") &&
+  (!Cause.isCause(error.cause) || !Cause.hasDies(error.cause));
+
+const materializedFeedErrorHasInterrupts = (error: ViewServerGrpcIngressError): boolean =>
+  Cause.isCause(error.cause) && Cause.hasInterrupts(error.cause);
+
+const materializedFeedCauseHasInterrupts = (
+  cause: Cause.Cause<ViewServerGrpcIngressError>,
+): boolean => {
+  if (Cause.hasInterrupts(cause)) {
+    return true;
+  }
+  const error = Cause.findErrorOption(cause);
+  return (
+    Option.isSome(error) &&
+    error.value instanceof ViewServerGrpcIngressError &&
+    materializedFeedErrorHasInterrupts(error.value)
+  );
+};
+
+const canReconnectMaterializedFeedCause = (
+  cause: Cause.Cause<ViewServerGrpcIngressError>,
+): boolean => {
+  if (materializedFeedCauseHasInterrupts(cause)) {
+    return false;
+  }
+  const error = Cause.findErrorOption(cause);
+  return (
+    Option.isSome(error) &&
+    error.value instanceof ViewServerGrpcIngressError &&
+    isRestartableMaterializedFeedError(error.value)
+  );
+};
+
+const materializedFeedReconnectMessage = (
+  feedName: string,
+  exit: Exit.Exit<void, ViewServerGrpcIngressError>,
+): string =>
+  Exit.isSuccess(exit)
+    ? unexpectedFeedCompletionMessage(feedName)
+    : feedFailureMessage(feedName, exit.cause);
+
+const materializedFeedExitEffect = (
+  exit: Exit.Exit<void, ViewServerGrpcIngressError>,
+): Effect.Effect<void, ViewServerGrpcIngressError> =>
+  Exit.isSuccess(exit) ? Effect.void : Effect.failCause(exit.cause);
 
 const markMaterializedFeedDegraded = Effect.fn("ViewServerRuntime.grpc.materialized.degraded")(
   function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
@@ -143,7 +212,7 @@ const handleMaterializedFeedExit = Effect.fn("ViewServerRuntime.grpc.materialize
     );
     return;
   }
-  if (Cause.hasInterruptsOnly(exit.cause)) {
+  if (materializedFeedCauseHasInterrupts(exit.cause)) {
     yield* health.feedStopping(feedName);
     yield* ignoreGrpcHealthRefreshFailure(requestHealthRefresh);
     return;
@@ -181,6 +250,7 @@ const mapMaterializedValue = Effect.fn("ViewServerRuntime.grpc.materialized.map"
       grpcIngressError({
         message: `gRPC feed mapping failed for ${feedName}`,
         cause,
+        phase: "mapping",
         feedName,
         topic: feed.topic,
       }),
@@ -190,6 +260,7 @@ const mapMaterializedValue = Effect.fn("ViewServerRuntime.grpc.materialized.map"
       grpcIngressError({
         message: `gRPC feed mapping produced an invalid row for ${feedName}`,
         cause,
+        phase: "mapping",
         feedName,
         topic: feed.topic,
       }),
@@ -243,6 +314,7 @@ const publishMaterializedBatch = Effect.fn("ViewServerRuntime.grpc.materialized.
         grpcIngressError({
           message: `gRPC feed publish failed for ${feedName}`,
           cause,
+          phase: "publish",
           feedName,
           topic: feed.topic,
         }),
@@ -290,6 +362,7 @@ const startMaterializedFeed = Effect.fn("ViewServerRuntime.grpc.materialized.sta
   options: ResolvedViewServerGrpcRuntimeOptions<Topics, Clients>,
   health: ViewServerGrpcHealthLedger<Topics>,
   makeClient: ViewServerGrpcClientFactory,
+  registerCloseFeedState: (closeFeedState: () => void) => void,
   feedName: string,
   feed: GrpcMaterializedFeedDefinition<Topics, Clients, Topic, ClientName, MethodName>,
 ) {
@@ -298,6 +371,7 @@ const startMaterializedFeed = Effect.fn("ViewServerRuntime.grpc.materialized.sta
     return yield* grpcIngressError({
       message: `gRPC feed ${feedName} references missing client: ${feed.client}`,
       cause: feed.client,
+      phase: "configuration",
       feedName,
       topic: feed.topic,
     });
@@ -307,6 +381,7 @@ const startMaterializedFeed = Effect.fn("ViewServerRuntime.grpc.materialized.sta
     return yield* grpcIngressError({
       message: `gRPC feed ${feedName} references unresolved client URL: ${feed.client}`,
       cause: feed.client,
+      phase: "configuration",
       feedName,
       topic: feed.topic,
     });
@@ -317,6 +392,7 @@ const startMaterializedFeed = Effect.fn("ViewServerRuntime.grpc.materialized.sta
       grpcIngressError({
         message: `gRPC client creation failed for ${feedName}`,
         cause,
+        phase: "client",
         feedName,
         topic: feed.topic,
       }),
@@ -327,6 +403,7 @@ const startMaterializedFeed = Effect.fn("ViewServerRuntime.grpc.materialized.sta
       grpcIngressError({
         message: `gRPC feed request creation failed for ${feedName}`,
         cause,
+        phase: "request",
         feedName,
         topic: feed.topic,
       }),
@@ -335,67 +412,164 @@ const startMaterializedFeed = Effect.fn("ViewServerRuntime.grpc.materialized.sta
   const releaseFeed = feed.release;
   const startedAt = yield* Clock.currentTimeMillis;
   yield* health.clientConnected(feed.client, startedAt);
-  yield* health.feedReady(feedName);
   yield* ignoreGrpcHealthRefreshFailure(requestHealthRefresh);
-  const runFeed = Effect.scoped(
-    Effect.gen(function* () {
-      const stream = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () => feed.acquire(input),
-          catch: (cause) =>
-            grpcIngressError({
-              message: `gRPC feed acquire failed for ${feedName}`,
-              cause,
-              feedName,
-              topic: feed.topic,
-            }),
-        }),
-        () =>
-          releaseFeed === undefined
-            ? Effect.void
-            : ignoreGrpcFeedReleaseFailure(
-                Effect.try({
-                  try: () => releaseFeed(input),
-                  catch: (cause) =>
-                    grpcIngressError({
-                      message: `gRPC feed release failed for ${feedName}`,
-                      cause,
-                      feedName,
-                      topic: feed.topic,
-                    }),
-                }).pipe(Effect.flatMap((release) => release)),
-              ),
-      );
-      yield* stream.pipe(
-        Stream.mapError((cause) =>
+  const maxReconnects = options.materializedReconnect.maxReconnects;
+  const reconnectDelay = options.materializedReconnect.delay;
+  let unstableExits = 0;
+  let currentRunPublishedBatch = false;
+  let currentRunStayedOpen = false;
+  let closing = false;
+  registerCloseFeedState(() => {
+    closing = true;
+  });
+  const releaseFeedEffect = Effect.fn("ViewServerRuntime.grpc.materialized.feed.release")(
+    function* () {
+      if (releaseFeed === undefined) {
+        return;
+      }
+      const release = yield* Effect.try({
+        try: () => releaseFeed(input),
+        catch: (cause) =>
           grpcIngressError({
-            message: `gRPC feed stream failed for ${feedName}`,
+            message: `gRPC feed release failed for ${feedName}`,
             cause,
+            phase: "release",
+            feedName,
+            topic: feed.topic,
+          }),
+      });
+      yield* release.pipe(
+        Effect.mapError((cause) =>
+          grpcIngressError({
+            message: `gRPC feed release failed for ${feedName}`,
+            cause,
+            phase: "release",
             feedName,
             topic: feed.topic,
           }),
         ),
-        Stream.groupedWithin(grpcMessageBatchSize, grpcMessageBatchFlushInterval),
-        Stream.runForEach((values) =>
-          publishMaterializedBatch(
-            config,
-            runtimeClient,
-            requestHealthRefresh,
-            health,
-            feed,
+      );
+    },
+  );
+  const acquireFeedStream = Effect.try({
+    try: () => feed.acquire(input),
+    catch: (cause) =>
+      grpcIngressError({
+        message: `gRPC feed acquire failed for ${feedName}`,
+        cause,
+        phase: "acquire",
+        feedName,
+        topic: feed.topic,
+      }),
+  });
+  const runFeedStream = Effect.fn("ViewServerRuntime.grpc.materialized.stream")(function* (
+    stream: Stream.Stream<GrpcMethodValue<Clients[ClientName], MethodName>, unknown>,
+  ) {
+    yield* health.feedReady(feedName);
+    yield* ignoreGrpcHealthRefreshFailure(requestHealthRefresh);
+    yield* Effect.sleep(reconnectDelay).pipe(
+      Effect.flatMap(() =>
+        Effect.sync(() => {
+          currentRunStayedOpen = true;
+        }),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+      Effect.asVoid,
+    );
+    yield* stream.pipe(
+      Stream.catchCause((cause) =>
+        Stream.fail(
+          new ViewServerGrpcIngressError({
+            message: `gRPC feed stream failed for ${feedName}`,
+            cause,
+            phase: "stream",
             feedName,
-            values,
+            topic: feed.topic,
+          }),
+        ),
+      ),
+      Stream.groupedWithin(grpcMessageBatchSize, grpcMessageBatchFlushInterval),
+      Stream.runForEach((values) =>
+        publishMaterializedBatch(
+          config,
+          runtimeClient,
+          requestHealthRefresh,
+          health,
+          feed,
+          feedName,
+          values,
+        ).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              currentRunPublishedBatch = true;
+            }),
           ),
         ),
-      );
-    }),
-  ).pipe(
-    Effect.exit,
-    Effect.flatMap((exit) =>
-      handleMaterializedFeedExit(requestHealthRefresh, health, feedName, feed.client, exit),
-    ),
-  );
-  yield* runFeed.pipe(Effect.forkIn(scope, { startImmediately: true }));
+      ),
+    );
+  });
+  const runFeedOnce = Effect.fn("ViewServerRuntime.grpc.materialized.runOnce")(function* () {
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const stream = yield* restore(acquireFeedStream);
+        const useExit = yield* restore(Effect.scoped(runFeedStream(stream))).pipe(Effect.exit);
+        const releaseExit = yield* (
+          closing ? ignoreGrpcFeedReleaseFailure(releaseFeedEffect()) : releaseFeedEffect()
+        ).pipe(Effect.exit);
+        if (Exit.isFailure(releaseExit)) {
+          if (closing) {
+            return yield* materializedFeedExitEffect(useExit);
+          }
+          if (Exit.isFailure(useExit) && materializedFeedCauseHasInterrupts(useExit.cause)) {
+            return yield* Effect.failCause(useExit.cause);
+          }
+          return yield* Effect.failCause(releaseExit.cause);
+        }
+        return yield* materializedFeedExitEffect(useExit);
+      }),
+    );
+  });
+  const runFeed = Effect.gen(function* () {
+    while (true) {
+      currentRunPublishedBatch = false;
+      currentRunStayedOpen = false;
+      const exit = yield* runFeedOnce().pipe(Effect.exit);
+      if (Exit.isSuccess(exit)) {
+        if (unstableExits < maxReconnects) {
+          unstableExits += 1;
+          yield* health.feedReconnecting(
+            feedName,
+            materializedFeedReconnectMessage(feedName, exit),
+          );
+          yield* ignoreGrpcHealthRefreshFailure(requestHealthRefresh);
+          yield* Effect.sleep(reconnectDelay);
+          continue;
+        }
+        yield* handleMaterializedFeedExit(
+          requestHealthRefresh,
+          health,
+          feedName,
+          feed.client,
+          exit,
+        );
+        return;
+      }
+      if (Exit.isFailure(exit) && (currentRunPublishedBatch || currentRunStayedOpen)) {
+        unstableExits = 0;
+      }
+      if (unstableExits < maxReconnects && canReconnectMaterializedFeedCause(exit.cause)) {
+        unstableExits += 1;
+        yield* health.feedReconnecting(feedName, materializedFeedReconnectMessage(feedName, exit));
+        yield* ignoreGrpcHealthRefreshFailure(requestHealthRefresh);
+        yield* Effect.sleep(reconnectDelay);
+        continue;
+      }
+      yield* handleMaterializedFeedExit(requestHealthRefresh, health, feedName, feed.client, exit);
+      return;
+    }
+  });
+  const fiber = yield* runFeed.pipe(Effect.forkIn(scope, { startImmediately: true }));
+  yield* Scope.addFinalizer(scope, Fiber.interrupt(fiber));
 });
 
 export const makeViewServerGrpcIngress: <
@@ -425,6 +599,7 @@ export const makeViewServerGrpcIngress: <
   const feedNames = Object.entries(options.feeds)
     .filter(([, feed]) => feed.lifecycle === "materialized")
     .map(([feedName]) => feedName);
+  const closeFeedStates: Array<() => void> = [];
   return yield* Effect.gen(function* () {
     for (const [feedName, feed] of Object.entries(options.feeds)) {
       if (feed.lifecycle === "materialized") {
@@ -436,6 +611,9 @@ export const makeViewServerGrpcIngress: <
           options,
           health,
           makeClient,
+          (closeFeedState) => {
+            closeFeedStates.push(closeFeedState);
+          },
           feedName,
           feed,
         );
@@ -443,6 +621,9 @@ export const makeViewServerGrpcIngress: <
     }
     return {
       close: Effect.gen(function* () {
+        for (const closeFeed of closeFeedStates) {
+          closeFeed();
+        }
         yield* Effect.forEach(feedNames, (feedName) => health.feedStopping(feedName), {
           discard: true,
         });
