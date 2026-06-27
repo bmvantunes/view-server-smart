@@ -21,6 +21,15 @@ export const isPlainRecord = (value: unknown): value is Record<string, unknown> 
   return prototype === Object.prototype;
 };
 
+const setClonedField = (record: Record<string, unknown>, field: string, value: unknown): void => {
+  Object.defineProperty(record, field, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+};
+
 export const cloneUnknown = (value: unknown): unknown => {
   if (isBigDecimal(value)) {
     return value;
@@ -41,7 +50,7 @@ export const cloneRecord = (value: Record<string, unknown>): Record<string, unkn
   const cloned: Record<string, unknown> = {};
   for (const key in value) {
     if (Object.hasOwn(value, key)) {
-      cloned[key] = cloneUnknown(value[key]);
+      setClonedField(cloned, key, cloneUnknown(value[key]));
     }
   }
   return cloned;
@@ -52,7 +61,7 @@ export function cloneRow(row: RowObject): RowObject {
   const cloned: Record<string, unknown> = {};
   for (const key in row) {
     if (Object.hasOwn(row, key)) {
-      cloned[key] = cloneUnknown(Reflect.get(row, key));
+      setClonedField(cloned, key, cloneUnknown(Reflect.get(row, key)));
     }
   }
   return cloned;

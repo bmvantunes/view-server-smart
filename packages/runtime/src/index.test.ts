@@ -1344,6 +1344,11 @@ describe("@view-server/runtime", () => {
           topic: "orders",
           row: {
             allocations: {
+              ["__proto__"]: {
+                encodedQuantity: "2002",
+                runtimeAmount: "22.25",
+                runtimeQuantity: "21002",
+              },
               primary: {
                 encodedQuantity: "2001",
                 runtimeAmount: "21.25",
@@ -1431,6 +1436,11 @@ describe("@view-server/runtime", () => {
           key: "a",
           patch: {
             allocations: {
+              ["__proto__"]: {
+                encodedQuantity: "2004",
+                runtimeAmount: "24.25",
+                runtimeQuantity: "21004",
+              },
               primary: {
                 encodedQuantity: "2003",
                 runtimeAmount: "23.25",
@@ -1862,6 +1872,11 @@ describe("@view-server/runtime", () => {
         rows: [
           {
             allocations: {
+              ["__proto__"]: {
+                encodedQuantity: 2004n,
+                runtimeAmount: BigDecimal.fromStringUnsafe("24.25"),
+                runtimeQuantity: 21004n,
+              },
               primary: {
                 encodedQuantity: 2003n,
                 runtimeAmount: BigDecimal.fromStringUnsafe("23.25"),

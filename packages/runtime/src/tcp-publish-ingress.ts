@@ -245,6 +245,15 @@ const tcpDecodeSchemaError = (
 
 const tcpFieldSchemaFromAst = (ast: SchemaAST.AST): TcpFieldSchema => Schema.make(ast);
 
+const setDecodedField = (record: Record<string, unknown>, field: string, value: unknown): void => {
+  Object.defineProperty(record, field, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+};
+
 const nestedTcpFieldAst = (ast: SchemaAST.Objects, field: string): SchemaAST.AST | undefined =>
   ast.propertySignatures.find((property) => property.name === field)?.type;
 
@@ -307,11 +316,15 @@ const decodeTcpFieldForRuntimeInternal: (
       if (fieldAst === undefined) {
         return yield* tcpDecodeSchemaError(topic, phase, { field });
       }
-      decodedValue[field] = yield* decodeTcpFieldForRuntimeInternal(
-        tcpFieldSchemaFromAst(fieldAst),
-        topic,
-        phase,
-        fieldValue,
+      setDecodedField(
+        decodedValue,
+        field,
+        yield* decodeTcpFieldForRuntimeInternal(
+          tcpFieldSchemaFromAst(fieldAst),
+          topic,
+          phase,
+          fieldValue,
+        ),
       );
     }
     yield* Schema.decodeUnknownEffect(schema)(decodedValue, strictParseOptions).pipe(
@@ -382,7 +395,11 @@ const decodeTcpRow = Effect.fn("ViewServerRuntime.tcpPublish.row.decode")(functi
     if (fieldSchema === undefined) {
       return yield* tcpDecodeSchemaError(topic, "row", { field });
     }
-    decodedRow[field] = yield* decodeTcpFieldForRuntime(fieldSchema, topic, "row", value);
+    setDecodedField(
+      decodedRow,
+      field,
+      yield* decodeTcpFieldForRuntime(fieldSchema, topic, "row", value),
+    );
   }
   yield* Schema.decodeUnknownEffect(schema)(decodedRow, strictParseOptions).pipe(
     Effect.asVoid,
@@ -409,7 +426,11 @@ const decodeTcpPatch = Effect.fn("ViewServerRuntime.tcpPublish.patch.decode")(fu
     if (fieldSchema === undefined) {
       return yield* tcpDecodeSchemaError(topic, "patch", { field });
     }
-    decodedPatch[field] = yield* decodeTcpFieldForRuntime(fieldSchema, topic, "patch", value);
+    setDecodedField(
+      decodedPatch,
+      field,
+      yield* decodeTcpFieldForRuntime(fieldSchema, topic, "patch", value),
+    );
   }
   return decodedPatch;
 });

@@ -12124,6 +12124,32 @@ describe("ColumnLiveViewEngine validation and health", () => {
     expect(rowsEqual(inheritedRow, { id: "1", status: "open" })).toBe(true);
   });
 
+  it("preserves own __proto__ data fields while cloning rows and records", () => {
+    const dangerousRecord = { id: "1" };
+    Object.defineProperty(dangerousRecord, "__proto__", {
+      configurable: true,
+      enumerable: true,
+      value: "visible-record-data",
+      writable: true,
+    });
+
+    const dangerousRow = { id: "1" };
+    Object.defineProperty(dangerousRow, "__proto__", {
+      configurable: true,
+      enumerable: true,
+      value: "visible-row-data",
+      writable: true,
+    });
+
+    const clonedRecord = cloneRecord(dangerousRecord);
+    const clonedRow = cloneRow(dangerousRow);
+
+    expect(clonedRecord).toStrictEqual(dangerousRecord);
+    expect(clonedRow).toStrictEqual(dangerousRow);
+    expect(Object.hasOwn(clonedRecord, "__proto__")).toBe(true);
+    expect(Object.hasOwn(clonedRow, "__proto__")).toBe(true);
+  });
+
   it.effect("fails invalid row publishes with a typed schema error", () =>
     Effect.gen(function* () {
       const engine = yield* makeEngine();
