@@ -44,6 +44,7 @@ import { makeViewServerRuntime, runViewServerRuntime } from "./index";
 import { ViewServerKafkaIngressError } from "./kafka-ingress";
 import {
   installTcpPublishAcceptedSocket,
+  installTcpServerSteadyStateErrorHandler,
   makeViewServerTcpPublishIngress,
   rejectTcpSocketWhenClosed,
   tcpPublishUrl,
@@ -1429,6 +1430,10 @@ describe("@view-server/runtime", () => {
           key: "a",
           patch: { unknown: true },
         }),
+        yield* sendTcpPublishLine(
+          tcpPublishUrl,
+          `{"op":"patch","topic":"orders","key":"a","patch":{"constructor":10}}\n`,
+        ),
         yield* sendTcpPublishCommand(tcpPublishUrl, {
           op: "patch",
           topic: "orders",
@@ -1553,6 +1558,15 @@ describe("@view-server/runtime", () => {
           error: {
             _tag: "ViewServerTcpPublishIngressError",
             message: "TCP publish row did not match View Server topic orders.",
+            phase: "decode",
+            topic: "orders",
+          },
+        },
+        {
+          ok: false,
+          error: {
+            _tag: "ViewServerTcpPublishIngressError",
+            message: "TCP publish patch did not match View Server topic orders.",
             phase: "decode",
             topic: "orders",
           },
@@ -2365,6 +2379,31 @@ describe("@view-server/runtime", () => {
       yield* nonEffectPublishIngress.close;
       yield* missingPublishIngress.close;
       yield* runtime.close;
+    }),
+  );
+
+  it.live("closes TCP publish servers on steady-state server errors", () =>
+    Effect.gen(function* () {
+      const closed = yield* Deferred.make<void>();
+      const server = new Net.Server();
+      const listenerCountBefore = server.listenerCount("error");
+      installTcpServerSteadyStateErrorHandler(
+        server,
+        Deferred.succeed(closed, undefined).pipe(Effect.asVoid),
+      );
+      const listenerCountAfter = server.listenerCount("error");
+
+      server.emit("error", new Error("tcp test steady-state failure"));
+      yield* Deferred.await(closed).pipe(Effect.timeout("1 second"));
+
+      expect({
+        listenerCountAfter,
+        listenerCountBefore,
+      }).toStrictEqual({
+        listenerCountAfter: 1,
+        listenerCountBefore: 0,
+      });
+      yield* Effect.sync(() => server.removeAllListeners());
     }),
   );
 

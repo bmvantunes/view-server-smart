@@ -89,6 +89,10 @@ type TcpDestroyableSocket = {
   readonly destroy: () => void;
 };
 
+type TcpErrorHandlingServer = {
+  readonly on: (event: "error", listener: (cause: Error) => void) => unknown;
+};
+
 type TcpResponseSocket = {
   readonly destroyed: boolean;
   readonly off: (event: "close" | "error", listener: () => void) => unknown;
@@ -245,7 +249,9 @@ const validateTcpPatch = Effect.fn("ViewServerRuntime.tcpPublish.patch.validate"
 >(config: ViewServerConfig<Topics>, topic: string, patch: Record<string, unknown>) {
   const schema = yield* topicSchema(config, topic);
   for (const [field, value] of Object.entries(patch)) {
-    const fieldSchema = schema.fields[field];
+    const fieldSchema = Object.entries(schema.fields).find(
+      ([fieldName]) => fieldName === field,
+    )?.[1];
     if (fieldSchema === undefined) {
       return yield* new ViewServerTcpPublishIngressError({
         message: `TCP publish patch did not match View Server topic ${topic}.`,
@@ -609,6 +615,21 @@ const closeTcpServer = (server: Net.Server, state: TcpPublishServerState): Effec
     yield* Effect.promise(() => serverClosed);
   });
 
+/** @internal Package-local test hook; not exported from @view-server/runtime. */
+export const installTcpServerSteadyStateErrorHandler = (
+  server: TcpErrorHandlingServer,
+  close: Effect.Effect<void>,
+): void => {
+  server.on("error", (cause) => {
+    Effect.runFork(
+      Effect.logWarning("TCP publish server emitted an error after listen; closing ingress.").pipe(
+        Effect.annotateLogs({ cause }),
+        Effect.andThen(close),
+      ),
+    );
+  });
+};
+
 const validateTcpPublishOptions = (
   options: ViewServerTcpPublishIngressOptions,
 ): Effect.Effect<void, ViewServerTcpPublishIngressError> => {
@@ -728,27 +749,37 @@ export const makeViewServerTcpPublishIngress = Effect.fn("ViewServerRuntime.tcpP
     const server = Net.createServer((socket) => {
       installTcpPublishAcceptedSocket(socket, state, config, client, options);
     });
-    yield* Effect.callback<void, ViewServerTcpPublishIngressError>((resume) => {
-      server.once("error", (cause) => {
-        resume(
-          Effect.fail(
-            new ViewServerTcpPublishIngressError({
-              message: "TCP publish server failed to listen.",
-              cause,
-              phase: "listen",
-            }),
-          ),
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const close = closeTcpServer(server, state);
+        yield* restore(
+          Effect.callback<void, ViewServerTcpPublishIngressError>((resume) => {
+            const onStartupError = (cause: Error) => {
+              resume(
+                Effect.fail(
+                  new ViewServerTcpPublishIngressError({
+                    message: "TCP publish server failed to listen.",
+                    cause,
+                    phase: "listen",
+                  }),
+                ),
+              );
+            };
+            server.once("error", onStartupError);
+            server.listen({ host, port: options.port }, () => {
+              server.off("error", onStartupError);
+              installTcpServerSteadyStateErrorHandler(server, close);
+              resume(Effect.void);
+            });
+            return close;
+          }),
         );
-      });
-      server.listen({ host, port: options.port }, () => {
-        resume(Effect.void);
-      });
-      return closeTcpServer(server, state);
-    });
-    const address = Schema.decodeUnknownSync(TcpAddress)(server.address());
-    return {
-      url: tcpPublishUrl(address),
-      close: closeTcpServer(server, state),
-    };
+        const address = Schema.decodeUnknownSync(TcpAddress)(server.address());
+        return {
+          url: tcpPublishUrl(address),
+          close,
+        };
+      }),
+    );
   },
 );
