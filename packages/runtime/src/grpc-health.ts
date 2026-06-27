@@ -59,6 +59,7 @@ export type ViewServerGrpcHealthLedger<Topics extends ViewServerRuntimeTopicDefi
   readonly clientConnected: (clientName: string, nowMillis: number) => Effect.Effect<void>;
   readonly clientDegraded: (clientName: string, message: string) => Effect.Effect<void>;
   readonly feedReady: (feedName: string) => Effect.Effect<void>;
+  readonly feedReconnecting: (feedName: string, message: string) => Effect.Effect<void>;
   readonly feedStopping: (feedName: string) => Effect.Effect<void>;
   readonly feedDegraded: (feedName: string, message: string) => Effect.Effect<void>;
   readonly leasedFeedStarting: (input: {
@@ -398,6 +399,16 @@ export const makeViewServerGrpcHealthLedger = <
         if (feed !== undefined) {
           feed.status = "ready";
           feed.lastError = null;
+          refreshClientFromFeeds(feed.clientName);
+        }
+      }),
+    feedReconnecting: (feedName, message) =>
+      Effect.sync(() => {
+        const feed = feeds.get(feedName);
+        if (feed !== undefined) {
+          feed.status = "starting";
+          feed.reconnects += 1;
+          feed.lastError = message;
           refreshClientFromFeeds(feed.clientName);
         }
       }),

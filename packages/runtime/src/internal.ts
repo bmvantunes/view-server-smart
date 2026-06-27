@@ -26,6 +26,7 @@ import type {
   ViewServerRuntime,
   ViewServerRuntimeOptionsInput,
   ViewServerRuntimeOptions,
+  ViewServerGrpcRuntimeOptions,
   ViewServerRuntimeTopicDefinitions,
 } from "./runtime-types";
 import { makeViewServerRuntimeTransportHealth } from "./transport-health";
@@ -36,6 +37,7 @@ export type {
   ViewServerRuntimeDependencies,
   ViewServerRuntimeOptionsInput,
   ViewServerRuntimeOptions,
+  ViewServerGrpcRuntimeOptions,
   ViewServerRuntimeTopicDefinitions,
 };
 

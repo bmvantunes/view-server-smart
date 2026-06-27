@@ -10,10 +10,16 @@ import {
   type ViewServerRuntime,
   type ViewServerRuntimeOptionsInput,
   type ViewServerRuntimeOptions,
+  type ViewServerGrpcRuntimeOptions,
   type ViewServerRuntimeTopicDefinitions,
 } from "./internal";
 
-export type { ViewServerRuntime, ViewServerRuntimeOptions, ViewServerRuntimeOptionsInput };
+export type {
+  ViewServerRuntime,
+  ViewServerRuntimeOptions,
+  ViewServerRuntimeOptionsInput,
+  ViewServerGrpcRuntimeOptions,
+};
 export type { ViewServerKafkaIngressError };
 export type { ViewServerGrpcIngressError };
 

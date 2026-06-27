@@ -569,6 +569,10 @@ beforeAll(async () => {
           feeds: {
             ordersFeed: grpcMaterializedFeed(Stream.fromQueue(queue)),
           },
+          materializedReconnect: {
+            delay: "1 second",
+            maxReconnects: 60,
+          },
         },
         health,
       );

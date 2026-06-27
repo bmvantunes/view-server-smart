@@ -88,14 +88,22 @@ Behavior:
 
 - starts when the runtime starts
 - is scoped to runtime lifetime
-- marks health degraded if the upstream stream completes or fails
+- retries configurable bounded reconnects when upstream acquire, stream failure, or stream
+  completion is restartable
+- marks health degraded when reconnects are exhausted or when mapper/publish failures occur
+- treats any interruption-containing failure cause as shutdown, not as reconnectable failure
 - retains state even with zero subscribers
 - serves snapshots immediately when a user subscribes
 - behaves similarly to Kafka materialized topics
 
-Automatic reconnect policy is a later runtime policy slice. The first materialized runtime slice
-must be honest: one scoped upstream stream per feed, deterministic cleanup, and explicit degraded
-health on completion/failure.
+Materialized reconnect is intentionally bounded in the runtime Adapter. It protects normal upstream
+disconnects without hiding permanent failures forever. Mapper validation failures and runtime publish
+failures are not reconnectable because retrying the same bad row or broken runtime path would only
+hide the real fault. The default reconnect policy is `maxReconnects: 60` with `delay: "1 second"`,
+and applications can override it with `grpc.materializedReconnect`. The reconnect budget counts
+consecutive unstable exits. It resets after the stream stays open for one reconnect delay, and after
+a stream failure that already published a batch in that run. Normal completion still consumes
+reconnect budget even if a batch was published, so an emit-then-complete loop cannot run forever.
 
 Generated gRPC clients own protobuf decode at the ConnectRPC boundary. For this slice, decode
 failures surface as upstream stream failures and degrade the feed. The `decodeFailuresPerSecond`
@@ -701,8 +709,13 @@ Current materialized runtime/e2e tests:
 - materialized feed startup ignores leased feed definitions because the lease manager owns them
 - materialized feed startup rejects duplicate topic ownership across Kafka and gRPC
 - materialized feed startup rejects multiple gRPC owners for one View Server topic
-- stream completion marks feed/client degraded and releases resources
-- stream failure marks feed/client degraded and releases resources
+- transient stream failure reconnects and resumes publishing
+- interruption-containing failures stop without reconnecting
+- stream defects degrade without reconnecting
+- repeated stream completion/failure exhausts reconnects, marks feed/client degraded, and releases
+  resources
+- reconnect failure streak resets after a published batch on a failing stream
+- reconnect failure streak resets after a stream stays open for one reconnect delay
 - runtime shutdown releases all materialized gRPC streams
 - health reports materialized feed keys, row counts, rates, and failures
 - materialized benchmark exercises the production ingress path into runtime-core and the engine
@@ -852,7 +865,8 @@ Implement in slices that keep `pnpm run ready`, strict Effect LSP, package seam 
 3. Materialized feed runtime
    - Acquire materialized streams at runtime startup.
    - Publish mapped rows through runtime-core.
-   - Mark health degraded on stream completion/failure.
+   - Use configurable bounded reconnects for restartable upstream completion/failure.
+   - Mark health degraded when reconnects are exhausted or when mapper/publish failures occur.
    - Release streams on runtime shutdown.
    - Add e2e tests and a Vitest benchmark.
 

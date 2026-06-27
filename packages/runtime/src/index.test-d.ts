@@ -14,6 +14,7 @@ import {
   makeViewServerRuntime,
   runViewServerRuntime,
   type ViewServerRuntime,
+  type ViewServerGrpcRuntimeOptions,
   type ViewServerGrpcIngressError,
   type ViewServerKafkaIngressError,
   type ViewServerRuntimeOptions,
@@ -431,8 +432,44 @@ describe("runtime type contracts", () => {
         feeds: {
           ordersFeed: grpcOrdersFeed,
         },
+        materializedReconnect: {
+          delay: "100 millis",
+          maxReconnects: 5,
+        },
       },
     });
+    const invalidGrpcReconnectKey = makeViewServerRuntime(materializedGrpcViewServer, {
+      grpc: {
+        clients: grpcRuntimeClients,
+        feeds: {
+          ordersFeed: grpcOrdersFeed,
+        },
+        materializedReconnect: {
+          delay: "100 millis",
+          maxReconnects: 5,
+          // @ts-expect-error runtime gRPC reconnect options reject unknown fields.
+          maxAttempts: 5,
+        },
+      },
+    });
+    const invalidGrpcReconnectMax = {
+      delay: "100 millis",
+      // @ts-expect-error runtime gRPC reconnect maxReconnects must be a number.
+      maxReconnects: "5",
+    } satisfies NonNullable<
+      ViewServerGrpcRuntimeOptions<
+        typeof materializedGrpcViewServer.topics
+      >["materializedReconnect"]
+    >;
+    const invalidGrpcReconnectDelay = {
+      // @ts-expect-error runtime gRPC reconnect delay must be a Duration.Input.
+      delay: false,
+      maxReconnects: 5,
+    } satisfies NonNullable<
+      ViewServerGrpcRuntimeOptions<
+        typeof materializedGrpcViewServer.topics
+      >["materializedReconnect"]
+    >;
     const invalidGrpcOptionKey = makeViewServerRuntime(materializedGrpcViewServer, {
       grpc: {
         clients: grpcRuntimeClients,
@@ -471,6 +508,9 @@ describe("runtime type contracts", () => {
     expectTypeOf<Effect.Success<typeof runtimeWithGrpc>>().toMatchTypeOf<
       ViewServerRuntime<typeof materializedGrpcViewServer.topics>
     >();
+    expectTypeOf(invalidGrpcReconnectKey).not.toBeAny();
+    expectTypeOf(invalidGrpcReconnectMax).not.toBeAny();
+    expectTypeOf(invalidGrpcReconnectDelay).not.toBeAny();
     expectTypeOf(invalidGrpcOptionKey).not.toBeAny();
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("port");
     expectTypeOf<ViewServerRuntimeOptions>().not.toHaveProperty("path");
