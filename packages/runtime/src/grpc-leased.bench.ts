@@ -78,7 +78,9 @@ type WatchedSubscription = {
 
 type GrpcLeasedSample = {
   readonly activeLeasedFeeds: number;
+  readonly cleanupMs: number;
   readonly cleanupActiveLeasedFeeds: number;
+  readonly deltaFanoutMs: number;
   readonly healthOverlayMs: number;
   readonly name: string;
   readonly rows: number;
@@ -120,6 +122,7 @@ type OrderRow = typeof GrpcOrder.Type;
 type OrderStatus = OrderRow["status"];
 
 const defaultIterations = 5;
+const defaultRetainedRows = 50_000;
 const defaultRowsPerFeed = 50;
 const defaultRouteCount = 25;
 const convergenceTimeout = "10 seconds";
@@ -149,8 +152,12 @@ const routeCount = positiveIntegerFromEnv(
   "VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_ROUTE_COUNT",
   defaultRouteCount,
 );
+const retainedRows = positiveIntegerFromEnv(
+  "VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_RETAINED_ROWS",
+  defaultRetainedRows,
+);
 const outputJsonPath = benchmarkOutputJsonPath(
-  `grpc-leased-${rowsPerFeed}rows-${routeCount}routes.json`,
+  `grpc-leased-${rowsPerFeed}rows-${routeCount}routes-${retainedRows}retained.json`,
 );
 const benchOptions = {
   iterations: positiveIntegerFromEnv("VIEW_SERVER_RUNTIME_BENCH_ITERATIONS", defaultIterations),
@@ -161,6 +168,7 @@ const benchOptions = {
 
 let profile: BenchmarkProfile | undefined;
 let nextRowIndex = 0;
+let offeredRowCount = 0;
 const samples: Array<GrpcLeasedSample> = [];
 
 const base64FromBytes = (bytes: Uint8Array) =>
@@ -258,6 +266,38 @@ const nextOpenRows = (region: string, count: number): ReadonlyArray<GrpcOrderVal
   }));
 };
 
+const maxObservedSubscriberCount = (): number => Math.max(50, routeCount);
+
+const topicHealthValues = (health: ViewServerHealth<Topics>) => [health.engine.topics.orders];
+
+const cleanupLeakCountFromHealth = (health: ViewServerHealth<Topics>): number => {
+  let leakCount = 0;
+  for (const topicHealth of topicHealthValues(health)) {
+    leakCount +=
+      topicHealth.activeSubscriptions +
+      topicHealth.activeViews +
+      topicHealth.queuedEvents +
+      topicHealth.rowCount;
+  }
+  return leakCount;
+};
+
+const queuedEventCountFromHealth = (health: ViewServerHealth<Topics>): number => {
+  let queuedEventCount = 0;
+  for (const topicHealth of topicHealthValues(health)) {
+    queuedEventCount += topicHealth.queuedEvents;
+  }
+  return queuedEventCount;
+};
+
+const backpressureCountFromHealth = (health: ViewServerHealth<Topics>): number => {
+  let backpressureCount = 0;
+  for (const topicHealth of topicHealthValues(health)) {
+    backpressureCount += topicHealth.backpressureEvents;
+  }
+  return backpressureCount;
+};
+
 const queueForRoute = (
   queues: ReadonlyMap<string, Queue.Queue<GrpcOrderValueMessage>>,
   region: string,
@@ -341,6 +381,9 @@ const offerRows = Effect.fn("ViewServerRuntime.grpc.leased.bench.rows.offer")(fu
   rows: ReadonlyArray<GrpcOrderValueMessage>,
 ) {
   yield* Effect.forEach(rows, (row) => Queue.offer(queue, row), { discard: true });
+  yield* Effect.sync(() => {
+    offeredRowCount += rows.length;
+  });
 });
 
 const readHealthOverlay = Effect.fn("ViewServerRuntime.grpc.leased.bench.healthOverlay.read")(
@@ -477,7 +520,9 @@ const runLeasedSubscriptionCase = Effect.fn("ViewServerRuntime.grpc.leased.bench
       const healthBefore = performance.now();
       const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
       const healthAfter = performance.now();
+      const cleanupBefore = performance.now();
       yield* closeTrackedSubscriptions(trackedSubscriptions);
+      const cleanupAfter = performance.now();
       const cleanupHealth = yield* readHealthOverlay(
         currentProfile.runtimeCore,
         currentProfile.health,
@@ -485,7 +530,9 @@ const runLeasedSubscriptionCase = Effect.fn("ViewServerRuntime.grpc.leased.bench
       expect(activeLeasedFeedCount(cleanupHealth)).toBe(0);
       samples.push({
         activeLeasedFeeds: activeLeasedFeedCount(health),
+        cleanupMs: cleanupAfter - cleanupBefore,
         cleanupActiveLeasedFeeds: activeLeasedFeedCount(cleanupHealth),
+        deltaFanoutMs: 0,
         healthOverlayMs: healthAfter - healthBefore,
         name,
         rows: rows.length,
@@ -528,7 +575,9 @@ const runLocalFilterCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.localF
       const healthBefore = performance.now();
       const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
       const healthAfter = performance.now();
+      const cleanupBefore = performance.now();
       yield* closeTrackedSubscriptions(trackedSubscriptions);
+      const cleanupAfter = performance.now();
       const cleanupHealth = yield* readHealthOverlay(
         currentProfile.runtimeCore,
         currentProfile.health,
@@ -536,7 +585,9 @@ const runLocalFilterCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.localF
       expect(activeLeasedFeedCount(cleanupHealth)).toBe(0);
       samples.push({
         activeLeasedFeeds: activeLeasedFeedCount(health),
+        cleanupMs: cleanupAfter - cleanupBefore,
         cleanupActiveLeasedFeeds: activeLeasedFeedCount(cleanupHealth),
+        deltaFanoutMs: 0,
         healthOverlayMs: healthAfter - healthBefore,
         name,
         rows: rows.length,
@@ -593,7 +644,9 @@ const runManyRouteCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.manyRout
     const healthBefore = performance.now();
     const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
     const healthAfter = performance.now();
+    const cleanupBefore = performance.now();
     yield* closeTrackedSubscriptions(trackedSubscriptions);
+    const cleanupAfter = performance.now();
     const cleanupHealth = yield* readHealthOverlay(
       currentProfile.runtimeCore,
       currentProfile.health,
@@ -601,7 +654,9 @@ const runManyRouteCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.manyRout
     expect(activeLeasedFeedCount(cleanupHealth)).toBe(0);
     samples.push({
       activeLeasedFeeds: activeLeasedFeedCount(health),
+      cleanupMs: cleanupAfter - cleanupBefore,
       cleanupActiveLeasedFeeds: activeLeasedFeedCount(cleanupHealth),
+      deltaFanoutMs: 0,
       healthOverlayMs: healthAfter - healthBefore,
       name,
       rows: regions.length,
@@ -611,6 +666,198 @@ const runManyRouteCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.manyRout
     });
   }).pipe(Effect.ensuring(closeTrackedSubscriptions(trackedSubscriptions)));
 });
+
+const runRetainedLocalFilterCase = Effect.fn(
+  "ViewServerRuntime.grpc.leased.bench.retainedLocalFilter.run",
+)(function* (name: string, currentProfile: BenchmarkProfile) {
+  const trackedSubscriptions: Array<WatchedSubscription> = [];
+  return yield* Effect.gen(function* () {
+    const holderSubscription = yield* currentProfile.manager.liveClient.subscribe("orders", {
+      select: ["id", "price", "status", "region"],
+      where: {
+        region: { eq: "retained-filter" },
+      },
+      orderBy: [{ field: "updatedAt", direction: "desc" }],
+      limit: 100,
+    });
+    const holder = yield* watchSubscriptionRows(holderSubscription).pipe(
+      Effect.tap((watched) =>
+        Effect.sync(() => {
+          trackedSubscriptions.push(watched);
+        }),
+      ),
+    );
+    const rows = nextOpenRows("retained-filter", retainedRows);
+    yield* offerRows(queueForRoute(currentProfile.queues, "retained-filter"), rows);
+    yield* waitForWatchedRows(holder, rows.length);
+    const beforeSubscribe = performance.now();
+    const subscription = yield* currentProfile.manager.liveClient.subscribe("orders", {
+      select: ["id", "price", "status", "region"],
+      where: {
+        region: { eq: "retained-filter" },
+        status: { eq: "open" },
+        price: { gte: 10 },
+      },
+      orderBy: [{ field: "updatedAt", direction: "desc" }],
+      limit: 100,
+    });
+    const afterSubscribe = performance.now();
+    const watchedSubscription = yield* watchSubscriptionRows(subscription).pipe(
+      Effect.tap((watched) =>
+        Effect.sync(() => {
+          trackedSubscriptions.push(watched);
+        }),
+      ),
+    );
+    const beforeSnapshot = performance.now();
+    yield* waitForWatchedRows(watchedSubscription, rows.length);
+    const afterSnapshot = performance.now();
+    const healthBefore = performance.now();
+    const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
+    const healthAfter = performance.now();
+    const cleanupBefore = performance.now();
+    yield* closeTrackedSubscriptions(trackedSubscriptions);
+    const cleanupAfter = performance.now();
+    const cleanupHealth = yield* readHealthOverlay(
+      currentProfile.runtimeCore,
+      currentProfile.health,
+    );
+    expect(activeLeasedFeedCount(cleanupHealth)).toBe(0);
+    samples.push({
+      activeLeasedFeeds: activeLeasedFeedCount(health),
+      cleanupMs: cleanupAfter - cleanupBefore,
+      cleanupActiveLeasedFeeds: activeLeasedFeedCount(cleanupHealth),
+      deltaFanoutMs: 0,
+      healthOverlayMs: healthAfter - healthBefore,
+      name,
+      rows: rows.length,
+      rowsPerSecond: (rows.length / (afterSnapshot - beforeSnapshot)) * 1_000,
+      snapshotMs: afterSnapshot - beforeSnapshot,
+      subscriptionMs: afterSubscribe - beforeSubscribe,
+    });
+  }).pipe(Effect.ensuring(closeTrackedSubscriptions(trackedSubscriptions)));
+});
+
+const runDeltaFanoutCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.deltaFanout.run")(
+  function* (name: string, currentProfile: BenchmarkProfile) {
+    const trackedSubscriptions: Array<WatchedSubscription> = [];
+    return yield* Effect.gen(function* () {
+      const beforeSubscribe = performance.now();
+      const subscriptions = yield* Effect.forEach(
+        Array.from({ length: 25 }, () => "delta-fanout"),
+        (region) =>
+          currentProfile.manager.liveClient.subscribe("orders", {
+            select: ["id", "price", "status", "region"],
+            where: {
+              region: { eq: region },
+            },
+            orderBy: [{ field: "updatedAt", direction: "desc" }],
+            limit: 100,
+          }),
+      );
+      const afterSubscribe = performance.now();
+      const watchedSubscriptions = yield* Effect.forEach(subscriptions, (subscription) =>
+        watchSubscriptionRows(subscription).pipe(
+          Effect.tap((watched) =>
+            Effect.sync(() => {
+              trackedSubscriptions.push(watched);
+            }),
+          ),
+        ),
+      );
+      yield* offerRows(
+        queueForRoute(currentProfile.queues, "delta-fanout"),
+        nextRows("delta-fanout", 1),
+      );
+      yield* Effect.forEach(watchedSubscriptions, (subscription) =>
+        waitForWatchedRows(subscription, 1),
+      );
+      const rows = nextRows("delta-fanout", rowsPerFeed);
+      const beforeDelta = performance.now();
+      yield* offerRows(queueForRoute(currentProfile.queues, "delta-fanout"), rows);
+      yield* Effect.forEach(watchedSubscriptions, (subscription) =>
+        waitForWatchedRows(subscription, rows.length + 1),
+      );
+      const afterDelta = performance.now();
+      const healthBefore = performance.now();
+      const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
+      const healthAfter = performance.now();
+      const cleanupBefore = performance.now();
+      yield* closeTrackedSubscriptions(trackedSubscriptions);
+      const cleanupAfter = performance.now();
+      const cleanupHealth = yield* readHealthOverlay(
+        currentProfile.runtimeCore,
+        currentProfile.health,
+      );
+      expect(activeLeasedFeedCount(cleanupHealth)).toBe(0);
+      samples.push({
+        activeLeasedFeeds: activeLeasedFeedCount(health),
+        cleanupMs: cleanupAfter - cleanupBefore,
+        cleanupActiveLeasedFeeds: activeLeasedFeedCount(cleanupHealth),
+        deltaFanoutMs: afterDelta - beforeDelta,
+        healthOverlayMs: healthAfter - healthBefore,
+        name,
+        rows: rows.length,
+        rowsPerSecond: (rows.length / (afterDelta - beforeDelta)) * 1_000,
+        snapshotMs: afterDelta - beforeDelta,
+        subscriptionMs: afterSubscribe - beforeSubscribe,
+      });
+    }).pipe(Effect.ensuring(closeTrackedSubscriptions(trackedSubscriptions)));
+  },
+);
+
+const runCleanupLatencyCase = Effect.fn("ViewServerRuntime.grpc.leased.bench.cleanupLatency.run")(
+  function* (name: string, currentProfile: BenchmarkProfile) {
+    const trackedSubscriptions: Array<WatchedSubscription> = [];
+    return yield* Effect.gen(function* () {
+      const beforeSubscribe = performance.now();
+      const subscription = yield* currentProfile.manager.liveClient.subscribe("orders", {
+        select: ["id", "price", "status", "region"],
+        where: {
+          region: { eq: "cleanup-latency" },
+        },
+        orderBy: [{ field: "updatedAt", direction: "desc" }],
+        limit: 100,
+      });
+      const afterSubscribe = performance.now();
+      const watchedSubscription = yield* watchSubscriptionRows(subscription).pipe(
+        Effect.tap((watched) =>
+          Effect.sync(() => {
+            trackedSubscriptions.push(watched);
+          }),
+        ),
+      );
+      const rows = nextRows("cleanup-latency", rowsPerFeed);
+      const beforeSnapshot = performance.now();
+      yield* offerRows(queueForRoute(currentProfile.queues, "cleanup-latency"), rows);
+      yield* waitForWatchedRows(watchedSubscription, rows.length);
+      const afterSnapshot = performance.now();
+      const healthBefore = performance.now();
+      const health = yield* readHealthOverlay(currentProfile.runtimeCore, currentProfile.health);
+      const healthAfter = performance.now();
+      const cleanupBefore = performance.now();
+      yield* closeTrackedSubscriptions(trackedSubscriptions);
+      const cleanupAfter = performance.now();
+      const cleanupHealth = yield* readHealthOverlay(
+        currentProfile.runtimeCore,
+        currentProfile.health,
+      );
+      expect(activeLeasedFeedCount(cleanupHealth)).toBe(0);
+      samples.push({
+        activeLeasedFeeds: activeLeasedFeedCount(health),
+        cleanupMs: cleanupAfter - cleanupBefore,
+        cleanupActiveLeasedFeeds: activeLeasedFeedCount(cleanupHealth),
+        deltaFanoutMs: 0,
+        healthOverlayMs: healthAfter - healthBefore,
+        name,
+        rows: rows.length,
+        rowsPerSecond: (rows.length / (afterSnapshot - beforeSnapshot)) * 1_000,
+        snapshotMs: afterSnapshot - beforeSnapshot,
+        subscriptionMs: afterSubscribe - beforeSubscribe,
+      });
+    }).pipe(Effect.ensuring(closeTrackedSubscriptions(trackedSubscriptions)));
+  },
+);
 
 const benchmarkCases: ReadonlyArray<BenchmarkCase> = [
   {
@@ -658,6 +905,28 @@ const benchmarkCases: ReadonlyArray<BenchmarkCase> = [
       ),
   },
   {
+    name: "gRPC leased retained local-filter snapshot",
+    run: () =>
+      Effect.runPromise(
+        runRetainedLocalFilterCase(
+          "gRPC leased retained local-filter snapshot",
+          currentBenchmarkProfile(),
+        ),
+      ),
+  },
+  {
+    name: "gRPC leased delta fanout",
+    run: () =>
+      Effect.runPromise(runDeltaFanoutCase("gRPC leased delta fanout", currentBenchmarkProfile())),
+  },
+  {
+    name: "gRPC leased last-subscriber cleanup",
+    run: () =>
+      Effect.runPromise(
+        runCleanupLatencyCase("gRPC leased last-subscriber cleanup", currentBenchmarkProfile()),
+      ),
+  },
+  {
     name: "gRPC leased many routes",
     run: () =>
       Effect.runPromise(runManyRouteCase("gRPC leased many routes", currentBenchmarkProfile())),
@@ -668,10 +937,14 @@ const summarizeSamples = (
   name: string,
 ): {
   readonly maxActiveLeasedFeeds: number;
+  readonly maxCleanupMs: number;
   readonly maxCleanupActiveLeasedFeeds: number;
+  readonly maxDeltaFanoutMs: number;
   readonly maxHealthOverlayMs: number;
   readonly maxSnapshotMs: number;
   readonly maxSubscriptionMs: number;
+  readonly meanCleanupMs: number;
+  readonly meanDeltaFanoutMs: number;
   readonly meanHealthOverlayMs: number;
   readonly meanRowsPerSecond: number;
   readonly meanSnapshotMs: number;
@@ -685,12 +958,16 @@ const summarizeSamples = (
   }
   const totals = matching.reduce(
     (accumulator, sample) => ({
+      cleanupMs: accumulator.cleanupMs + sample.cleanupMs,
+      deltaFanoutMs: accumulator.deltaFanoutMs + sample.deltaFanoutMs,
       healthOverlayMs: accumulator.healthOverlayMs + sample.healthOverlayMs,
       rowsPerSecond: accumulator.rowsPerSecond + sample.rowsPerSecond,
       snapshotMs: accumulator.snapshotMs + sample.snapshotMs,
       subscriptionMs: accumulator.subscriptionMs + sample.subscriptionMs,
     }),
     {
+      cleanupMs: 0,
+      deltaFanoutMs: 0,
       healthOverlayMs: 0,
       rowsPerSecond: 0,
       snapshotMs: 0,
@@ -700,12 +977,16 @@ const summarizeSamples = (
   const sampleCount = matching.length;
   return {
     maxActiveLeasedFeeds: Math.max(...matching.map((sample) => sample.activeLeasedFeeds)),
+    maxCleanupMs: Math.max(...matching.map((sample) => sample.cleanupMs)),
     maxCleanupActiveLeasedFeeds: Math.max(
       ...matching.map((sample) => sample.cleanupActiveLeasedFeeds),
     ),
+    maxDeltaFanoutMs: Math.max(...matching.map((sample) => sample.deltaFanoutMs)),
     maxHealthOverlayMs: Math.max(...matching.map((sample) => sample.healthOverlayMs)),
     maxSnapshotMs: Math.max(...matching.map((sample) => sample.snapshotMs)),
     maxSubscriptionMs: Math.max(...matching.map((sample) => sample.subscriptionMs)),
+    meanCleanupMs: totals.cleanupMs / sampleCount,
+    meanDeltaFanoutMs: totals.deltaFanoutMs / sampleCount,
     meanHealthOverlayMs: totals.healthOverlayMs / sampleCount,
     meanRowsPerSecond: totals.rowsPerSecond / sampleCount,
     meanSnapshotMs: totals.snapshotMs / sampleCount,
@@ -724,6 +1005,9 @@ beforeAll(async () => {
           "first",
           "reuse",
           "many-subscribers",
+          "retained-filter",
+          "delta-fanout",
+          "cleanup-latency",
           ...Array.from({ length: routeCount }, (_value, index) => `route-${index}`),
         ],
         (region) =>
@@ -753,6 +1037,7 @@ beforeAll(async () => {
         health,
       );
       samples.length = 0;
+      offeredRowCount = 0;
       return {
         health,
         manager,
@@ -772,29 +1057,56 @@ afterAll(async () => {
   );
   expect(activeLeasedFeedCount(health)).toBe(0);
   await Effect.runPromise(currentProfile.runtimeCore.close);
+  const memoryAfterBenchmark = memorySnapshot();
+  const cleanupLeakCount = cleanupLeakCountFromHealth(health);
+  const backpressureCount = backpressureCountFromHealth(health);
+  const queuedEventCount = queuedEventCountFromHealth(health);
   writeJsonFile(benchmarkSummaryPath(outputJsonPath), {
     artifactKind: "runtime-benchmark-summary",
+    backpressureCount,
     benchmarkCases: benchmarkCases.map((benchmarkCase) => benchmarkCase.name),
     benchmarkName: "gRPC leased runtime benchmark",
     benchmarkScope: "runtime-grpc-leased",
     cases: benchmarkCases.map((benchmarkCase) => summarizeSamples(benchmarkCase.name)),
-    finalHealth: health,
+    cleanupLeakCount,
+    health,
     latency: {
       outputJsonPath,
       source: "vitest-output-json",
     },
     memory: {
+      afterBenchmark: memoryAfterBenchmark,
       afterSetup: currentProfile?.memoryAfterSetup,
-      afterTeardown: memorySnapshot(),
-      deltaAfterSetup:
+      before: memoryBefore,
+      setupDelta:
         currentProfile?.memoryAfterSetup === undefined
           ? undefined
           : memoryDelta(memoryBefore, currentProfile.memoryAfterSetup),
-      deltaAfterTeardown: memoryDelta(memoryBefore, memorySnapshot()),
+      totalDelta: memoryDelta(memoryBefore, memoryAfterBenchmark),
     },
+    grpcParameters: {
+      retainedRows,
+      routeCount,
+      rowsPerFeed,
+    },
+    mutationCount: offeredRowCount,
+    notes: [
+      "Latency percentiles are emitted by Vitest in outputJsonPath.",
+      "Benchmark uses the production leased gRPC manager with in-memory Stream sources.",
+      "Rows are written into leased feed queues, then observed through the runtime-core live subscription path.",
+      "Retained local-filter case keeps one lease holder active so the measured subscriber reads an already-retained feed.",
+    ],
+    queuedEventCount,
     routeCount,
+    rowCount: rowsPerFeed,
     rowsPerFeed,
+    retainedRows,
+    subscriberCount: maxObservedSubscriberCount(),
+    topics: ["orders"],
   });
+  if (cleanupLeakCount > 0) {
+    throw new Error(`gRPC leased benchmark cleanup leaked ${cleanupLeakCount} active resource(s).`);
+  }
 });
 
 describe("runtime gRPC leased benchmark", () => {

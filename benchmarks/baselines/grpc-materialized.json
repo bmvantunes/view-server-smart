@@ -1,0 +1,79 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "grpc-materialized",
+  "tasks": [
+    {
+      "artifactKind": "runtime-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/grpc-materialized.bench.ts > runtime gRPC materialized benchmark",
+          "maxMs": 8.290083000000038,
+          "meanMs": 8.082249666666693,
+          "minMs": 7.859915999999998,
+          "name": "gRPC materialized stream batch",
+          "p99Ms": 8.290083000000038,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-materialized.bench.ts > runtime gRPC materialized benchmark",
+          "maxMs": 28.022166999999968,
+          "meanMs": 26.921097333333325,
+          "minMs": 26.145040999999992,
+          "name": "gRPC materialized burst",
+          "p99Ms": 28.022166999999968,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-materialized.bench.ts > runtime gRPC materialized benchmark",
+          "maxMs": 0.09816699999998946,
+          "meanMs": 0.08781933333333806,
+          "minMs": 0.08258299999999963,
+          "name": "gRPC materialized health overlay",
+          "p99Ms": 0.09816699999998946,
+          "sampleCount": 3
+        }
+      ],
+      "benchmarkCases": [
+        "gRPC materialized stream batch",
+        "gRPC materialized burst",
+        "gRPC materialized health overlay"
+      ],
+      "benchmarkName": "gRPC materialized runtime benchmark",
+      "benchmarkScope": "runtime-grpc-materialized",
+      "cleanupLeakCount": 0,
+      "grpcParameters": {
+        "batchSize": 256,
+        "seedRows": 1000
+      },
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 44187648,
+      "minimumSampleCount": 3,
+      "mutationCount": 7400,
+      "outputJsonPath": "packages/runtime/.artifacts/grpc-materialized-1000seed-256batch.json",
+      "queuedEventCount": 0,
+      "rowCount": 1000,
+      "subscriberCount": 0,
+      "summaryPath": "packages/runtime/.artifacts/grpc-materialized-1000seed-256batch.summary.json",
+      "taskLabel": "gRPC materialized 1000 seed rows 256 batch",
+      "topics": ["orders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 25,
+      "maxRatio": 12
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 100,
+      "maxRatio": 16
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    },
+    "throughputAggregateRowsPerSecond": {
+      "minRatio": 0.5
+    }
+  }
+}

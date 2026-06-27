@@ -68,6 +68,13 @@ type GrpcMaterializedSample = {
   readonly totalRows: number;
 };
 
+class GrpcMaterializedBenchmarkConvergenceError extends Schema.TaggedErrorClass<GrpcMaterializedBenchmarkConvergenceError>()(
+  "GrpcMaterializedBenchmarkConvergenceError",
+  {
+    message: Schema.String,
+  },
+) {}
+
 const GrpcOrder = Schema.Struct({
   id: Schema.String,
   customerId: Schema.String,
@@ -97,6 +104,7 @@ const defaultIterations = 5;
 const defaultSeedRows = 1_000;
 const defaultWarmupIterations = 0;
 const defaultWarmupTimeMs = 0;
+const convergenceTimeout = "10 seconds";
 const memoryBefore = memorySnapshot();
 
 const positiveIntegerFromEnv = (name: string, fallback: number): number => {
@@ -163,6 +171,7 @@ if (benchOptions.time > 0 || benchOptions.warmupIterations > 0 || benchOptions.w
 let profile: BenchmarkProfile | undefined;
 const samples: Array<GrpcMaterializedSample> = [];
 let nextRowIndex = 0;
+let offeredRowCount = 0;
 
 const base64FromBytes = (bytes: Uint8Array) =>
   globalThis.btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
@@ -321,12 +330,42 @@ const nextRows = (count: number): ReadonlyArray<GrpcOrderValueMessage> => {
   return Array.from({ length: count }, (_value, offset) => grpcOrderValue(start + offset));
 };
 
+const topicHealthValues = (health: ViewServerHealth<Topics>) => [health.engine.topics.orders];
+
+const cleanupLeakCountFromHealth = (health: ViewServerHealth<Topics>): number => {
+  let leakCount = 0;
+  for (const topicHealth of topicHealthValues(health)) {
+    leakCount +=
+      topicHealth.activeSubscriptions + topicHealth.activeViews + topicHealth.queuedEvents;
+  }
+  return leakCount;
+};
+
+const queuedEventCountFromHealth = (health: ViewServerHealth<Topics>): number => {
+  let queuedEventCount = 0;
+  for (const topicHealth of topicHealthValues(health)) {
+    queuedEventCount += topicHealth.queuedEvents;
+  }
+  return queuedEventCount;
+};
+
+const backpressureCountFromHealth = (health: ViewServerHealth<Topics>): number => {
+  let backpressureCount = 0;
+  for (const topicHealth of topicHealthValues(health)) {
+    backpressureCount += topicHealth.backpressureEvents;
+  }
+  return backpressureCount;
+};
+
 const offerRows = Effect.fn("ViewServerRuntime.grpc.bench.rows.offer")(function* (
   queue: Queue.Queue<GrpcOrderValueMessage>,
   rows: ReadonlyArray<GrpcOrderValueMessage>,
 ) {
   yield* Effect.forEach(rows, (row) => Queue.offer(queue, row), {
     discard: true,
+  });
+  yield* Effect.sync(() => {
+    offeredRowCount += rows.length;
   });
 });
 
@@ -345,6 +384,16 @@ const waitForTotalRows = Effect.fn("ViewServerRuntime.grpc.bench.totalRows.wait"
         schedule: Schedule.addDelay(Schedule.recurs(200), () => Effect.succeed("1 millis")),
         until: (snapshot) => snapshot.totalRows === expectedTotalRows,
       }),
+      Effect.timeout(convergenceTimeout),
+      Effect.flatMap((snapshot) =>
+        snapshot === undefined
+          ? Effect.fail(
+              new GrpcMaterializedBenchmarkConvergenceError({
+                message: `gRPC materialized benchmark did not converge to ${expectedTotalRows} rows within ${convergenceTimeout}.`,
+              }),
+            )
+          : Effect.succeed(snapshot),
+      ),
     );
 });
 
@@ -548,39 +597,63 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const currentProfile = profile;
-  const health: ViewServerHealth<Topics> | undefined =
-    currentProfile === undefined
-      ? undefined
-      : await Effect.runPromise(
-          readHealthOverlay(currentProfile.runtimeCore, currentProfile.health),
-        );
+  let health: ViewServerHealth<Topics> | undefined;
   if (currentProfile !== undefined) {
     await Effect.runPromise(currentProfile.ingress.close);
+    health = await Effect.runPromise(
+      readHealthOverlay(currentProfile.runtimeCore, currentProfile.health),
+    );
     await Effect.runPromise(currentProfile.runtimeCore.close);
   }
+  const memoryAfterBenchmark = memorySnapshot();
+  const cleanupLeakCount = health === undefined ? 0 : cleanupLeakCountFromHealth(health);
+  const backpressureCount = health === undefined ? 0 : backpressureCountFromHealth(health);
+  const queuedEventCount = health === undefined ? 0 : queuedEventCountFromHealth(health);
   writeJsonFile(benchmarkSummaryPath(outputJsonPath), {
     artifactKind: "runtime-benchmark-summary",
+    backpressureCount,
     batchSize,
     benchmarkCases: benchmarkCases.map((benchmarkCase) => benchmarkCase.name),
     benchmarkName: "gRPC materialized runtime benchmark",
     benchmarkScope: "runtime-grpc-materialized",
     cases: benchmarkCases.map((benchmarkCase) => summarizeSamples(benchmarkCase.name)),
-    finalHealth: health,
+    cleanupLeakCount,
+    health,
     latency: {
       outputJsonPath,
       source: "vitest-output-json",
     },
     memory: {
+      afterBenchmark: memoryAfterBenchmark,
       afterSetup: currentProfile?.memoryAfterSetup,
-      afterTeardown: memorySnapshot(),
-      deltaAfterSetup:
+      before: memoryBefore,
+      setupDelta:
         currentProfile?.memoryAfterSetup === undefined
           ? undefined
           : memoryDelta(memoryBefore, currentProfile.memoryAfterSetup),
-      deltaAfterTeardown: memoryDelta(memoryBefore, memorySnapshot()),
+      totalDelta: memoryDelta(memoryBefore, memoryAfterBenchmark),
     },
+    grpcParameters: {
+      batchSize,
+      seedRows,
+    },
+    mutationCount: offeredRowCount,
+    notes: [
+      "Latency percentiles are emitted by Vitest in outputJsonPath.",
+      "Benchmark uses the production materialized gRPC ingress with an in-memory Stream source.",
+      "Each timed sample writes through the gRPC ingress queue, waits for runtime-core convergence, then performs a filtered/sorted snapshot.",
+    ],
+    queuedEventCount,
+    rowCount: seedRows,
     seedRows,
+    subscriberCount: 0,
+    topics: ["orders"],
   });
+  if (cleanupLeakCount > 0) {
+    throw new Error(
+      `gRPC materialized benchmark cleanup leaked ${cleanupLeakCount} active resource(s).`,
+    );
+  }
 });
 
 describe("runtime gRPC materialized benchmark", () => {

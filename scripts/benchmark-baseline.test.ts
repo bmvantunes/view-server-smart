@@ -8,6 +8,7 @@ import {
   comparableBenchmarksFromVitestOutput,
   compareBenchmarkBaseline,
   defaultBenchmarkThresholds,
+  grpcRuntimeBenchmarkThresholds,
   groupedOrderNeutralBenchmarkThresholds,
   kafkaIngestBenchmarkThresholds,
   kafkaSustainedFirehoseBenchmarkThresholds,
@@ -320,6 +321,8 @@ describe("benchmark baseline comparison", () => {
   it("uses profile-specific baseline thresholds", () => {
     expect({
       groupedOrderNeutral: benchmarkThresholdsForProfile("grouped-order-neutral"),
+      grpcLeased: benchmarkThresholdsForProfile("grpc-leased"),
+      grpcMaterialized: benchmarkThresholdsForProfile("grpc-materialized"),
       kafkaIngest: benchmarkThresholdsForProfile("kafka-ingest"),
       kafkaSustainedFirehose: benchmarkThresholdsForProfile("kafka-sustained-firehose"),
       rawReadWrite: benchmarkThresholdsForProfile("raw-read-write"),
@@ -335,8 +338,13 @@ describe("benchmark baseline comparison", () => {
         .thresholds,
       orderNeutralBaseline: buildBenchmarkBaseline("grouped-order-neutral", [observation])
         .thresholds,
+      grpcLeasedBaseline: buildBenchmarkBaseline("grpc-leased", [observation]).thresholds,
+      grpcMaterializedBaseline: buildBenchmarkBaseline("grpc-materialized", [observation])
+        .thresholds,
     }).toStrictEqual({
       groupedOrderNeutral: groupedOrderNeutralBenchmarkThresholds,
+      grpcLeased: grpcRuntimeBenchmarkThresholds,
+      grpcMaterialized: grpcRuntimeBenchmarkThresholds,
       kafkaIngest: kafkaIngestBenchmarkThresholds,
       kafkaSustainedFirehose: kafkaSustainedFirehoseBenchmarkThresholds,
       rawReadWrite: rawReadWriteBenchmarkThresholds,
@@ -348,6 +356,8 @@ describe("benchmark baseline comparison", () => {
       smokeBaseline: defaultBenchmarkThresholds,
       websocketFirehoseBaseline: websocketFirehoseBenchmarkThresholds,
       orderNeutralBaseline: groupedOrderNeutralBenchmarkThresholds,
+      grpcLeasedBaseline: grpcRuntimeBenchmarkThresholds,
+      grpcMaterializedBaseline: grpcRuntimeBenchmarkThresholds,
     });
   });
 
@@ -385,6 +395,69 @@ describe("benchmark baseline comparison", () => {
       activeViewCountBeforeCleanup: 1,
       outputJsonPath,
       summaryPath,
+    });
+  });
+
+  it("reads gRPC benchmark parameters from summary artifacts", () => {
+    const directory = mkdtempSync(join(tmpdir(), "view-server-benchmark-observation-"));
+    const summaryPath = join(directory, "actual.summary.json");
+    const outputJsonPath = join(directory, "actual.json");
+    const grpcParameters = {
+      retainedRows: 500,
+      routeCount: 25,
+      rowsPerFeed: 50,
+    };
+    writeFileSync(
+      summaryPath,
+      `${JSON.stringify({
+        ...summary,
+        benchmarkScope: "runtime-grpc-leased",
+        grpcParameters,
+      })}\n`,
+    );
+    writeFileSync(outputJsonPath, `${JSON.stringify(vitestOutput)}\n`);
+
+    expect(
+      readBenchmarkObservation({
+        ...taskPaths(summaryPath, outputJsonPath),
+        expectedBenchmarkScope: "runtime-grpc-leased",
+      }),
+    ).toStrictEqual({
+      ...observation,
+      benchmarkScope: "runtime-grpc-leased",
+      grpcParameters,
+      outputJsonPath,
+      summaryPath,
+    });
+
+    expect(
+      validateBenchmarkBaseline({
+        artifactKind: "view-server-benchmark-baseline",
+        profile: "grpc-leased",
+        tasks: [
+          {
+            ...observation,
+            benchmarkScope: "runtime-grpc-leased",
+            grpcParameters,
+            outputJsonPath,
+            summaryPath,
+          },
+        ],
+        thresholds: grpcRuntimeBenchmarkThresholds,
+      }),
+    ).toStrictEqual({
+      artifactKind: "view-server-benchmark-baseline",
+      profile: "grpc-leased",
+      tasks: [
+        {
+          ...observation,
+          benchmarkScope: "runtime-grpc-leased",
+          grpcParameters,
+          outputJsonPath,
+          summaryPath,
+        },
+      ],
+      thresholds: grpcRuntimeBenchmarkThresholds,
     });
   });
 
@@ -1724,6 +1797,112 @@ describe("benchmark baseline comparison", () => {
     });
   });
 
+  it("reports gRPC benchmark parameter drift", () => {
+    const baseline = buildBenchmarkBaseline("grpc-leased", [
+      {
+        ...observation,
+        benchmarkScope: "runtime-grpc-leased",
+        grpcParameters: {
+          retainedRows: 500,
+          routeCount: 25,
+          rowsPerFeed: 50,
+        },
+      },
+    ]);
+    const actual = buildBenchmarkBaseline("grpc-leased", [
+      {
+        ...observation,
+        benchmarkScope: "runtime-grpc-leased",
+        grpcParameters: {
+          retainedRows: 1000,
+          routeCount: 25,
+          rowsPerFeed: 50,
+        },
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, actual)).toStrictEqual({
+      ok: false,
+      regressions: [
+        'task a: grpcParameters changed from {"retainedRows":500,"routeCount":25,"rowsPerFeed":50} to {"retainedRows":1000,"routeCount":25,"rowsPerFeed":50}.',
+      ],
+    });
+  });
+
+  it("rejects malformed gRPC benchmark parameters", () => {
+    expect(
+      validateBenchmarkBaseline({
+        artifactKind: "view-server-benchmark-baseline",
+        profile: "grpc-materialized",
+        tasks: [
+          {
+            ...observation,
+            benchmarkScope: "runtime-grpc-materialized",
+            grpcParameters: {
+              batchSize: 256,
+              seedRows: 1000,
+            },
+          },
+        ],
+        thresholds: grpcRuntimeBenchmarkThresholds,
+      }),
+    ).toStrictEqual({
+      artifactKind: "view-server-benchmark-baseline",
+      profile: "grpc-materialized",
+      tasks: [
+        {
+          ...observation,
+          benchmarkScope: "runtime-grpc-materialized",
+          grpcParameters: {
+            batchSize: 256,
+            seedRows: 1000,
+          },
+        },
+      ],
+      thresholds: grpcRuntimeBenchmarkThresholds,
+    });
+
+    expect(() =>
+      validateBenchmarkBaseline({
+        artifactKind: "view-server-benchmark-baseline",
+        profile: "grpc-materialized",
+        tasks: [
+          {
+            ...observation,
+            benchmarkScope: "runtime-grpc-materialized",
+            grpcParameters: {
+              retainedRows: 500,
+              routeCount: 25,
+              rowsPerFeed: 50,
+            },
+          },
+        ],
+        thresholds: grpcRuntimeBenchmarkThresholds,
+      }),
+    ).toThrow(
+      "Benchmark artifact field baseline.tasks[0].grpcParameters must contain exactly these keys: batchSize, seedRows.",
+    );
+
+    expect(() =>
+      validateBenchmarkBaseline({
+        artifactKind: "view-server-benchmark-baseline",
+        profile: "smoke",
+        tasks: [
+          {
+            ...observation,
+            grpcParameters: {
+              batchSize: 256,
+              seedRows: 1000,
+            },
+          },
+        ],
+        thresholds: defaultBenchmarkThresholds,
+      }),
+    ).toThrow(
+      "Benchmark artifact field baseline.tasks[0].grpcParameters is only supported for gRPC runtime benchmark scopes.",
+    );
+  });
+
   it("rejects large relative latency regressions for grouped order-neutral baselines", () => {
     const subMillisecondObservation = {
       ...observation,
@@ -2044,6 +2223,33 @@ describe("benchmark baseline comparison", () => {
     expect(compareBenchmarkBaseline(baseline, increasedMutationCount)).toStrictEqual({
       ok: false,
       regressions: ["task a: mutationCount changed from 5 to 10."],
+    });
+  });
+
+  it("requires exact gRPC runtime mutation counts", () => {
+    const grpcObservation = {
+      ...observation,
+      artifactKind: "runtime-benchmark-summary",
+      benchmarkScope: "runtime-grpc-leased",
+      grpcParameters: {
+        retainedRows: 500,
+        routeCount: 25,
+        rowsPerFeed: 50,
+      },
+      groupedWriteAdmission: undefined,
+      mutationCount: 4130,
+    };
+    const baseline = buildBenchmarkBaseline("grpc-leased", [grpcObservation]);
+    const increasedMutationCount = buildBenchmarkBaseline("grpc-leased", [
+      {
+        ...grpcObservation,
+        mutationCount: 4131,
+      },
+    ]);
+
+    expect(compareBenchmarkBaseline(baseline, increasedMutationCount)).toStrictEqual({
+      ok: false,
+      regressions: ["task a: mutationCount changed from 4130 to 4131."],
     });
   });
 

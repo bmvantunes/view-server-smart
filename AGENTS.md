@@ -120,6 +120,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - `pnpm run bench:baseline:kafka-ingest` is the real Kafka ingest smoke gate. It starts Apache Kafka via `compose.yaml`, uses `@platformatic/kafka`, and compares JSON/protobuf ingest plus a 2k-message mixed burst against `benchmarks/baselines/kafka-ingest.json`.
 - `pnpm run bench:baseline:websocket-firehose` is the small runtime WebSocket firehose smoke gate. It uses the production Effect RPC WebSocket + NDJSON path and bounded Vitest benchmark reads; update it only for accepted WebSocket transport or fanout performance changes.
 - `pnpm run pre-grpc:gate` is the serial pre-gRPC release gate. It runs `ready`, smoke, raw read/write, active-query-sharing, grouped admission, grouped order-neutral, WebSocket firehose, Kafka ingest, and Kafka sustained-firehose gates. Run it before starting gRPC work or declaring Kafka/performance readiness.
+- `pnpm run grpc:gate` is the gRPC runtime smoke gate. It runs `ready`, materialized gRPC baselines, and leased gRPC baselines. Keep it separate from `pre-grpc:gate`.
 - Do not run competing benchmark suites in parallel when comparing results.
 
 ## Package And Architecture Rules

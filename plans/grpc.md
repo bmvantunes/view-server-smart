@@ -743,6 +743,7 @@ Current materialized-feed benchmark command:
 
 ```sh
 pnpm --filter @view-server/runtime run bench:grpc-materialized
+pnpm run bench:baseline:grpc-materialized
 ```
 
 This benchmark uses a Queue-backed in-process gRPC stream but still exercises the
@@ -752,14 +753,17 @@ production materialized ingress path:
 Stream -> groupedWithin -> map -> runtime-core publishMany -> snapshot/readback -> health overlay
 ```
 
-It records stream convergence, filtered/sorted snapshot latency, health overlay
-latency, rows/sec, final health, and memory deltas. Keep it as the materialized
-baseline.
+It records whole-case Vitest latency, stream convergence, filtered/sorted snapshot
+latency, health overlay latency, rows/sec, final health, mutation count, explicit
+gRPC parameters, and memory deltas. The baseline gate compares the whole-case
+Vitest timing and memory summary; inner operation timings are report metadata
+until repeated runs prove they are stable enough for tighter gates.
 
 Current leased-feed benchmark command:
 
 ```sh
 pnpm --filter @view-server/runtime run bench:grpc-leased
+pnpm run bench:baseline:grpc-leased
 ```
 
 This benchmark uses the production lease manager with Queue-backed in-process streams:
@@ -773,18 +777,28 @@ Current leased benchmark profiles:
 - leased first-subscriber acquisition latency
 - leased same-route reuse latency
 - leased local-filter live convergence over the configured rows per feed
+- retained local-filter snapshot report metadata over the configured retained rows. The direct
+  `bench:grpc-leased` script defaults this retained case to 50k rows; the committed
+  `grpc:gate` smoke baseline intentionally overrides it to 500 rows until repeated
+  local runs are stable enough for a heavier gate.
+- leased delta fanout report metadata for multiple subscribers over one feed
+- leased last-subscriber cleanup report metadata as an explicit case
 - many routes with one subscriber each
 - one route with many subscribers
 - health refresh overhead with many active leased feeds
 
 Future leased benchmark profiles:
 
-- retained local-filter snapshot latency over 50k rows
-- leased last-subscriber cleanup latency as an explicit case
-- leased delta fanout latency for multiple subscribers over one feed
 - write tax from feed partitioning
+- repeated-run stability for the direct 50k retained local-filter snapshot before
+  promoting that heavier case into the smoke gate
+- repeated-run stability before tightening inner-operation max-latency gates
 
-Add baseline automation only after repeated local runs are stable. Noisy max latency can remain report-only until stable.
+The smoke gRPC benchmark baselines are part of `pnpm run grpc:gate`, not the
+pre-gRPC gate. `pre-grpc:gate` remains the Kafka/performance readiness gate
+before gRPC work. gRPC whole-case p99 is gated with loose runtime thresholds;
+inner retained-snapshot, delta-fanout, and cleanup max timings remain report-only
+until repeated local runs are stable.
 
 ## Acceptance Criteria
 
@@ -796,7 +810,8 @@ The current materialized gRPC slice is not complete until:
 - changed package tests pass with 100% coverage
 - `vp check` passes
 - focused runtime/config/protocol/client/server tests pass
-- pre-existing `pnpm run pre-grpc:gate` still passes or is intentionally extended
+- pre-existing `pnpm run pre-grpc:gate` still passes before gRPC work
+- `pnpm run grpc:gate` passes for the current gRPC materialized and leased smoke baselines
 - new gRPC e2e tests prove materialized behavior and that leased feeds are ignored by materialized ingress
 - health shows materialized feed instances without rebuilding per message
 - no long-lived stream uses detached/hand-rolled lifecycle

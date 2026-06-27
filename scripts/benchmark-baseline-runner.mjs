@@ -450,6 +450,47 @@ const runtimeKafkaSustainedFirehoseTask = (rowCount, sustainedBatchCount, env) =
   });
 };
 
+const runtimeGrpcMaterializedTask = (seedRows, batchSize, env) => {
+  const outputJsonPath = `.artifacts/grpc-materialized-${seedRows}seed-${batchSize}batch.json`;
+  return task({
+    artifactKind: "runtime-benchmark-summary",
+    benchmarkScope: "runtime-grpc-materialized",
+    env: {
+      VIEW_SERVER_RUNTIME_BENCH_GRPC_BATCH_SIZE: String(batchSize),
+      VIEW_SERVER_RUNTIME_BENCH_GRPC_SEED_ROWS: String(seedRows),
+      VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON: outputJsonPath,
+      ...env,
+    },
+    label: `gRPC materialized ${seedRows} seed rows ${batchSize} batch`,
+    minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"),
+    outputJsonPath,
+    packageDirectory: runtimePackageDirectory,
+    rowCount: seedRows,
+    vpTask: "runtime#bench:grpc-materialized",
+  });
+};
+
+const runtimeGrpcLeasedTask = (rowsPerFeed, routeCount, retainedRows, env) => {
+  const outputJsonPath = `.artifacts/grpc-leased-${rowsPerFeed}rows-${routeCount}routes-${retainedRows}retained.json`;
+  return task({
+    artifactKind: "runtime-benchmark-summary",
+    benchmarkScope: "runtime-grpc-leased",
+    env: {
+      VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_ROUTE_COUNT: String(routeCount),
+      VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_ROWS_PER_FEED: String(rowsPerFeed),
+      VIEW_SERVER_RUNTIME_BENCH_GRPC_LEASED_RETAINED_ROWS: String(retainedRows),
+      VIEW_SERVER_RUNTIME_BENCH_OUTPUT_JSON: outputJsonPath,
+      ...env,
+    },
+    label: `gRPC leased ${rowsPerFeed} rows per feed ${routeCount} routes ${retainedRows} retained rows`,
+    minimumSampleCount: minimumSampleCountFrom(env, "VIEW_SERVER_RUNTIME_BENCH_ITERATIONS"),
+    outputJsonPath,
+    packageDirectory: runtimePackageDirectory,
+    rowCount: rowsPerFeed,
+    vpTask: "runtime#bench:grpc-leased",
+  });
+};
+
 const runtimeWebSocketFirehoseTask = (firehoseCase, rowCount, subscriberCount, env) => {
   const outputJsonPath = `.artifacts/websocket-firehose-${firehoseCase}-${rowCount}rows-${subscriberCount}subs.json`;
   return task({
@@ -538,6 +579,28 @@ export const profiles = new Map([
     [
       runtimeKafkaSustainedFirehoseTask(250, 4, {
         ...commonRuntimeKafkaSmokeEnv,
+      }),
+    ],
+  ],
+  [
+    "grpc-materialized",
+    [
+      runtimeGrpcMaterializedTask(1_000, 256, {
+        VIEW_SERVER_RUNTIME_BENCH_ITERATIONS: "3",
+        VIEW_SERVER_RUNTIME_BENCH_TIME_MS: "0",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_ITERATIONS: "0",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_TIME_MS: "0",
+      }),
+    ],
+  ],
+  [
+    "grpc-leased",
+    [
+      runtimeGrpcLeasedTask(50, 25, 500, {
+        VIEW_SERVER_RUNTIME_BENCH_ITERATIONS: "3",
+        VIEW_SERVER_RUNTIME_BENCH_TIME_MS: "0",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_ITERATIONS: "0",
+        VIEW_SERVER_RUNTIME_BENCH_WARMUP_TIME_MS: "0",
       }),
     ],
   ],

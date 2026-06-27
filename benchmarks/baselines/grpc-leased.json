@@ -1,0 +1,130 @@
+{
+  "artifactKind": "view-server-benchmark-baseline",
+  "profile": "grpc-leased",
+  "tasks": [
+    {
+      "artifactKind": "runtime-benchmark-summary",
+      "backpressureCount": 0,
+      "benchmarks": [
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 11.26641699999999,
+          "meanMs": 10.091444666666652,
+          "minMs": 8.696624999999983,
+          "name": "gRPC leased first subscriber",
+          "p99Ms": 11.26641699999999,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 13.443624999999997,
+          "meanMs": 12.468138666666675,
+          "minMs": 11.868416000000025,
+          "name": "gRPC leased same-route reuse",
+          "p99Ms": 13.443624999999997,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 31.825000000000045,
+          "meanMs": 28.450402666666644,
+          "minMs": 25.749832999999967,
+          "name": "gRPC leased one route many subscribers",
+          "p99Ms": 31.825000000000045,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 7.009042000000022,
+          "meanMs": 6.5534026666666705,
+          "minMs": 6.104874999999993,
+          "name": "gRPC leased local-filter live snapshot",
+          "p99Ms": 7.009042000000022,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 41.91899999999998,
+          "meanMs": 41.55472233333334,
+          "minMs": 41.35654199999999,
+          "name": "gRPC leased retained local-filter snapshot",
+          "p99Ms": 41.91899999999998,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 19.675082999999972,
+          "meanMs": 18.677611333333328,
+          "minMs": 17.373417000000018,
+          "name": "gRPC leased delta fanout",
+          "p99Ms": 19.675082999999972,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 7.4804169999999885,
+          "meanMs": 6.458958666666604,
+          "minMs": 5.747041999999965,
+          "name": "gRPC leased last-subscriber cleanup",
+          "p99Ms": 7.4804169999999885,
+          "sampleCount": 3
+        },
+        {
+          "groupName": "src/grpc-leased.bench.ts > runtime gRPC leased benchmark",
+          "maxMs": 24.873874999999998,
+          "meanMs": 24.277597333333308,
+          "minMs": 23.95024999999987,
+          "name": "gRPC leased many routes",
+          "p99Ms": 24.873874999999998,
+          "sampleCount": 3
+        }
+      ],
+      "benchmarkCases": [
+        "gRPC leased first subscriber",
+        "gRPC leased same-route reuse",
+        "gRPC leased one route many subscribers",
+        "gRPC leased local-filter live snapshot",
+        "gRPC leased retained local-filter snapshot",
+        "gRPC leased delta fanout",
+        "gRPC leased last-subscriber cleanup",
+        "gRPC leased many routes"
+      ],
+      "benchmarkName": "gRPC leased runtime benchmark",
+      "benchmarkScope": "runtime-grpc-leased",
+      "cleanupLeakCount": 0,
+      "grpcParameters": {
+        "retainedRows": 500,
+        "routeCount": 25,
+        "rowsPerFeed": 50
+      },
+      "latencySource": "vitest-output-json",
+      "memoryRssTotalDeltaBytes": 92192768,
+      "minimumSampleCount": 3,
+      "mutationCount": 4130,
+      "outputJsonPath": "packages/runtime/.artifacts/grpc-leased-50rows-25routes-500retained.json",
+      "queuedEventCount": 0,
+      "rowCount": 50,
+      "subscriberCount": 50,
+      "summaryPath": "packages/runtime/.artifacts/grpc-leased-50rows-25routes-500retained.summary.json",
+      "taskLabel": "gRPC leased 50 rows per feed 25 routes 500 retained rows",
+      "topics": ["orders"]
+    }
+  ],
+  "thresholds": {
+    "latencyMean": {
+      "maxAbsoluteDeltaMs": 25,
+      "maxRatio": 12
+    },
+    "latencyP99": {
+      "maxAbsoluteDeltaMs": 100,
+      "maxRatio": 16
+    },
+    "memoryRssTotalDelta": {
+      "maxAbsoluteDeltaBytes": 134217728,
+      "maxRatio": 3
+    },
+    "throughputAggregateRowsPerSecond": {
+      "minRatio": 0.5
+    }
+  }
+}

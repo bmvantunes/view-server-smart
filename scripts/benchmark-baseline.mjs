@@ -125,6 +125,20 @@ export const websocketFirehoseBenchmarkThresholds = {
     defaultBenchmarkThresholds.throughputAggregateRowsPerSecond,
 };
 
+export const grpcRuntimeBenchmarkThresholds = {
+  latencyMean: {
+    maxAbsoluteDeltaMs: 25,
+    maxRatio: 12,
+  },
+  latencyP99: {
+    maxAbsoluteDeltaMs: 100,
+    maxRatio: 16,
+  },
+  memoryRssTotalDelta: defaultBenchmarkThresholds.memoryRssTotalDelta,
+  throughputAggregateRowsPerSecond:
+    defaultBenchmarkThresholds.throughputAggregateRowsPerSecond,
+};
+
 export const benchmarkThresholdsForProfile = (profile) =>
   profile === "grouped-order-neutral"
     ? groupedOrderNeutralBenchmarkThresholds
@@ -136,6 +150,8 @@ export const benchmarkThresholdsForProfile = (profile) =>
       ? kafkaSustainedFirehoseBenchmarkThresholds
     : profile === "websocket-firehose"
       ? websocketFirehoseBenchmarkThresholds
+    : profile === "grpc-materialized" || profile === "grpc-leased"
+      ? grpcRuntimeBenchmarkThresholds
     : defaultBenchmarkThresholds;
 
 const readJsonFile = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -262,6 +278,34 @@ const nonNegativeSafeInteger = (value, path) => {
     throw new Error(`Benchmark artifact field ${path} must be a safe non-negative integer.`);
   }
   return number;
+};
+
+const grpcBenchmarkParametersValue = (value, path, benchmarkScope) => {
+  if (benchmarkScope === "runtime-grpc-leased") {
+    const parameters = exactObjectValue(value, path, [
+      "retainedRows",
+      "routeCount",
+      "rowsPerFeed",
+    ]);
+    return {
+      retainedRows: positiveInteger(parameters.retainedRows, `${path}.retainedRows`),
+      routeCount: positiveInteger(parameters.routeCount, `${path}.routeCount`),
+      rowsPerFeed: positiveInteger(parameters.rowsPerFeed, `${path}.rowsPerFeed`),
+    };
+  }
+  if (benchmarkScope === "runtime-grpc-materialized") {
+    const parameters = exactObjectValue(value, path, ["batchSize", "seedRows"]);
+    return {
+      batchSize: positiveInteger(parameters.batchSize, `${path}.batchSize`),
+      seedRows: positiveInteger(parameters.seedRows, `${path}.seedRows`),
+    };
+  }
+  if (value !== undefined) {
+    throw new Error(
+      `Benchmark artifact field ${path} is only supported for gRPC runtime benchmark scopes.`,
+    );
+  }
+  return undefined;
 };
 
 const comparableBenchmark = (groupName, benchmark) => ({
@@ -750,6 +794,11 @@ export const readBenchmarkObservation = (task) => {
       );
     }
   }
+  const grpcParameters = grpcBenchmarkParametersValue(
+    summary.grpcParameters,
+    `${task.summaryPath}.grpcParameters`,
+    benchmarkScope,
+  );
 
   return {
     ...(summary.activeViewCountBeforeCleanup === undefined
@@ -779,6 +828,7 @@ export const readBenchmarkObservation = (task) => {
       summary.groupedWriteAdmission,
       `${task.summaryPath}.groupedWriteAdmission`,
     ),
+    ...(grpcParameters === undefined ? {} : { grpcParameters }),
     kafkaIngestLanes,
     latencySource,
     memoryRssTotalDeltaBytes: rssBytes,
@@ -984,6 +1034,11 @@ const validateTask = (task, path) => {
       `Benchmark artifact field ${path}.kafkaIngestLanes is required for ${benchmarkScope}.`,
     );
   }
+  const grpcParameters = grpcBenchmarkParametersValue(
+    task.grpcParameters,
+    `${path}.grpcParameters`,
+    benchmarkScope,
+  );
   return {
     ...(task.activeViewCountBeforeCleanup === undefined
       ? {}
@@ -1009,6 +1064,7 @@ const validateTask = (task, path) => {
       task.groupedWriteAdmission,
       `${path}.groupedWriteAdmission`,
     ),
+    ...(grpcParameters === undefined ? {} : { grpcParameters }),
     kafkaIngestLanes,
     latencySource: stringValue(task.latencySource, `${path}.latencySource`),
     memoryRssTotalDeltaBytes,
@@ -1286,6 +1342,8 @@ const compareKafkaSustainedFirehoseFinalLag = (regressions, taskLabel, actualTas
 
 const benchmarkScopeRequiresExactMutationCount = (benchmarkScope) =>
   benchmarkScope === "engine-raw-write" ||
+  benchmarkScope === "runtime-grpc-leased" ||
+  benchmarkScope === "runtime-grpc-materialized" ||
   benchmarkScope === "runtime-kafka-ingest" ||
   benchmarkScope === "runtime-websocket-firehose";
 
@@ -1435,6 +1493,13 @@ export const compareBenchmarkBaseline = (baseline, actualBaseline) => {
       "groupedWriteAdmission",
       baselineTask.groupedWriteAdmission,
       actualTask.groupedWriteAdmission,
+    );
+    compareExactJson(
+      regressions,
+      taskLabel,
+      "grpcParameters",
+      baselineTask.grpcParameters,
+      actualTask.grpcParameters,
     );
     compareExact(
       regressions,
