@@ -19,6 +19,18 @@ export const summaryPath = (outputJsonPath) =>
     ? `${outputJsonPath.slice(0, -".json".length)}.summary.json`
     : `${outputJsonPath}.summary.json`;
 
+export const repeatArtifactPath = (artifactPath, repeatIndex, repeatCount) => {
+  if (repeatCount === 1) {
+    return artifactPath;
+  }
+  const run = String(repeatIndex + 1).padStart(2, "0");
+  const total = String(repeatCount).padStart(2, "0");
+  const suffix = `.run-${run}-of-${total}`;
+  return artifactPath.endsWith(".json")
+    ? `${artifactPath.slice(0, -".json".length)}${suffix}.json`
+    : `${artifactPath}${suffix}`;
+};
+
 const packageArtifactPath = (packageDirectory, outputJsonPath) =>
   `${packageDirectory}/${outputJsonPath}`;
 
@@ -168,6 +180,56 @@ const task = ({
 });
 
 const minimumSampleCountFrom = (env, key) => Number.parseInt(env[key] ?? "5", 10);
+
+export const repeatCountFrom = (argv) => {
+  if (argv.includes("--repeat")) {
+    return undefined;
+  }
+  const repeatArguments = argv.filter((argument) => argument.startsWith("--repeat="));
+  if (repeatArguments.length > 1) {
+    return undefined;
+  }
+  const repeatArgument = repeatArguments[0];
+  if (repeatArgument === undefined) {
+    return 1;
+  }
+  const repeatValue = repeatArgument.slice("--repeat=".length);
+  if (!/^[1-9]\d*$/.test(repeatValue)) {
+    return undefined;
+  }
+  const repeatCount = Number.parseInt(repeatValue, 10);
+  return Number.isSafeInteger(repeatCount) && repeatCount <= 20 ? repeatCount : undefined;
+};
+
+export const taskForRepeat = (currentTask, repeatIndex, repeatCount) => {
+  if (repeatCount === 1) {
+    return currentTask;
+  }
+  const packageOutputJsonPath = repeatArtifactPath(
+    currentTask.packageOutputJsonPath,
+    repeatIndex,
+    repeatCount,
+  );
+  const env = Object.fromEntries(
+    Object.entries(currentTask.env).map(([key, value]) => [
+      key,
+      value === currentTask.packageOutputJsonPath ? packageOutputJsonPath : value,
+    ]),
+  );
+  const outputJsonPath = repeatArtifactPath(currentTask.outputJsonPath, repeatIndex, repeatCount);
+  return {
+    ...currentTask,
+    env: {
+      ...env,
+      VIEW_SERVER_BENCH_REPEAT_INDEX: String(repeatIndex + 1),
+      VIEW_SERVER_BENCH_REPEAT_TOTAL: String(repeatCount),
+    },
+    label: `${currentTask.label} run ${repeatIndex + 1}/${repeatCount}`,
+    outputJsonPath,
+    packageOutputJsonPath,
+    summaryPath: summaryPath(outputJsonPath),
+  };
+};
 
 const rawSnapshotTask = (rowCount, env = {}) => {
   const outputJsonPath = engineArtifactName(`raw-snapshot-${rowCount}rows.json`);
@@ -770,8 +832,12 @@ export const profiles = new Map([
   ],
 ]);
 
+export const repeatableReportOnlyProfiles = new Set(["grpc-leased-retained"]);
+
 export const isBenchmarkEnvironmentKey = (key) =>
   key === "VIEW_SERVER_BENCH_BASELINE_PROFILE" ||
+  key === "VIEW_SERVER_BENCH_REPEAT_INDEX" ||
+  key === "VIEW_SERVER_BENCH_REPEAT_TOTAL" ||
   key === "VIEW_SERVER_KAFKA_BOOTSTRAP_SERVERS" ||
   key.startsWith("VIEW_SERVER_ENGINE_BENCH_") ||
   key.startsWith("VIEW_SERVER_REACT_BENCH_") ||
@@ -817,13 +883,28 @@ export const runBenchmarkBaseline = async ({
   environment,
   logger,
   profileMap = profiles,
+  repeatableProfiles = repeatableReportOnlyProfiles,
   runTask,
 }) => {
   const compareBaseline = !argv.includes("--no-compare");
   const updateBaseline = argv.includes("--update-baseline");
+  const repeatCount = repeatCountFrom(argv);
   const requestedProfile = requestedProfileFrom(argv, environment);
   const tasks = profileMap.get(requestedProfile);
   const parentEnvironment = cleanBenchmarkEnvironment(environment);
+
+  if (repeatCount === undefined) {
+    logger.error("--repeat must be a positive integer.");
+    return 1;
+  }
+  if (repeatCount > 1 && compareBaseline) {
+    logger.error("--repeat requires --no-compare because repeated artifacts are report-only.");
+    return 1;
+  }
+  if (repeatCount > 1 && updateBaseline) {
+    logger.error("--repeat cannot be combined with --update-baseline.");
+    return 1;
+  }
 
   if (tasks === undefined) {
     logger.error(
@@ -834,30 +915,44 @@ export const runBenchmarkBaseline = async ({
     );
     return 1;
   }
-
-  logger.log(`Running ${requestedProfile} benchmark baseline serially (${tasks.length} tasks).`);
-
-  for (const [index, currentTask] of tasks.entries()) {
-    const taskNumber = index + 1;
-    const startedAt = process.hrtime.bigint();
-    logger.log(`\n[${taskNumber}/${tasks.length}] ${currentTask.label}`);
-    removeTaskArtifacts(currentTask);
-    const exitCode = await runTask({
-      ...currentTask,
-      env: {
-        ...parentEnvironment,
-        ...currentTask.env,
-      },
-    });
-    if (exitCode !== 0) {
-      return exitCode;
-    }
-    assertTaskArtifactsWritten(currentTask);
-    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-    logger.log(`[${taskNumber}/${tasks.length}] completed in ${elapsedMs.toFixed(0)}ms`);
+  if (repeatCount > 1 && !repeatableProfiles.has(requestedProfile)) {
+    logger.error(`--repeat is not enabled for benchmark baseline profile: ${requestedProfile}`);
+    return 1;
   }
 
-  const observations = tasks.map(readBenchmarkObservation);
+  const runCountMessage =
+    repeatCount === 1
+      ? `${tasks.length} tasks`
+      : `${tasks.length} tasks x ${repeatCount} runs`;
+  logger.log(`Running ${requestedProfile} benchmark baseline serially (${runCountMessage}).`);
+
+  const completedTasks = [];
+  const totalTaskRuns = tasks.length * repeatCount;
+  for (let repeatIndex = 0; repeatIndex < repeatCount; repeatIndex += 1) {
+    for (const [index, baseTask] of tasks.entries()) {
+      const taskNumber = repeatIndex * tasks.length + index + 1;
+      const currentTask = taskForRepeat(baseTask, repeatIndex, repeatCount);
+      const startedAt = process.hrtime.bigint();
+      logger.log(`\n[${taskNumber}/${totalTaskRuns}] ${currentTask.label}`);
+      removeTaskArtifacts(currentTask);
+      const exitCode = await runTask({
+        ...currentTask,
+        env: {
+          ...parentEnvironment,
+          ...currentTask.env,
+        },
+      });
+      if (exitCode !== 0) {
+        return exitCode;
+      }
+      assertTaskArtifactsWritten(currentTask);
+      completedTasks.push(currentTask);
+      const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      logger.log(`[${taskNumber}/${totalTaskRuns}] completed in ${elapsedMs.toFixed(0)}ms`);
+    }
+  }
+
+  const observations = completedTasks.map(readBenchmarkObservation);
   const actualBaseline = buildBenchmarkBaseline(requestedProfile, observations);
   const profileBaselinePath = baselinePathForProfile(requestedProfile);
 

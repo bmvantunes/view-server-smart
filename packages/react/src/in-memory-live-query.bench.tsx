@@ -1,6 +1,6 @@
 // Benchmarks intentionally import Vitest directly: @effect/vitest does not expose `bench`.
 import { afterAll, beforeAll, bench, describe, expect } from "vitest";
-import { commands, server } from "vitest/browser";
+import { commands, server } from "@vitest/browser/context";
 import {
   defineViewServerConfig,
   type ViewServerHealth,

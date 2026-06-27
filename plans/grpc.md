@@ -779,6 +779,7 @@ Current leased-feed benchmark command:
 pnpm --filter @view-server/runtime run bench:grpc-leased
 pnpm run bench:baseline:grpc-leased
 pnpm run bench:baseline:grpc-leased-retained
+pnpm run bench:baseline:grpc-leased-retained:repeat
 ```
 
 This benchmark uses the production lease manager with Queue-backed in-process streams:
@@ -797,8 +798,10 @@ Current leased benchmark profiles:
 - retained local-filter snapshot report metadata over the configured retained rows. The direct
   `bench:grpc-leased` script defaults this retained case to 50k rows. The committed
   `grpc:gate` smoke baseline intentionally overrides it to 500 rows, while
-  `bench:baseline:grpc-leased-retained` runs the 50k retained-row profile in report-only mode
-  until repeated local runs are stable enough for a heavier gate.
+  `bench:baseline:grpc-leased-retained` runs the 50k retained-row profile in report-only mode.
+- repeated retained local-filter stability runs with isolated artifacts through
+  `bench:baseline:grpc-leased-retained:repeat`. This remains report-only until repeated local
+  runs are stable enough for a heavier gate.
 - leased delta fanout report metadata for multiple subscribers over one feed
 - leased last-subscriber cleanup report metadata as an explicit case
 - many routes with one subscriber each, including health overlay timing metadata
@@ -808,7 +811,7 @@ Future leased benchmark profiles:
 
 - promote the 50k retained local-filter snapshot report profile into a strict compare gate once
   repeated runs prove it is stable enough for CI
-- repeated-run stability before tightening inner-operation max-latency gates
+- repeated-run stability before tightening remaining inner-operation max-latency gates
 
 The smoke gRPC benchmark baselines are part of `pnpm run grpc:gate`, not the
 pre-gRPC gate. `pre-grpc:gate` remains the Kafka/performance readiness gate
