@@ -25,12 +25,12 @@
     "@effect-view-server/client": "workspace:*",
     "@effect-view-server/config": "workspace:*",
     "@effect-view-server/effect-utils": "workspace:*",
-    "@effect-view-server/in-memory": "workspace:*",
     "@effect/atom-react": "catalog:",
     "effect": "catalog:",
     "scheduler": "catalog:"
   },
   "devDependencies": {
+    "@effect-view-server/in-memory": "workspace:*",
     "@effect-view-server/runtime-core": "workspace:*",
     "@effect-view-server/server": "workspace:*",
     "@effect/vitest": "catalog:",
@@ -48,7 +48,13 @@
     "vitest-browser-react": "catalog:"
   },
   "peerDependencies": {
+    "@effect-view-server/in-memory": "workspace:*",
     "react": "19.2.6",
     "react-dom": "19.2.6"
+  },
+  "peerDependenciesMeta": {
+    "@effect-view-server/in-memory": {
+      "optional": true
+    }
   }
 }

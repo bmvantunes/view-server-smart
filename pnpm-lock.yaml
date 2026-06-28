@@ -988,9 +988,6 @@ importers:
       '@effect-view-server/effect-utils':
         specifier: workspace:*
         version: link:../effect-utils
-      '@effect-view-server/in-memory':
-        specifier: workspace:*
-        version: link:../in-memory
       '@effect/atom-react':
         specifier: 'catalog:'
         version: 4.0.0-beta.91(effect@4.0.0-beta.91)(react@19.2.6)(scheduler@0.27.0)
@@ -1001,6 +998,9 @@ importers:
         specifier: 'catalog:'
         version: 0.27.0
     devDependencies:
+      '@effect-view-server/in-memory':
+        specifier: workspace:*
+        version: link:../in-memory
       '@effect-view-server/runtime-core':
         specifier: workspace:*
         version: link:../runtime-core
