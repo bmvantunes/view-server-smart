@@ -144,7 +144,7 @@ describe("in-memory type contracts", () => {
     expectTypeOf(invalidLeasedReset).not.toBeAny();
   });
 
-  it("allows leased gRPC topics from the testing live client only", () => {
+  it("allows leased gRPC topics from testing in-memory clients", () => {
     const leasedQuery = {
       where: {
         id: { eq: "order-1" },
@@ -162,8 +162,7 @@ describe("in-memory type contracts", () => {
       "orders",
       leasedQuery,
     );
-    // @ts-expect-error testing in-memory still exposes only the public mutation client.
-    const invalidTestingLeasedPublish = leasedTestingInMemory.client.publish("orders", {
+    const testingLeasedPublish = leasedTestingInMemory.client.publish("orders", {
       id: "order-1",
       price: 42,
     });
@@ -173,6 +172,6 @@ describe("in-memory type contracts", () => {
         readonly id: string;
       }>
     >();
-    expectTypeOf(invalidTestingLeasedPublish).not.toBeAny();
+    expectTypeOf<Effect.Success<typeof testingLeasedPublish>>().toEqualTypeOf<void>();
   });
 });

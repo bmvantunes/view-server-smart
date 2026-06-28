@@ -12,7 +12,7 @@
     "generate-routes": "vp exec tsr generate && vp run clean-routes",
     "build": "vp run -t @view-server/react#build && vp run generate-routes && vp build && vp run clean-routes",
     "preview": "vp preview",
-    "test": "vp run -t @view-server/react#build && vp run generate-routes && vp test run --coverage --typecheck && vp run clean-routes"
+    "test": "vp run -t @view-server/react#build && vp run generate-routes && vp test run --coverage --typecheck.enabled=false && vp test run --browser.enabled=false --typecheck && vp run clean-routes"
   },
   "dependencies": {
     "@tanstack/react-router": "catalog:",

@@ -1,4 +1,5 @@
 import { useLiveQuery, useViewServerHealthSummary, ViewServerProvider } from "./view-server.config";
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { useSyncExternalStore } from "react";
 
@@ -14,7 +15,17 @@ function useBrowserReady() {
   return useSyncExternalStore(subscribeToBrowserReady, browserSnapshot, serverSnapshot);
 }
 
-export function SsrExampleApp() {
+export interface SsrExampleAppProps {
+  readonly wrapLiveOrdersPanel?: (panel: ReactNode) => ReactNode;
+}
+
+const wrapWithDefaultProvider = (panel: ReactNode) => (
+  <ViewServerProvider url="ws://127.0.0.1:8080/rpc">{panel}</ViewServerProvider>
+);
+
+export function SsrExampleApp({
+  wrapLiveOrdersPanel = wrapWithDefaultProvider,
+}: SsrExampleAppProps = {}) {
   return (
     <main className="example-shell">
       <header>
@@ -25,12 +36,12 @@ export function SsrExampleApp() {
           the browser.
         </p>
       </header>
-      <ClientOnlyLivePanel />
+      <ClientOnlyLivePanel wrapLiveOrdersPanel={wrapLiveOrdersPanel} />
     </main>
   );
 }
 
-function ClientOnlyLivePanel() {
+function ClientOnlyLivePanel({ wrapLiveOrdersPanel }: Required<SsrExampleAppProps>) {
   const isBrowserReady = useBrowserReady();
   const [isLivePanelEnabled, setLivePanelEnabled] = useState(false);
 
@@ -55,11 +66,7 @@ function ClientOnlyLivePanel() {
     );
   }
 
-  return (
-    <ViewServerProvider url="ws://127.0.0.1:8080/rpc">
-      <LiveOrdersPanel />
-    </ViewServerProvider>
-  );
+  return wrapLiveOrdersPanel(<LiveOrdersPanel />);
 }
 
 function LiveOrdersPanel() {

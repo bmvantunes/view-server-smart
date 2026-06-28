@@ -12,7 +12,7 @@
     "generate-routes": "vp exec tsr generate && vp run clean-routes",
     "build": "vp run -t @view-server/react#build && vp run generate-routes && vp build && vp run clean-routes",
     "preview": "vp preview",
-    "test": "vp run -t @view-server/react#build && vp run generate-routes && vp test run --typecheck && vp run clean-routes"
+    "test": "vp run -t @view-server/react#build && vp run generate-routes && vp test run --typecheck.enabled=false && vp test run --browser.enabled=false --typecheck && vp run clean-routes"
   },
   "dependencies": {
     "@tanstack/react-router": "catalog:",
@@ -32,8 +32,12 @@
     "@types/node": "25.9.1",
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
+    "@view-server/in-memory": "workspace:*",
     "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser": "4.1.6",
+    "playwright": "1.60.0",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "vitest-browser-react": "catalog:"
   }
 }

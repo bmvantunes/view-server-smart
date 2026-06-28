@@ -31,6 +31,11 @@ Every example has:
 - `vp run <package>#build` for production build.
 - `vp run <package>#test` for type/browser checks where applicable.
 
+Each React example also includes a Vitest browser-mode test that renders the
+same production component under `createInMemoryViewServerReact`. Application
+code keeps using the same `useLiveQuery` and health hooks; tests only swap the
+provider, so component tests do not need Kafka, gRPC, TCP, or a WebSocket server.
+
 Source-backed examples also expose `runtime` scripts that start the View Server
 runtime:
 

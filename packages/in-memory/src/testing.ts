@@ -1,19 +1,19 @@
 import type { ViewServerRuntimeLiveClient } from "@view-server/client";
-import type { ViewServerConfig, ViewServerRuntimeError } from "@view-server/config";
+import type {
+  ViewServerConfig,
+  ViewServerRuntimeClient,
+  ViewServerRuntimeError,
+} from "@view-server/config";
 import {
   makeViewServerRuntimeCoreInternal,
   type ViewServerRuntimeCoreInternalInstance,
   type ViewServerRuntimeCoreInternalOptionsFor,
 } from "@view-server/runtime-core/internal";
 import { Effect } from "effect";
-import type {
-  DecodableTopicDefinitions,
-  ViewServerInMemoryInstance,
-  ViewServerInMemoryOptions,
-} from "./index";
+import type { DecodableTopicDefinitions, ViewServerInMemoryOptions } from "./index";
 
 export type ViewServerInMemoryTestingInstance<Topics extends DecodableTopicDefinitions> = {
-  readonly client: ViewServerInMemoryInstance<Topics>["client"];
+  readonly client: ViewServerRuntimeClient<Topics>;
   readonly liveClient: ViewServerRuntimeLiveClient<Topics>;
   readonly close: Effect.Effect<void>;
 };
@@ -35,7 +35,7 @@ const toRuntimeCoreInternalOptions = <const Topics extends DecodableTopicDefinit
 const toInMemoryTestingInstance = <const Topics extends DecodableTopicDefinitions>(
   runtimeCore: ViewServerRuntimeCoreInternalInstance<Topics>,
 ): ViewServerInMemoryTestingInstance<Topics> => ({
-  client: runtimeCore.publicClient,
+  client: runtimeCore.internalClient,
   close: runtimeCore.close,
   liveClient: {
     close: runtimeCore.liveClient.close,
