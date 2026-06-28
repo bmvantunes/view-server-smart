@@ -40,7 +40,7 @@ Before implementing product code, set up Effect v4 beta and the Effect language 
 Required package baseline:
 
 - Use the latest `effect` v4 beta.
-- Current known baseline: `effect@4.0.0-beta.70`.
+- Current known baseline: `effect@4.0.0-beta.91`.
 - Use `@effect/vitest` for all tests.
 - Check for updated beta versions at the start of each new implementation day.
 

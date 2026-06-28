@@ -2,7 +2,7 @@ import { viewServerSchemaFieldMetadata } from "@view-server/config";
 import { Schema, SchemaAST } from "effect";
 import { isRecord } from "./row-values";
 
-type SchemaWithFields = Schema.Decoder<object> & {
+type SchemaWithFields = Schema.Codec<object, unknown, never, unknown> & {
   readonly fields: Record<string, unknown>;
 };
 
@@ -22,8 +22,9 @@ export type RawQueryCompilerMetadata = {
   readonly rangeValueKinds: ReadonlyMap<string, ReadonlySet<RangeValueKind>>;
 };
 
-const isSchemaWithFields = (schema: Schema.Decoder<object>): schema is SchemaWithFields =>
-  "fields" in schema && isRecord(schema.fields);
+const isSchemaWithFields = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): schema is SchemaWithFields => "fields" in schema && isRecord(schema.fields);
 
 const schemaAst = (schema: unknown): SchemaAST.AST | undefined => {
   if (!isRecord(schema)) {
@@ -86,14 +87,17 @@ const isPureBigDecimalAst = (ast: SchemaAST.AST): boolean => {
   return SchemaAST.isUnion(ast) && ast.types.length > 0 && ast.types.every(isPureBigDecimalAst);
 };
 
-const schemaFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> =>
+const schemaFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> =>
   isSchemaWithFields(schema) ? new Set(Object.keys(schema.fields)) : new Set();
 
-const schemaFieldOrder = (schema: Schema.Decoder<object>): ReadonlyArray<string> =>
-  isSchemaWithFields(schema) ? Object.keys(schema.fields) : [];
+const schemaFieldOrder = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlyArray<string> => (isSchemaWithFields(schema) ? Object.keys(schema.fields) : []);
 
 const schemaFieldMetadata = (
-  schema: Schema.Decoder<object>,
+  schema: Schema.Codec<object, unknown, never, unknown>,
 ): ReadonlyMap<string, ReturnType<typeof viewServerSchemaFieldMetadata>> => {
   if (!isSchemaWithFields(schema)) {
     return new Map();
@@ -106,7 +110,9 @@ const schemaFieldMetadata = (
   return fields;
 };
 
-const schemaNumericFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaNumericFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
   }
@@ -121,7 +127,9 @@ const schemaNumericFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<st
   return fields;
 };
 
-const schemaNumberFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaNumberFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
   }
@@ -137,7 +145,9 @@ const schemaNumberFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<str
   return fields;
 };
 
-const schemaBigintFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaBigintFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
   }
@@ -151,7 +161,9 @@ const schemaBigintFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<str
   return fields;
 };
 
-const schemaBigDecimalFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaBigDecimalFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
   }
@@ -168,7 +180,7 @@ const schemaBigDecimalFieldNames = (schema: Schema.Decoder<object>): ReadonlySet
 };
 
 const schemaRangeValueKinds = (
-  schema: Schema.Decoder<object>,
+  schema: Schema.Codec<object, unknown, never, unknown>,
 ): ReadonlyMap<string, ReadonlySet<RangeValueKind>> => {
   if (!isSchemaWithFields(schema)) {
     return new Map();
@@ -188,7 +200,9 @@ const schemaRangeValueKinds = (
   return fields;
 };
 
-const schemaStringFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaStringFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
   }
@@ -202,7 +216,9 @@ const schemaStringFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<str
   return fields;
 };
 
-const schemaStructuredFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaStructuredFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
   }
@@ -216,7 +232,9 @@ const schemaStructuredFieldNames = (schema: Schema.Decoder<object>): ReadonlySet
   return fields;
 };
 
-const schemaStructuredObjectFieldNames = (schema: Schema.Decoder<object>): ReadonlySet<string> => {
+const schemaStructuredObjectFieldNames = (
+  schema: Schema.Codec<object, unknown, never, unknown>,
+): ReadonlySet<string> => {
   if (!isSchemaWithFields(schema)) {
     return new Set();
   }
@@ -231,7 +249,7 @@ const schemaStructuredObjectFieldNames = (schema: Schema.Decoder<object>): Reado
 };
 
 export const rawQueryCompilerMetadata = (
-  schema: Schema.Decoder<object>,
+  schema: Schema.Codec<object, unknown, never, unknown>,
 ): RawQueryCompilerMetadata => ({
   fieldNames: schemaFieldNames(schema),
   fieldOrder: schemaFieldOrder(schema),

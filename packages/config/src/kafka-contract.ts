@@ -325,6 +325,13 @@ const validateCustomDeclarationJsonCodecTargetAst = (
       requiresConcreteWireShape,
     );
   }
+  if (
+    SchemaAST.isDeclaration(ast) &&
+    ast.typeParameters.length === 0 &&
+    typeof declarationJsonLink(ast) !== "function"
+  ) {
+    throw new Error("Declaration schemas must define Kafka JSON codecs");
+  }
   if (ast.encoding !== undefined) {
     const classTarget =
       SchemaAST.isDeclaration(ast) && isSchemaClassDeclarationAst(ast)
@@ -391,8 +398,10 @@ const knownEffectJsonDeclarations = [
   Schema.BigDecimal,
   Schema.Date,
   Schema.Duration,
-  Schema.Error,
-  Schema.ErrorWithStack,
+  Schema.Error(),
+  Schema.Error({ includeStack: true }),
+  Schema.Error({ excludeCause: true }),
+  Schema.Error({ includeStack: true, excludeCause: true }),
   Schema.File,
   Schema.FormData,
   Schema.Json,
@@ -676,6 +685,12 @@ const rejectSuspendedRecordKeySchemas = (schema: unknown): void => {
         return;
       }
       if (SchemaAST.isDeclaration(current)) {
+        if (
+          current.typeParameters.length === 0 &&
+          typeof declarationJsonLink(current) !== "function"
+        ) {
+          throw new Error("Declaration schemas must define Kafka JSON codecs");
+        }
         const isSchemaClass = isSchemaClassDeclarationAst(current);
         const classTarget = isSchemaClass ? current.typeParameters[0] : undefined;
         const customJsonCodecTargetAst = customDeclarationJsonCodecTargetAstFromAst(current);
@@ -799,6 +814,11 @@ const rejectSuspendedRecordKeySchemas = (schema: unknown): void => {
     const ast = Reflect.get(current, "ast");
     if (SchemaAST.isAST(ast) && SchemaAST.isSuspend(ast)) {
       visitAst(ast);
+    }
+    if (SchemaAST.isAST(ast) && SchemaAST.isDeclaration(ast)) {
+      if (ast.typeParameters.length === 0 && typeof declarationJsonLink(ast) !== "function") {
+        throw new Error("Declaration schemas must define Kafka JSON codecs");
+      }
     }
     if (
       SchemaAST.isAST(ast) &&

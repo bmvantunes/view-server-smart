@@ -10,21 +10,21 @@ onlyBuiltDependencies:
   - msgpackr-extract
 
 catalog:
-  "@effect/platform-browser": 4.0.0-beta.70
-  "@effect/platform-node": 4.0.0-beta.70
+  "@effect/platform-browser": 4.0.0-beta.91
+  "@effect/platform-node": 4.0.0-beta.91
   "@effect/language-service": 0.86.2
-  "@effect/vitest": 4.0.0-beta.70
+  "@effect/vitest": 4.0.0-beta.91
   "@types/node": 25.9.1
   "@vitest/browser": 4.1.9
   "@vitest/browser-playwright": 4.1.9
   "@vitest/coverage-istanbul": 4.1.9
   "@vitest/runner": 4.1.9
-  effect: 4.0.0-beta.70
+  effect: 4.0.0-beta.91
   typescript: 6.0.3
   vite: npm:@voidzero-dev/vite-plus-core@0.2.1
   vitest: 4.1.9
   vite-plus: 0.2.1
-  "@effect/atom-react": 4.0.0-beta.70
+  "@effect/atom-react": 4.0.0-beta.91
   scheduler: 0.27.0
   vitest-browser-react: 2.2.0
   "@platformatic/kafka": 2.2.3
@@ -48,3 +48,10 @@ peerDependencyRules:
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+minimumReleaseAgeExclude:
+  - "@effect/atom-react@4.0.0-beta.91"
+  - "@effect/platform-browser@4.0.0-beta.91"
+  - "@effect/platform-node-shared@4.0.0-beta.91"
+  - "@effect/platform-node@4.0.0-beta.91"
+  - "@effect/vitest@4.0.0-beta.91"
+  - effect@4.0.0-beta.91

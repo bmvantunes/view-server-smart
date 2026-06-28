@@ -12,7 +12,6 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - [ ] Run `vp check` and `vp test` to format, lint, type check and test changes.
 - [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
-- [ ] Do not use direct `pnpm` commands for workspace scripts, package filters, execs, tests, builds, or CI. Use `vp install`, `vp exec`, `vp test`, `vp run -w <root-script>`, `vp run <package>#<task>`, or `vp run --filter <package> <task>`.
 
 <!--VITE PLUS END-->
 
@@ -30,6 +29,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 ## Project Non-Negotiables
 
 - Performance and type safety are product features. Do not trade either away silently.
+- Do not use direct `pnpm` commands for workspace scripts, package filters, execs, tests, builds, or CI. Use `vp install`, `vp exec`, `vp test`, `vp run -w <root-script>`, `vp run <package>#<task>`, or `vp run --filter <package> <task>`.
 - Public APIs must remain fully typed end-to-end. If a user can pass an invalid topic, field, aggregate, mapping result, or query shape without a type error, that is a bug.
 - Runtime behavior must match the public types. Do not make type-level promises that the implementation only satisfies through casts.
 - Do not add compatibility layers for APIs nobody uses yet. This project is still allowed to break its own API to make the right design.

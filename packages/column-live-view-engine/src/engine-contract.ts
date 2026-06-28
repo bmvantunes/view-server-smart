@@ -26,14 +26,14 @@ import type { GroupedIncrementalAdmissionLimits } from "./grouped-incremental-ad
 export type DecodableTopicDefinitions = Record<
   string,
   {
-    readonly schema: RowSchema & Schema.Decoder<object>;
+    readonly schema: RowSchema & Schema.Codec<object, unknown, never, unknown>;
     readonly key: string;
   }
 >;
 
 type ValidateEngineTopics<Topics extends DecodableTopicDefinitions> = {
   readonly [Topic in keyof Topics]: Topics[Topic] extends {
-    readonly schema: infer S extends RowSchema & Schema.Decoder<object>;
+    readonly schema: infer S extends RowSchema & Schema.Codec<object, unknown, never, unknown>;
     readonly key: infer Key extends string;
   }
     ? {

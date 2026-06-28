@@ -13,20 +13,20 @@ catalogs:
       specifier: 2.1.2
       version: 2.1.2
     '@effect/atom-react':
-      specifier: 4.0.0-beta.70
-      version: 4.0.0-beta.70
+      specifier: 4.0.0-beta.91
+      version: 4.0.0-beta.91
     '@effect/language-service':
       specifier: 0.86.2
       version: 0.86.2
     '@effect/platform-browser':
-      specifier: 4.0.0-beta.70
-      version: 4.0.0-beta.70
+      specifier: 4.0.0-beta.91
+      version: 4.0.0-beta.91
     '@effect/platform-node':
-      specifier: 4.0.0-beta.70
-      version: 4.0.0-beta.70
+      specifier: 4.0.0-beta.91
+      version: 4.0.0-beta.91
     '@effect/vitest':
-      specifier: 4.0.0-beta.70
-      version: 4.0.0-beta.70
+      specifier: 4.0.0-beta.91
+      version: 4.0.0-beta.91
     '@platformatic/kafka':
       specifier: 2.2.3
       version: 2.2.3
@@ -64,8 +64,8 @@ catalogs:
       specifier: 4.1.9
       version: 4.1.9
     effect:
-      specifier: 4.0.0-beta.70
-      version: 4.0.0-beta.70
+      specifier: 4.0.0-beta.91
+      version: 4.0.0-beta.91
     scheduler:
       specifier: 0.27.0
       version: 0.27.0
@@ -103,7 +103,7 @@ importers:
         version: 0.86.2
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@view-server/client':
         specifier: workspace:*
         version: link:packages/client
@@ -142,10 +142,10 @@ importers:
         version: 6.0.3
       vite-plus:
         specifier: 'catalog:'
-        version: 0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)
+        version: 0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   apps/example:
     dependencies:
@@ -157,7 +157,7 @@ importers:
         version: link:../../packages/react
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -167,7 +167,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@types/react':
         specifier: 19.2.15
         version: 19.2.15
@@ -197,7 +197,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       vitest-browser-react:
         specifier: 'catalog:'
         version: 2.2.0(@types/react-dom@19.2.3(@types/react@19.2.15))(@types/react@19.2.15)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(vitest@4.1.9)
@@ -212,7 +212,7 @@ importers:
         version: 2.1.2(@bufbuild/protobuf@2.12.0)
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@platformatic/kafka':
         specifier: 'catalog:'
         version: 2.2.3
@@ -236,7 +236,7 @@ importers:
         version: link:../../packages/runtime
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -249,7 +249,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.1(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -306,7 +306,7 @@ importers:
         version: 2.1.2(@bufbuild/protobuf@2.12.0)
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@tanstack/react-router':
         specifier: 'catalog:'
         version: 1.170.16(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -327,7 +327,7 @@ importers:
         version: link:../../packages/runtime
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -340,7 +340,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.1(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -397,7 +397,7 @@ importers:
         version: 2.1.2(@bufbuild/protobuf@2.12.0)
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@tanstack/react-router':
         specifier: 'catalog:'
         version: 1.170.16(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -418,7 +418,7 @@ importers:
         version: link:../../packages/runtime
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -431,7 +431,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.1(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -497,7 +497,7 @@ importers:
         version: link:../../packages/react
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -510,7 +510,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.1(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -564,7 +564,7 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@platformatic/kafka':
         specifier: 'catalog:'
         version: 2.2.3
@@ -588,7 +588,7 @@ importers:
         version: link:../../packages/runtime
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -601,7 +601,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.1(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -667,7 +667,7 @@ importers:
         version: link:../../packages/react
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -680,7 +680,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.1(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -728,7 +728,7 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@tanstack/react-router':
         specifier: 'catalog:'
         version: 1.170.16(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -749,7 +749,7 @@ importers:
         version: link:../../packages/runtime
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       react:
         specifier: 19.2.6
         version: 19.2.6
@@ -762,7 +762,7 @@ importers:
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.3.1(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0))
@@ -813,7 +813,7 @@ importers:
     dependencies:
       '@effect/platform-browser':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)
       '@view-server/config':
         specifier: workspace:*
         version: link:../config
@@ -825,14 +825,14 @@ importers:
         version: link:../protocol
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)
@@ -844,7 +844,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/column-live-view-engine:
     dependencies:
@@ -853,11 +853,11 @@ importers:
         version: link:../config
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)
@@ -869,7 +869,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/config:
     dependencies:
@@ -881,11 +881,11 @@ importers:
         version: 2.1.2(@bufbuild/protobuf@2.12.0)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)
@@ -897,17 +897,17 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/effect-utils:
     dependencies:
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)
@@ -919,7 +919,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/in-memory:
     dependencies:
@@ -934,11 +934,11 @@ importers:
         version: link:../runtime-core
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)
@@ -950,7 +950,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/protocol:
     dependencies:
@@ -959,11 +959,11 @@ importers:
         version: link:../config
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)
@@ -975,13 +975,13 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/react:
     dependencies:
       '@effect/atom-react':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(react@19.2.6)(scheduler@0.27.0)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(react@19.2.6)(scheduler@0.27.0)
       '@view-server/client':
         specifier: workspace:*
         version: link:../client
@@ -993,14 +993,14 @@ importers:
         version: link:../effect-utils
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
       scheduler:
         specifier: 'catalog:'
         version: 0.27.0
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@types/react':
         specifier: 19.2.15
         version: 19.2.15
@@ -1042,7 +1042,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       vitest-browser-react:
         specifier: 'catalog:'
         version: 2.2.0(@types/react-dom@19.2.3(@types/react@19.2.15))(@types/react@19.2.15)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(vitest@4.1.9)
@@ -1075,17 +1075,17 @@ importers:
         version: link:../server
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@bufbuild/protobuf':
         specifier: 2.12.0
         version: 2.12.0
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.1
@@ -1100,7 +1100,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/runtime-core:
     dependencies:
@@ -1118,11 +1118,11 @@ importers:
         version: link:../effect-utils
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@vitest/coverage-istanbul':
         specifier: 'catalog:'
         version: 4.1.9(vitest@4.1.9)
@@ -1134,13 +1134,13 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/server:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)
       '@view-server/client':
         specifier: workspace:*
         version: link:../client
@@ -1155,11 +1155,11 @@ importers:
         version: link:../protocol
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-beta.70
+        version: 4.0.0-beta.91
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)
+        version: 4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)
       '@types/node':
         specifier: 'catalog:'
         version: 25.9.1
@@ -1177,7 +1177,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
 packages:
 
@@ -1274,10 +1274,10 @@ packages:
     peerDependencies:
       '@bufbuild/protobuf': ^2.7.0
 
-  '@effect/atom-react@4.0.0-beta.70':
-    resolution: {integrity: sha512-G8fZHLBclfD9mZZY+9ltvJMZOMy4cJPa0wGoQcpevcvlpJoXlrugAosQ0ggiQ//HtVUsJ7K1ri9i28WX+d/a1Q==}
+  '@effect/atom-react@4.0.0-beta.91':
+    resolution: {integrity: sha512-/IzO3pkmHBspYfVTWXtDBy99rW21lCpgU51uIrWbiiKNIVQ0ClpyOZtLfYpN99NMXt7WV+nHVUmndhClG0OgXA==}
     peerDependencies:
-      effect: ^4.0.0-beta.70
+      effect: ^4.0.0-beta.91
       react: ^19.2.4
       scheduler: '*'
 
@@ -1285,28 +1285,28 @@ packages:
     resolution: {integrity: sha512-SaPln+8srOqDJDUwNTDmP5e+IYpEDr9+1epGznnsLqu8xvo6VnxyWARdeLpqvZJlb0Pgy9ca7ppqvvdWbHPXAg==}
     hasBin: true
 
-  '@effect/platform-browser@4.0.0-beta.70':
-    resolution: {integrity: sha512-m5MYc2DY6TC+LkgaGnAwn7M2Xr1hDYgN1lrhl2braitd0LlqYG8SrjaraJJC5KcPXavr0BSWdrwaDwiNA1CEQA==}
+  '@effect/platform-browser@4.0.0-beta.91':
+    resolution: {integrity: sha512-6ZUavjlDxhjAlGkmmNYoB9zs3LVLy2SnhJ5ZA6csdqAC7HHQcCIfjFQza1orcQakFQ3QqoYt8XvVlYA8ZFINlg==}
     peerDependencies:
-      effect: ^4.0.0-beta.70
+      effect: ^4.0.0-beta.91
 
-  '@effect/platform-node-shared@4.0.0-beta.70':
-    resolution: {integrity: sha512-3VXuL63IDmq13We+ApRKn2JW3Rb9g5gj1YEmfb8u2b73norur1VsIJ/pRE4qjShevg19dQYi2JsLawSZ6gApug==}
+  '@effect/platform-node-shared@4.0.0-beta.91':
+    resolution: {integrity: sha512-JX++yhomaOEpQmnTYuhn+pKAgKg5MQvycAf1rXGtyVKi202Nc5nK37xbywDcugfwrc1FrPxrxa3BY3lbSc74cw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-beta.70
+      effect: ^4.0.0-beta.91
 
-  '@effect/platform-node@4.0.0-beta.70':
-    resolution: {integrity: sha512-Ls1WtLaO2CbcO8jHtZRRi6eZa4YOJZ9KXm6udMvwhjV/XhqdsT6AzmcXbc1hINbKgvRcik6qM/441YEaBMYoqw==}
+  '@effect/platform-node@4.0.0-beta.91':
+    resolution: {integrity: sha512-gP7Xlmce/HJxg3WaacmrRMJtRw2j6uJ4UrLEDy596tokdXcMoakz2oAtULSXiLzihLeQnt9nrm9K5nHhqKdBdA==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-beta.70
+      effect: ^4.0.0-beta.91
       ioredis: ^5.7.0
 
-  '@effect/vitest@4.0.0-beta.70':
-    resolution: {integrity: sha512-XDteNN0xfOgoMauAVoN5iylxVgEjp7kFsGFq18tZ5XYjek0eOZa0nOoes5s7Bs71VvwjnCeCbFMD7IhxswEt8A==}
+  '@effect/vitest@4.0.0-beta.91':
+    resolution: {integrity: sha512-RTowh92EawJWk+PewFrbqmPSOjbJ9xcq4BcWGV4t0aaYIvZj5g5dubXUvCioh6aq4lkOnTEJmC6seGZjDFO/MQ==}
     peerDependencies:
-      effect: ^4.0.0-beta.70
+      effect: ^4.0.0-beta.91
       vitest: ^3.0.0 || ^4.0.0
 
   '@emnapi/core@1.10.0':
@@ -2605,8 +2605,8 @@ packages:
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
-  effect@4.0.0-beta.70:
-    resolution: {integrity: sha512-8AwGTRiNriirHGEYHrOS0E9fzdhIqCdZjiHP1YXmNo2UyPGS43ILsymsSHT7V0DJS+8dvlKq2RxnrDBUhDNZHg==}
+  effect@4.0.0-beta.91:
+    resolution: {integrity: sha512-FFlkWiy1QK4xuHd/nui9LKD/5qkpSHJdMcbsEY7jl9V27+txye6W+RAIlmWjuA2vvtUyZmzGKarVtdU0l1pdBQ==}
 
   electron-to-chromium@1.5.361:
     resolution: {integrity: sha512-Q6Hts7N9FnJc5LeGRINFvLhCI9xZmNtTDe5ZbcVezQz7cU4a8Aua3GH1b8J2XY8Al9PF+OCwYqhgsOOheMdvkA==}
@@ -3487,32 +3487,32 @@ snapshots:
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 
-  '@effect/atom-react@4.0.0-beta.70(effect@4.0.0-beta.70)(react@19.2.6)(scheduler@0.27.0)':
+  '@effect/atom-react@4.0.0-beta.91(effect@4.0.0-beta.91)(react@19.2.6)(scheduler@0.27.0)':
     dependencies:
-      effect: 4.0.0-beta.70
+      effect: 4.0.0-beta.91
       react: 19.2.6
       scheduler: 0.27.0
 
   '@effect/language-service@0.86.2': {}
 
-  '@effect/platform-browser@4.0.0-beta.70(effect@4.0.0-beta.70)':
+  '@effect/platform-browser@4.0.0-beta.91(effect@4.0.0-beta.91)':
     dependencies:
-      effect: 4.0.0-beta.70
+      effect: 4.0.0-beta.91
       multipasta: 0.2.7
 
-  '@effect/platform-node-shared@4.0.0-beta.70(effect@4.0.0-beta.70)':
+  '@effect/platform-node-shared@4.0.0-beta.91(effect@4.0.0-beta.91)':
     dependencies:
       '@types/ws': 8.18.1
-      effect: 4.0.0-beta.70
+      effect: 4.0.0-beta.91
       ws: 8.20.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0-beta.70(effect@4.0.0-beta.70)(ioredis@5.10.1)':
+  '@effect/platform-node@4.0.0-beta.91(effect@4.0.0-beta.91)(ioredis@5.10.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0-beta.70(effect@4.0.0-beta.70)
-      effect: 4.0.0-beta.70
+      '@effect/platform-node-shared': 4.0.0-beta.91(effect@4.0.0-beta.91)
+      effect: 4.0.0-beta.91
       ioredis: 5.10.1
       mime: 4.1.0
       undici: 8.3.0
@@ -3520,10 +3520,10 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@effect/vitest@4.0.0-beta.70(effect@4.0.0-beta.70)(vitest@4.1.9)':
+  '@effect/vitest@4.0.0-beta.91(effect@4.0.0-beta.91)(vitest@4.1.9)':
     dependencies:
-      effect: 4.0.0-beta.70
-      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      effect: 4.0.0-beta.91
+      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   '@emnapi/core@1.10.0':
     dependencies:
@@ -4333,7 +4333,7 @@ snapshots:
       '@vitest/mocker': 4.1.9(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       playwright: 1.60.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -4391,7 +4391,7 @@ snapshots:
       pngjs: 7.0.0
       sirv: 3.0.2
       tinyrainbow: 3.1.0
-      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       ws: 8.20.1
     transitivePeerDependencies:
       - bufferutil
@@ -4411,7 +4411,7 @@ snapshots:
       magicast: 0.5.3
       obug: 2.1.1
       tinyrainbow: 3.1.0
-      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
     transitivePeerDependencies:
       - supports-color
 
@@ -4591,7 +4591,7 @@ snapshots:
 
   dom-accessibility-api@0.5.16: {}
 
-  effect@4.0.0-beta.70:
+  effect@4.0.0-beta.91:
     dependencies:
       '@standard-schema/spec': 1.1.0
       fast-check: 4.8.0
@@ -4861,7 +4861,7 @@ snapshots:
 
   obug@2.1.1: {}
 
-  oxfmt@0.55.0(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)):
+  oxfmt@0.55.0(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)):
     dependencies:
       tinypool: 2.1.0
     optionalDependencies:
@@ -4884,7 +4884,7 @@ snapshots:
       '@oxfmt/binding-win32-arm64-msvc': 0.55.0
       '@oxfmt/binding-win32-ia32-msvc': 0.55.0
       '@oxfmt/binding-win32-x64-msvc': 0.55.0
-      vite-plus: 0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)
+      vite-plus: 0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)
 
   oxlint-tsgolint@0.23.0:
     optionalDependencies:
@@ -4895,7 +4895,7 @@ snapshots:
       '@oxlint-tsgolint/win32-arm64': 0.23.0
       '@oxlint-tsgolint/win32-x64': 0.23.0
 
-  oxlint@1.70.0(oxlint-tsgolint@0.23.0)(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)):
+  oxlint@1.70.0(oxlint-tsgolint@0.23.0)(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)):
     optionalDependencies:
       '@oxlint/binding-android-arm-eabi': 1.70.0
       '@oxlint/binding-android-arm64': 1.70.0
@@ -4917,7 +4917,7 @@ snapshots:
       '@oxlint/binding-win32-ia32-msvc': 1.70.0
       '@oxlint/binding-win32-x64-msvc': 1.70.0
       oxlint-tsgolint: 0.23.0
-      vite-plus: 0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)
+      vite-plus: 0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0)
 
   pathe@2.0.3: {}
 
@@ -5110,7 +5110,7 @@ snapshots:
 
   uuid@14.0.0: {}
 
-  vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0):
+  vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0):
     dependencies:
       '@oxc-project/types': 0.136.0
       '@oxlint/plugins': 1.68.0
@@ -5124,10 +5124,10 @@ snapshots:
       '@vitest/spy': 4.1.9
       '@vitest/utils': 4.1.9
       '@voidzero-dev/vite-plus-core': 0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)
-      oxfmt: 0.55.0(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0))
-      oxlint: 1.70.0(oxlint-tsgolint@0.23.0)(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0))
+      oxfmt: 0.55.0(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0))
+      oxlint: 1.70.0(oxlint-tsgolint@0.23.0)(vite-plus@0.2.1(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-istanbul@4.1.9)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(yaml@2.9.0))
       oxlint-tsgolint: 0.23.0
-      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest: 4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
     optionalDependencies:
       '@vitest/browser-playwright': 4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9)
       '@voidzero-dev/vite-plus-darwin-arm64': 0.2.1
@@ -5198,36 +5198,6 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.15
       '@types/react-dom': 19.2.3(@types/react@19.2.15)
-
-  vitest@4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9))(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9(vitest@4.1.9))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)):
-    dependencies:
-      '@vitest/expect': 4.1.9
-      '@vitest/mocker': 4.1.9(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
-      '@vitest/pretty-format': 4.1.9
-      '@vitest/runner': 4.1.9
-      '@vitest/snapshot': 4.1.9
-      '@vitest/spy': 4.1.9
-      '@vitest/utils': 4.1.9
-      es-module-lexer: 2.1.0
-      expect-type: 1.4.0
-      magic-string: 0.30.21
-      obug: 2.1.1
-      pathe: 2.0.3
-      picomatch: 4.0.4
-      std-env: 4.1.0
-      tinybench: 2.9.0
-      tinyexec: 1.1.2
-      tinyglobby: 0.2.16
-      tinyrainbow: 3.1.0
-      vite: 8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
-      why-is-node-running: 2.3.0
-    optionalDependencies:
-      '@types/node': 25.9.1
-      '@vitest/browser-playwright': 4.1.9(playwright@1.60.0)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9)
-      '@vitest/browser-preview': 4.1.9(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9)
-      '@vitest/coverage-istanbul': 4.1.9(vitest@4.1.9)
-    transitivePeerDependencies:
-      - msw
 
   vitest@4.1.9(@types/node@25.9.1)(@vitest/browser-playwright@4.1.9)(@vitest/browser-preview@4.1.9)(@vitest/coverage-istanbul@4.1.9)(@voidzero-dev/vite-plus-core@0.2.1(@types/node@25.9.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(typescript@6.0.3)(yaml@2.9.0)):
     dependencies:

@@ -33,7 +33,7 @@ export class TopicStore {
 
   constructor(
     readonly topic: string,
-    schema: Schema.Decoder<object>,
+    schema: Schema.Codec<object, unknown, never, unknown>,
     keyField: string,
     onCommit: () => void,
   ) {

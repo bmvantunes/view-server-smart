@@ -60,6 +60,7 @@ import {
   type LiveSubscription,
   type LiveTransportAdapter,
   type RawQuery,
+  type RowSchema,
   type SnapshotEvent,
   type StatusEvent,
   type TopicRuntimeHealth,
@@ -143,8 +144,8 @@ class InvalidAmbiguousJsonSuspendedRecordKeyClassPosition extends Schema.Class<I
 )({
   id: Schema.String,
   suspendedRecord: Schema.Record(
-    Schema.suspend(() => Schema.String),
-    Schema.BigInt,
+    Schema.String,
+    Schema.suspend(() => Schema.BigInt),
   ),
 }) {}
 
@@ -379,6 +380,21 @@ const AmbiguousJsonRepeatedRecordKeyPosition = Schema.Struct({
   ),
 });
 
+const AmbiguousJsonTransformedRecordKey = Schema.String.pipe(
+  Schema.decodeTo(Schema.String, {
+    decode: SchemaGetter.transform((value) => value.trim()),
+    encode: SchemaGetter.transform((value) => value),
+  }),
+);
+
+const AmbiguousJsonTransformedRecordKeyPosition = Schema.Struct({
+  id: Schema.String,
+  amountsByTransformedAccount: Schema.Record(
+    AmbiguousJsonTransformedRecordKey,
+    Schema.BigIntFromString,
+  ),
+});
+
 const AmbiguousJsonDeclaredQuantity = Schema.declare<
   typeof Schema.BigIntFromString.Type,
   typeof Schema.BigIntFromString.Encoded
@@ -578,8 +594,10 @@ const AmbiguousJsonAnnotatedDurationPosition = Schema.Struct({
 
 const AmbiguousJsonErrorObjectsPosition = Schema.Struct({
   id: Schema.String,
-  error: Schema.Error.annotate({ title: "error" }),
-  errorWithStack: Schema.ErrorWithStack,
+  error: Schema.Error().annotate({ title: "error" }),
+  errorWithStack: Schema.Error({ includeStack: true }),
+  errorWithoutCause: Schema.Error({ excludeCause: true }),
+  errorWithStackWithoutCause: Schema.Error({ includeStack: true, excludeCause: true }),
   pattern: Schema.RegExp,
 });
 
@@ -657,11 +675,6 @@ const InvalidAmbiguousJsonEncodedArrayInputPosition = Schema.Struct({
   encodedArrayInput: AmbiguousJsonEncodedArrayInputPosition,
 });
 
-const InvalidAmbiguousJsonSymbolRecordPosition = Schema.Struct({
-  id: Schema.String,
-  amountsBySymbolAccount: Schema.Record(Schema.Symbol, Schema.BigInt),
-});
-
 const InvalidAmbiguousJsonNestedPosition = Schema.Struct({
   id: Schema.String,
   nested: AmbiguousJsonNestedPosition,
@@ -722,8 +735,8 @@ const InvalidAmbiguousJsonDeclaredRecordPosition = Schema.Struct({
 });
 
 const InvalidAmbiguousJsonDeclaredSuspendedRecordKeyEncoded = Schema.Record(
-  Schema.suspend(() => Schema.String),
-  Schema.BigInt,
+  Schema.String,
+  Schema.suspend(() => Schema.BigIntFromString),
 );
 
 const InvalidAmbiguousJsonDeclaredSuspendedRecordKey = Schema.declare<
@@ -768,8 +781,8 @@ const InvalidAmbiguousJsonDeclaredSuspendedRecordKeyTargetPosition = Schema.Stru
 
 const InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyEncoded = Schema.Struct({
   nested: Schema.Record(
-    Schema.suspend(() => Schema.String),
-    Schema.BigInt,
+    Schema.String,
+    Schema.suspend(() => Schema.BigIntFromString),
   ),
 });
 
@@ -794,8 +807,8 @@ const InvalidAmbiguousJsonDeclaredNestedSuspendedRecordKeyPosition = Schema.Stru
 });
 
 const InvalidAmbiguousJsonDeclaredPartialRecordKeyEncoded = Schema.Record(
-  Schema.Union([Schema.Literal("fixed"), Schema.suspend(() => Schema.String)]),
-  Schema.BigInt,
+  Schema.String,
+  Schema.suspend(() => Schema.BigIntFromString),
 );
 
 const InvalidAmbiguousJsonDeclaredPartialRecordKey = Schema.declare<
@@ -819,8 +832,8 @@ const InvalidAmbiguousJsonDeclaredPartialRecordKeyPosition = Schema.Struct({
 });
 
 const InvalidAmbiguousJsonDeclaredSpoofedTypeConstructorEncoded = Schema.Record(
-  Schema.Union([Schema.Literal("fixed"), Schema.suspend(() => Schema.String)]),
-  Schema.BigInt,
+  Schema.String,
+  Schema.suspend(() => Schema.BigIntFromString),
 );
 
 const InvalidAmbiguousJsonDeclaredSpoofedTypeConstructor = Schema.declare<
@@ -1020,8 +1033,8 @@ const InvalidAmbiguousJsonAnnotatedReadonlyMapToCodecOverridePosition = Schema.S
 });
 
 const InvalidAmbiguousJsonDeclaredToCodecRecordEncoded = Schema.Record(
-  Schema.Union([Schema.Literal("fixed"), Schema.suspend(() => Schema.String)]),
-  Schema.BigInt,
+  Schema.String,
+  Schema.suspend(() => Schema.BigIntFromString),
 );
 
 const InvalidAmbiguousJsonDeclaredToCodecRecord = Schema.declare<
@@ -1289,21 +1302,20 @@ const UnsupportedAmbiguousJsonDeclaredAnyPosition = Schema.Struct({
   declaredAny: UnsupportedAmbiguousJsonDeclaredAny,
 });
 
-const InvalidAmbiguousJsonDeclaredRecordKey = Schema.declare<PropertyKey>(
-  (value): value is PropertyKey =>
-    typeof value === "string" || typeof value === "number" || typeof value === "symbol",
+const InvalidAmbiguousJsonDeclaredRecordValue = Schema.declare<bigint>(
+  (value): value is bigint => typeof value === "bigint",
 );
 
-const InvalidAmbiguousJsonDeclaredRecordKeyPosition = Schema.Struct({
+const InvalidAmbiguousJsonDeclaredRecordValuePosition = Schema.Struct({
   id: Schema.String,
-  declaredRecordKey: Schema.Record(InvalidAmbiguousJsonDeclaredRecordKey, Schema.BigInt),
+  declaredRecordValue: Schema.Record(Schema.String, InvalidAmbiguousJsonDeclaredRecordValue),
 });
 
-const InvalidAmbiguousJsonSuspendedStructDeclaredRecordKeyPosition = Schema.Struct({
+const InvalidAmbiguousJsonSuspendedStructDeclaredRecordValuePosition = Schema.Struct({
   id: Schema.String,
   wrapper: Schema.suspend(() =>
     Schema.Struct({
-      declaredRecordKey: Schema.Record(InvalidAmbiguousJsonDeclaredRecordKey, Schema.BigInt),
+      declaredRecordValue: Schema.Record(Schema.String, InvalidAmbiguousJsonDeclaredRecordValue),
     }),
   ),
 });
@@ -1314,8 +1326,8 @@ const InvalidAmbiguousJsonSuspendedRecordPosition = Schema.Struct({
 });
 
 const InvalidAmbiguousJsonSuspendedStringRecordKey = Schema.Record(
-  Schema.suspend(() => Schema.String),
-  Schema.BigInt,
+  Schema.String,
+  Schema.suspend(() => Schema.BigInt),
 );
 
 class AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition extends Schema.Class<AmbiguousJsonDecodedOnlyBadRecordKeyClassPosition>(
@@ -1373,11 +1385,6 @@ const AmbiguousJsonDecodedSideSuspendedRecordKeyPosition = Schema.Struct({
   ),
 });
 
-const InvalidAmbiguousJsonSuspendedStringRecordKeyPosition = Schema.Struct({
-  id: Schema.String,
-  suspendedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey,
-});
-
 const InvalidAmbiguousJsonDeclaredClassTarget = Schema.declare<
   typeof AmbiguousJsonClassPosition.Type,
   typeof AmbiguousJsonClassPosition.Encoded
@@ -1412,7 +1419,10 @@ const InvalidAmbiguousJsonDeclaredStringOnlyClassTargetPosition = Schema.Struct(
 
 const InvalidAmbiguousJsonCustomJsonCodecClassJson = Schema.Struct({
   id: Schema.String,
-  suspendedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey,
+  suspendedRecord: Schema.Record(
+    Schema.String,
+    Schema.suspend(() => Schema.String),
+  ),
 });
 
 class InvalidAmbiguousJsonCustomJsonCodecClassPosition extends Schema.Class<InvalidAmbiguousJsonCustomJsonCodecClassPosition>(
@@ -1430,197 +1440,12 @@ class InvalidAmbiguousJsonCustomJsonCodecClassPosition extends Schema.Class<Inva
         encode: SchemaGetter.transform(() => ({
           id: "encoded",
           suspendedRecord: {
-            account1: 1n,
+            account1: "1",
           },
         })),
       }),
   },
 ) {}
-
-const InvalidAmbiguousJsonSuspendedStructStringRecordKeyPosition = Schema.Struct({
-  id: Schema.String,
-  wrapper: Schema.suspend(() =>
-    Schema.Struct({
-      suspendedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey,
-    }),
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedLiteralRecordKeyPosition = Schema.Struct({
-  id: Schema.String,
-  suspendedRecord: Schema.Record(
-    Schema.suspend(() => Schema.Literal(1)),
-    Schema.BigInt,
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyArrayPosition = Schema.Struct({
-  id: Schema.String,
-  suspendedRecords: Schema.Array(InvalidAmbiguousJsonSuspendedStringRecordKey),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyUnionPosition = Schema.Struct({
-  id: Schema.String,
-  suspendedRecordOrNote: Schema.Union([
-    InvalidAmbiguousJsonSuspendedStringRecordKey,
-    Schema.String,
-  ]),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyTaggedUnionPosition = Schema.Struct({
-  id: Schema.String,
-  tagged: Schema.TaggedUnion({
-    bad: {
-      record: InvalidAmbiguousJsonSuspendedStringRecordKey,
-    },
-    ok: {
-      note: Schema.String,
-    },
-  }),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyTransformPosition = Schema.Struct({
-  id: Schema.String,
-  transformedRecord: InvalidAmbiguousJsonSuspendedStringRecordKey.pipe(
-    Schema.decodeTo(Schema.String, {
-      decode: SchemaGetter.transform(() => "decoded"),
-      encode: SchemaGetter.transform(() => ({})),
-    }),
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyDeclarationTransformPosition = Schema.Struct({
-  id: Schema.String,
-  transformedDuration: Schema.suspend(() =>
-    InvalidAmbiguousJsonSuspendedStringRecordKey.pipe(
-      Schema.decodeTo(Schema.Duration, {
-        decode: SchemaGetter.transform(() => Duration.millis(0)),
-        encode: SchemaGetter.transform(() => ({ account1: 1n })),
-      }),
-    ),
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey = Schema.suspend(
-  () => Schema.String,
-).pipe(
-  Schema.decodeTo(Schema.String, {
-    decode: SchemaGetter.transform((value) => value),
-    encode: SchemaGetter.transform((value) => value),
-  }),
-);
-
-const InvalidAmbiguousJsonSuspendedRecordKeySourceTransformPosition = Schema.Struct({
-  id: Schema.String,
-  transformedRecord: Schema.Record(
-    InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey,
-    Schema.BigInt,
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformKey = Schema.String.pipe(
-  Schema.decodeTo(
-    Schema.suspend(() => Schema.String),
-    {
-      decode: SchemaGetter.transform((value) => value),
-      encode: SchemaGetter.transform((value) => value),
-    },
-  ),
-);
-
-const InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformPosition = Schema.Struct({
-  id: Schema.String,
-  transformedRecord: Schema.Record(
-    InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformKey,
-    Schema.BigInt,
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformKey = Schema.String.pipe(
-  Schema.decodeTo(
-    Schema.Union([
-      Schema.Literal("fixed"),
-      InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey,
-    ]),
-    {
-      decode: SchemaGetter.transform((value) => value),
-      encode: SchemaGetter.transform((value) => value),
-    },
-  ),
-);
-
-const InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformPosition = Schema.Struct({
-  id: Schema.String,
-  transformedRecord: Schema.Record(
-    InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformKey,
-    Schema.BigInt,
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeySourceTransformUnionPosition = Schema.Struct({
-  id: Schema.String,
-  transformedRecord: Schema.Record(
-    Schema.Union([
-      Schema.Literal("fixed"),
-      InvalidAmbiguousJsonSuspendedRecordKeySourceTransformKey,
-    ]),
-    Schema.BigInt,
-  ),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyTuplePosition = Schema.Struct({
-  id: Schema.String,
-  suspendedTuple: Schema.Tuple([InvalidAmbiguousJsonSuspendedStringRecordKey]),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyTupleRestPosition = Schema.Struct({
-  id: Schema.String,
-  suspendedTupleRest: Schema.TupleWithRest(Schema.Tuple([Schema.String]), [
-    InvalidAmbiguousJsonSuspendedStringRecordKey,
-  ]),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyStructRestPosition = Schema.Struct({
-  id: Schema.String,
-  suspendedStructRest: Schema.StructWithRest(Schema.Struct({ fixed: Schema.String }), [
-    InvalidAmbiguousJsonSuspendedStringRecordKey,
-  ]),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyResultPosition = Schema.Struct({
-  id: Schema.String,
-  result: Schema.Result(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyReadonlyMapPosition = Schema.Struct({
-  id: Schema.String,
-  map: Schema.ReadonlyMap(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.BigInt),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyHashMapPosition = Schema.Struct({
-  id: Schema.String,
-  map: Schema.HashMap(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.BigInt),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyCausePosition = Schema.Struct({
-  id: Schema.String,
-  cause: Schema.Cause(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonErrorPosition = Schema.Struct({
-  id: Schema.String,
-  reason: Schema.CauseReason(InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonDefectPosition = Schema.Struct({
-  id: Schema.String,
-  reason: Schema.CauseReason(Schema.String, InvalidAmbiguousJsonSuspendedStringRecordKey),
-});
-
-const InvalidAmbiguousJsonSuspendedRecordKeyExitPosition = Schema.Struct({
-  id: Schema.String,
-  exit: Schema.Exit(Schema.String, InvalidAmbiguousJsonSuspendedStringRecordKey, Schema.String),
-});
 
 const InvalidAmbiguousJsonOneOfPosition = Schema.Struct({
   id: Schema.String,
@@ -1686,6 +1511,13 @@ const base64FromBytes = (bytes: Uint8Array) =>
   globalThis.btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
 
 const textEncoder = new TextEncoder();
+
+const kafkaJsonBytes = Effect.fn("ViewServerConfig.test.kafka.json.bytes")(function* <
+  const SourceSchema extends RowSchema,
+>(schema: SourceSchema, value: SourceSchema["Type"]) {
+  const encoded = yield* Schema.encodeUnknownEffect(Schema.toCodecJson(schema))(value);
+  return textEncoder.encode(JSON.stringify(encoded));
+});
 
 const kafkaTestMetadata = <const Region extends "usa" | "london">(
   region: Region,
@@ -2874,6 +2706,18 @@ describe("defineViewServerConfig", () => {
       "DateTimeZoned",
     );
     expect(viewServerUnsupportedRuntimeFieldDomain(Schema.Duration)).toBe("Duration");
+    expect(viewServerUnsupportedRuntimeFieldDomain(Schema.Error())).toBe("Error");
+    expect(viewServerUnsupportedRuntimeFieldDomain(Schema.Error({ includeStack: true }))).toBe(
+      "ErrorWithStack",
+    );
+    expect(viewServerUnsupportedRuntimeFieldDomain(Schema.Error({ excludeCause: true }))).toBe(
+      "ErrorWithoutCause",
+    );
+    expect(
+      viewServerUnsupportedRuntimeFieldDomain(
+        Schema.Error({ includeStack: true, excludeCause: true }),
+      ),
+    ).toBe("ErrorWithStackWithoutCause");
     expect(viewServerUnsupportedRuntimeFieldDomain(Schema.Symbol)).toBe("Symbol");
     expect(viewServerUnsupportedRuntimeFieldDomain(Schema.TimeZone)).toBe("TimeZone");
     expect(viewServerUnsupportedRuntimeFieldDomain(Schema.TimeZoneFromString)).toBe("TimeZone");
@@ -3325,16 +3169,14 @@ describe("defineViewServerConfig", () => {
       ).toBe("order-key");
       expect(
         yield* decodeKafkaCodec(jsonCodec, {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "order-1",
-              customerId: "customer-1",
-              status: "open",
-              price: 42,
-              region: "usa",
-              updatedAt: 1,
-            }),
-          ),
+          bytes: yield* kafkaJsonBytes(Order, {
+            id: "order-1",
+            customerId: "customer-1",
+            status: "open",
+            price: 42,
+            region: "usa",
+            updatedAt: 1,
+          }),
           metadata: kafkaTestMetadata("usa"),
         }),
       ).toStrictEqual({
@@ -3346,19 +3188,17 @@ describe("defineViewServerConfig", () => {
         updatedAt: 1,
       });
       const decodedJsonPosition = yield* decodeKafkaCodec(jsonPositionCodec, {
-        bytes: textEncoder.encode(
-          JSON.stringify({
-            id: "position-1",
-            accountId: "account-1",
-            symbol: "AAPL",
-            active: true,
-            quantity: "9007199254740993",
-            optionalQuantity: "9007199254740995",
-            price: "1234567890.123456789",
-            notional: 10,
-            optionalNotional: 20,
-          }),
-        ),
+        bytes: yield* kafkaJsonBytes(Position, {
+          id: "position-1",
+          accountId: "account-1",
+          symbol: "AAPL",
+          active: true,
+          quantity: 9007199254740993n,
+          optionalQuantity: 9007199254740995n,
+          price: BigDecimal.fromStringUnsafe("1234567890.123456789"),
+          notional: 10,
+          optionalNotional: 20,
+        }),
         metadata: kafkaTestMetadata("usa"),
       });
       expect(BigDecimal.isBigDecimal(decodedJsonPosition.price)).toBe(true);
@@ -3712,6 +3552,24 @@ describe("defineViewServerConfig", () => {
         },
       });
       expect(
+        yield* decodeKafkaCodec(kafka.json(AmbiguousJsonTransformedRecordKeyPosition), {
+          bytes: textEncoder.encode(
+            JSON.stringify({
+              id: "position-transformed-record-key",
+              amountsByTransformedAccount: {
+                " account1 ": "9007199254741025",
+              },
+            }),
+          ),
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        id: "position-transformed-record-key",
+        amountsByTransformedAccount: {
+          account1: 9007199254741025n,
+        },
+      });
+      expect(
         yield* decodeKafkaCodec(kafka.json(AmbiguousJsonDeclaredCodecPosition), {
           bytes: textEncoder.encode(
             JSON.stringify({
@@ -3842,6 +3700,15 @@ describe("defineViewServerConfig", () => {
                 name: "RangeError",
                 stack: "RangeError: stacked error",
               },
+              errorWithoutCause: {
+                message: "cause-free error",
+                name: "TypeError",
+              },
+              errorWithStackWithoutCause: {
+                message: "stacked cause-free error",
+                name: "SyntaxError",
+                stack: "SyntaxError: stacked cause-free error",
+              },
               pattern: {
                 source: "orders-[0-9]+",
                 flags: "i",
@@ -3858,6 +3725,12 @@ describe("defineViewServerConfig", () => {
         errorWithStackMessage: decodedErrorObjectsPosition.errorWithStack.message,
         errorWithStackName: decodedErrorObjectsPosition.errorWithStack.name,
         errorWithStack: decodedErrorObjectsPosition.errorWithStack.stack,
+        errorWithoutCauseMessage: decodedErrorObjectsPosition.errorWithoutCause.message,
+        errorWithoutCauseName: decodedErrorObjectsPosition.errorWithoutCause.name,
+        errorWithStackWithoutCauseMessage:
+          decodedErrorObjectsPosition.errorWithStackWithoutCause.message,
+        errorWithStackWithoutCauseName: decodedErrorObjectsPosition.errorWithStackWithoutCause.name,
+        errorWithStackWithoutCause: decodedErrorObjectsPosition.errorWithStackWithoutCause.stack,
         patternSource: decodedErrorObjectsPosition.pattern.source,
         patternFlags: decodedErrorObjectsPosition.pattern.flags,
       }).toStrictEqual({
@@ -3867,6 +3740,11 @@ describe("defineViewServerConfig", () => {
         errorWithStackMessage: "stacked error",
         errorWithStackName: "RangeError",
         errorWithStack: "RangeError: stacked error",
+        errorWithoutCauseMessage: "cause-free error",
+        errorWithoutCauseName: "TypeError",
+        errorWithStackWithoutCauseMessage: "stacked cause-free error",
+        errorWithStackWithoutCauseName: "SyntaxError",
+        errorWithStackWithoutCause: "SyntaxError: stacked cause-free error",
         patternSource: "orders-[0-9]+",
         patternFlags: "i",
       });
@@ -4255,7 +4133,7 @@ describe("defineViewServerConfig", () => {
           metadata: kafkaTestMetadata("usa"),
         },
       ).pipe(Effect.flip);
-      const validOpaqueDeclarationMalformedJsonError = yield* decodeKafkaCodec(
+      const invalidOpaqueDeclarationMalformedJsonError = yield* decodeKafkaCodec(
         kafka.json(AmbiguousJsonDeclaredOpaqueDeclarationPosition),
         {
           bytes: textEncoder.encode("{"),
@@ -4318,20 +4196,6 @@ describe("defineViewServerConfig", () => {
             JSON.stringify({
               id: "position-encoded-array-input",
               encodedArrayInput: [123],
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        }),
-      );
-      const invalidSymbolRecordJsonSchemaFailure = yield* Effect.exit(
-        decodeKafkaCodec(kafka.json(InvalidAmbiguousJsonSymbolRecordPosition), {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-symbol-record",
-              amountsBySymbolAccount: {
-                "1": "not-a-symbol-key",
-                "Symbol(account1)": "9007199254741021",
-              },
             }),
           ),
           metadata: kafkaTestMetadata("usa"),
@@ -4696,15 +4560,15 @@ describe("defineViewServerConfig", () => {
           metadata: kafkaTestMetadata("usa"),
         },
       ).pipe(Effect.flip);
-      const invalidDeclaredRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonDeclaredRecordKeyPosition),
+      const invalidDeclaredRecordValueMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonDeclaredRecordValuePosition),
         {
           bytes: textEncoder.encode("{"),
           metadata: kafkaTestMetadata("usa"),
         },
       ).pipe(Effect.flip);
-      const invalidSuspendedStructDeclaredRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedStructDeclaredRecordKeyPosition),
+      const invalidSuspendedStructDeclaredRecordValueMalformedJsonError = yield* decodeKafkaCodec(
+        kafka.json(InvalidAmbiguousJsonSuspendedStructDeclaredRecordValuePosition),
         {
           bytes: textEncoder.encode("{"),
           metadata: kafkaTestMetadata("usa"),
@@ -4754,244 +4618,6 @@ describe("defineViewServerConfig", () => {
       ).pipe(Effect.flip);
       const invalidCustomJsonCodecClassMalformedJsonError = yield* decodeKafkaCodec(
         kafka.json(InvalidAmbiguousJsonCustomJsonCodecClassPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedStringRecordKeyJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedStringRecordKeyPosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-string-key-record-error",
-              suspendedRecord: {
-                account1: "9007199254741029",
-              },
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedStructStringRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedStructStringRecordKeyPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedLiteralRecordKeyMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedLiteralRecordKeyPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyArrayJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyArrayPosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-record-key-array-error",
-              suspendedRecords: [
-                {
-                  account1: "9007199254741031",
-                },
-              ],
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyUnionJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyUnionPosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-record-key-union-error",
-              suspendedRecordOrNote: {
-                account1: "9007199254741033",
-              },
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyTaggedUnionMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTaggedUnionPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyTransformMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTransformPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyDeclarationTransformMalformedJsonError =
-        yield* decodeKafkaCodec(
-          kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyDeclarationTransformPosition),
-          {
-            bytes: textEncoder.encode("{"),
-            metadata: kafkaTestMetadata("usa"),
-          },
-        ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeySourceTransformMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeySourceTransformPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyDecodedTransformMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyDecodedTransformPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyNestedDecodedTransformMalformedJsonError =
-        yield* decodeKafkaCodec(
-          kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyNestedDecodedTransformPosition),
-          {
-            bytes: textEncoder.encode("{"),
-            metadata: kafkaTestMetadata("usa"),
-          },
-        ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeySourceTransformUnionMalformedJsonError =
-        yield* decodeKafkaCodec(
-          kafka.json(InvalidAmbiguousJsonSuspendedRecordKeySourceTransformUnionPosition),
-          {
-            bytes: textEncoder.encode("{"),
-            metadata: kafkaTestMetadata("usa"),
-          },
-        ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyTupleJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTuplePosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-record-key-tuple-error",
-              suspendedTuple: [
-                {
-                  account1: "9007199254741035",
-                },
-              ],
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyTupleRestJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyTupleRestPosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-record-key-tuple-rest-error",
-              suspendedTupleRest: [
-                "fixed",
-                {
-                  account1: "9007199254741037",
-                },
-              ],
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyStructRestMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyStructRestPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyResultJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyResultPosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-record-key-result-error",
-              result: {
-                _tag: "Success",
-                success: {
-                  account1: "9007199254741043",
-                },
-              },
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyResultMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyResultPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyReadonlyMapJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyReadonlyMapPosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-record-key-readonly-map-error",
-              map: [
-                [
-                  {
-                    account1: "9007199254741045",
-                  },
-                  "9007199254741047",
-                ],
-              ],
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyHashMapMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyHashMapPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyCauseMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyCausePosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyCauseReasonErrorJsonSchemaError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonErrorPosition),
-        {
-          bytes: textEncoder.encode(
-            JSON.stringify({
-              id: "position-suspended-record-key-cause-reason-error",
-              reason: {
-                _tag: "Fail",
-                error: {
-                  account1: "9007199254741049",
-                },
-              },
-            }),
-          ),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyCauseReasonDefectMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyCauseReasonDefectPosition),
-        {
-          bytes: textEncoder.encode("{"),
-          metadata: kafkaTestMetadata("usa"),
-        },
-      ).pipe(Effect.flip);
-      const invalidSuspendedRecordKeyExitMalformedJsonError = yield* decodeKafkaCodec(
-        kafka.json(InvalidAmbiguousJsonSuspendedRecordKeyExitPosition),
         {
           bytes: textEncoder.encode("{"),
           metadata: kafkaTestMetadata("usa"),
@@ -5104,8 +4730,8 @@ describe("defineViewServerConfig", () => {
       expect(validNestedDeclarationMalformedJsonError.message).toBe(
         "Failed to parse Kafka JSON payload",
       );
-      expect(validOpaqueDeclarationMalformedJsonError.message).toBe(
-        "Failed to parse Kafka JSON payload",
+      expect(invalidOpaqueDeclarationMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidSuspendedEmptyObjectJsonSchemaError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
@@ -5115,7 +4741,6 @@ describe("defineViewServerConfig", () => {
       expect(Exit.isFailure(invalidArrayJsonSchemaFailure)).toBe(true);
       expect(Exit.isFailure(invalidArrayTransformJsonSchemaFailure)).toBe(true);
       expect(Exit.isFailure(invalidEncodedArrayInputJsonSchemaFailure)).toBe(true);
-      expect(Exit.isFailure(invalidSymbolRecordJsonSchemaFailure)).toBe(true);
       expect(Exit.isFailure(invalidNestedJsonSchemaFailure)).toBe(true);
       expect(Exit.isFailure(invalidNestedShapeJsonSchemaFailure)).toBe(true);
       expect(Exit.isFailure(invalidTupleJsonSchemaFailure)).toBe(true);
@@ -5229,10 +4854,10 @@ describe("defineViewServerConfig", () => {
       expect(unsupportedDeclaredAnyMalformedJsonError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
       );
-      expect(invalidDeclaredRecordKeyMalformedJsonError.message).toBe(
+      expect(invalidDeclaredRecordValueMalformedJsonError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
       );
-      expect(invalidSuspendedStructDeclaredRecordKeyMalformedJsonError.message).toBe(
+      expect(invalidSuspendedStructDeclaredRecordValueMalformedJsonError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidSuspendedRecordJsonSchemaError.message).toBe(
@@ -5242,7 +4867,7 @@ describe("defineViewServerConfig", () => {
         "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidSuspendedRecordKeyClassMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
+        "Failed to parse Kafka JSON payload",
       );
       expect(invalidDeclaredClassTargetMalformedJsonError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
@@ -5251,75 +4876,6 @@ describe("defineViewServerConfig", () => {
         "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidCustomJsonCodecClassMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedStringRecordKeyJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedStructStringRecordKeyMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedLiteralRecordKeyMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyArrayJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyUnionJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyTaggedUnionMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyTransformMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyDeclarationTransformMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeySourceTransformMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyDecodedTransformMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyNestedDecodedTransformMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeySourceTransformUnionMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyTupleJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyTupleRestJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyStructRestMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyResultJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyResultMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyReadonlyMapJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyHashMapMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyCauseMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyCauseReasonErrorJsonSchemaError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyCauseReasonDefectMalformedJsonError.message).toBe(
-        "Kafka JSON schema is not JSON-compatible",
-      );
-      expect(invalidSuspendedRecordKeyExitMalformedJsonError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
       );
       expect(Exit.isFailure(invalidOneOfJsonSchemaFailure)).toBe(true);

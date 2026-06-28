@@ -16,7 +16,7 @@ export type PreparedTopicRow = {
 export type TopicRowPreparationContext = {
   readonly fieldNames: ReadonlySet<string>;
   readonly keyField: string;
-  readonly schema: Schema.Decoder<object>;
+  readonly schema: Schema.Codec<object, unknown, never, unknown>;
   readonly topic: string;
 };
 

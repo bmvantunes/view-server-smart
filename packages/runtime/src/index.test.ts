@@ -188,8 +188,11 @@ const JsonCodecTcpOrder = Schema.Struct({
   id: Schema.String,
   amount: Schema.BigDecimal,
   checkedOptionalMeta: Schema.optionalKey(JsonCodecTcpNested).check(Schema.isMaxProperties(0)),
+  checkedSuspendedEmptyMeta: Schema.optionalKey(
+    Schema.suspend(() => Schema.Struct({}).check(Schema.isMaxProperties(0))),
+  ),
   checkedSuspendedMeta: Schema.optionalKey(
-    Schema.suspend(() => JsonCodecTcpNested).check(Schema.isMaxProperties(0)),
+    Schema.suspend(() => JsonCodecTcpNested.check(Schema.isMaxProperties(0))),
   ),
   meta: JsonCodecTcpNested,
   nullableMeta: Schema.NullOr(JsonCodecTcpNested),
@@ -1423,6 +1426,7 @@ describe("@view-server/runtime", () => {
               encodedQuantity: "9001",
               runtimeAmount: "91.25",
             },
+            checkedSuspendedEmptyMeta: {},
             quantity: "9007199254740993",
             suspendedMeta: {
               encodedQuantity: "11001",

@@ -27,7 +27,7 @@ export type ViewServerRuntimeTopicDefinitions = TopicDefinitions &
   Record<
     string,
     {
-      readonly schema: RowSchema & Schema.Decoder<object>;
+      readonly schema: RowSchema & Schema.Codec<object, unknown, never, unknown>;
       readonly key: string;
     }
   >;

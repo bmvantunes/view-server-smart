@@ -65,7 +65,7 @@ type RuntimeLeasedFeedDefinition = {
 };
 
 type RuntimeTopicDefinition = {
-  readonly schema: RowSchema & Schema.Decoder<object>;
+  readonly schema: RowSchema & Schema.Codec<object, unknown, never, unknown>;
   readonly key: string;
 };
 
