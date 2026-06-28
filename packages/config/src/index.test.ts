@@ -4133,7 +4133,7 @@ describe("defineViewServerConfig", () => {
           metadata: kafkaTestMetadata("usa"),
         },
       ).pipe(Effect.flip);
-      const validOpaqueDeclarationMalformedJsonError = yield* decodeKafkaCodec(
+      const invalidOpaqueDeclarationMalformedJsonError = yield* decodeKafkaCodec(
         kafka.json(AmbiguousJsonDeclaredOpaqueDeclarationPosition),
         {
           bytes: textEncoder.encode("{"),
@@ -4730,8 +4730,8 @@ describe("defineViewServerConfig", () => {
       expect(validNestedDeclarationMalformedJsonError.message).toBe(
         "Failed to parse Kafka JSON payload",
       );
-      expect(validOpaqueDeclarationMalformedJsonError.message).toBe(
-        "Failed to parse Kafka JSON payload",
+      expect(invalidOpaqueDeclarationMalformedJsonError.message).toBe(
+        "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidSuspendedEmptyObjectJsonSchemaError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
@@ -4855,10 +4855,10 @@ describe("defineViewServerConfig", () => {
         "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidDeclaredRecordValueMalformedJsonError.message).toBe(
-        "Failed to parse Kafka JSON payload",
+        "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidSuspendedStructDeclaredRecordValueMalformedJsonError.message).toBe(
-        "Failed to parse Kafka JSON payload",
+        "Kafka JSON schema is not JSON-compatible",
       );
       expect(invalidSuspendedRecordJsonSchemaError.message).toBe(
         "Kafka JSON schema is not JSON-compatible",
