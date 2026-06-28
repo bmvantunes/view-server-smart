@@ -16,20 +16,20 @@ truth, not plan text that predates later implementation work.
 
 `plans/grpc.md` is implemented for the accepted gRPC scope.
 
-| Area                                            | Status                 | Evidence                                                                                                              |
-| ----------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Source contracts and type gates                 | Implemented            | `packages/config/src/grpc-contract.ts`, `packages/config/src/index.test.ts`, `packages/runtime/src/index.test-d.ts`   |
-| Runtime ownership validation                    | Implemented            | Runtime validation tests reject Kafka/gRPC and multi-feed ownership conflicts.                                        |
-| Materialized gRPC runtime                       | Implemented            | `packages/runtime/src/grpc-ingress.ts`, materialized runtime tests, ConnectRPC tests.                                 |
-| Leased gRPC runtime                             | Implemented            | `packages/runtime/src/grpc-lease-manager.ts`, leased runtime tests, ConnectRPC tests.                                 |
-| gRPC health/lifecycle                           | Implemented            | `packages/runtime/src/grpc-health.ts`, runtime health tests, `pnpm run grpc:gate`.                                    |
-| gRPC benchmark gates                            | Implemented            | `benchmarks/baselines/grpc-materialized.json`, `grpc-leased.json`, `grpc-leased-retained.json`, `pnpm run grpc:gate`. |
-| Public config migration to source constructors  | Deferred intentionally | Listed under `Deferred Decisions`; current source markers are accepted.                                               |
-| Session-scoped leased feeds and auth forwarding | Deferred intentionally | Runtime auth validates edge requests; gRPC feeds still use system-scoped shared feed identity.                        |
-| Generic non-gRPC stream-source API              | Deferred intentionally | Plan explicitly keeps ConnectRPC-specific public API.                                                                 |
-| Multi-source topics                             | Deferred intentionally | Requires a separate ordering/dedupe/restart contract.                                                                 |
-| Custom live-event transport                     | Deferred intentionally | Browser transport remains Effect RPC WebSocket + NDJSON.                                                              |
-| WAL/checkpointing for gRPC materialized feeds   | Deferred intentionally | Same recovery policy as the in-memory runtime.                                                                        |
+| Area                                            | Status                 | Evidence                                                                                                               |
+| ----------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Source contracts and type gates                 | Implemented            | `packages/config/src/grpc-contract.ts`, `packages/config/src/index.test.ts`, `packages/runtime/src/index.test-d.ts`    |
+| Runtime ownership validation                    | Implemented            | Runtime validation tests reject Kafka/gRPC and multi-feed ownership conflicts.                                         |
+| Materialized gRPC runtime                       | Implemented            | `packages/runtime/src/grpc-ingress.ts`, materialized runtime tests, ConnectRPC tests.                                  |
+| Leased gRPC runtime                             | Implemented            | `packages/runtime/src/grpc-lease-manager.ts`, leased runtime tests, ConnectRPC tests.                                  |
+| gRPC health/lifecycle                           | Implemented            | `packages/runtime/src/grpc-health.ts`, runtime health tests, `vp run -w grpc:gate`.                                    |
+| gRPC benchmark gates                            | Implemented            | `benchmarks/baselines/grpc-materialized.json`, `grpc-leased.json`, `grpc-leased-retained.json`, `vp run -w grpc:gate`. |
+| Public config migration to source constructors  | Deferred intentionally | Listed under `Deferred Decisions`; current source markers are accepted.                                                |
+| Session-scoped leased feeds and auth forwarding | Deferred intentionally | Runtime auth validates edge requests; gRPC feeds still use system-scoped shared feed identity.                         |
+| Generic non-gRPC stream-source API              | Deferred intentionally | Plan explicitly keeps ConnectRPC-specific public API.                                                                  |
+| Multi-source topics                             | Deferred intentionally | Requires a separate ordering/dedupe/restart contract.                                                                  |
+| Custom live-event transport                     | Deferred intentionally | Browser transport remains Effect RPC WebSocket + NDJSON.                                                               |
+| WAL/checkpointing for gRPC materialized feeds   | Deferred intentionally | Same recovery policy as the in-memory runtime.                                                                         |
 
 ## Column Live View Engine Plan
 
@@ -42,7 +42,7 @@ because it includes explicit future scope.
 | Area                                                          | Status      | Evidence                                                                                                                                                                                                                                                                       |
 | ------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Own in-memory live engine, no external analytical DB hot path | Implemented | `packages/column-live-view-engine`, `packages/runtime-core`; no chDB/Perspective runtime dependency.                                                                                                                                                                           |
-| Explicit package seams                                        | Implemented | `packages/config`, `column-live-view-engine`, `runtime-core`, `client`, `protocol`, `in-memory`, `server`, `runtime`, `react`; `pnpm run check:package-exports`; `pnpm run check:internal-seams`.                                                                              |
+| Explicit package seams                                        | Implemented | `packages/config`, `column-live-view-engine`, `runtime-core`, `client`, `protocol`, `in-memory`, `server`, `runtime`, `react`; `vp run -w check:package-exports`; `vp run -w check:internal-seams`.                                                                            |
 | Typed public config/query API                                 | Implemented | Config type tests cover topic schemas, query select/where/order/group/aggregates, Kafka, and gRPC.                                                                                                                                                                             |
 | Runtime URL in provider, not config                           | Implemented | React provider accepts runtime URL/client at provider boundary; browser bundles do not import runtime config.                                                                                                                                                                  |
 | In-memory browser/test provider                               | Implemented | `@view-server/react/testing` and `@view-server/in-memory`; browser tests and in-memory benchmarks use real runtime-core/engine.                                                                                                                                                |
@@ -55,7 +55,7 @@ because it includes explicit future scope.
 | Grouped queries and aggregates                                | Implemented | Grouped query tests, grouped aggregate/write benchmarks and gates.                                                                                                                                                                                                             |
 | Backpressure at subscription/transport boundary               | Implemented | `BackpressureExceeded` typed status, queue-capacity tests, remote/client/protocol tests.                                                                                                                                                                                       |
 | Benchmark baseline automation                                 | Implemented | Smoke, raw read/write, active sharing, grouped, WebSocket, Kafka, and gRPC baseline scripts.                                                                                                                                                                                   |
-| Pre-gRPC readiness gate                                       | Implemented | `pnpm run pre-grpc:gate`.                                                                                                                                                                                                                                                      |
+| Pre-gRPC readiness gate                                       | Implemented | `vp run -w pre-grpc:gate`.                                                                                                                                                                                                                                                     |
 | TCP publish API/runtime ingress                               | Implemented | `packages/runtime/src/tcp-publish-ingress.ts`, runtime TCP tests for publish/patch/delete/publishMany, schema decode errors, bounded line/queue backpressure, source-owned topic rejection, startup failure, and shutdown cleanup.                                             |
 | Runtime-core span/observability assertions                    | Implemented | Runtime-core tracing test captures client publish -> engine publish -> topic-store mutation/fanout -> live-subscription spans with real span-id parent links and topic/query attributes.                                                                                       |
 | Minimal example app                                           | Implemented | `apps/example` defines typed config, production provider URL boundary, in-memory testing provider path, browser e2e test, type tests, and workspace build/check.                                                                                                               |
@@ -89,7 +89,7 @@ These are in the plan, but should remain future work unless explicitly promoted.
 
 ## Recommended Implementation Order
 
-1. Run `pnpm run ready`, `pnpm run pre-grpc:gate`, and `pnpm run grpc:gate` to prove the documented current scope still passes.
+1. Run `vp run -w ready`, `vp run -w pre-grpc:gate`, and `vp run -w grpc:gate` to prove the documented current scope still passes.
 2. Do not reopen completed gRPC materialized/leased scope unless new tests reveal a real correctness gap.
 
 After that, next work should come from a new explicit product decision or from promoting one intentionally deferred item.

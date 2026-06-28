@@ -306,7 +306,7 @@ describe("benchmark baseline runner", () => {
       groupedOrderNeutralUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=grouped-order-neutral --update-baseline",
       grpcGate:
-        "pnpm run ready && pnpm run bench:baseline:grpc-materialized && pnpm run bench:baseline:grpc-leased && pnpm run bench:baseline:grpc-leased-retained",
+        "vp run -w ready && vp run -w bench:baseline:grpc-materialized && vp run -w bench:baseline:grpc-leased && vp run -w bench:baseline:grpc-leased-retained",
       grpcLeased: "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased",
       grpcLeasedRetained: "node scripts/run-benchmark-baseline.mjs --profile=grpc-leased-retained",
       grpcLeasedRetainedRepeat:
@@ -326,7 +326,7 @@ describe("benchmark baseline runner", () => {
       kafkaSustainedFirehoseUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=kafka-sustained-firehose --update-baseline",
       preGrpcGate:
-        "pnpm run ready && pnpm run bench:baseline:smoke && pnpm run bench:baseline:raw-read-write && pnpm run bench:baseline:active-query-sharing && pnpm run bench:baseline:grouped-admission && pnpm run bench:baseline:grouped-order-neutral && pnpm run bench:baseline:websocket-firehose && pnpm run bench:baseline:kafka-ingest && pnpm run bench:baseline:kafka-sustained-firehose",
+        "vp run -w ready && vp run -w bench:baseline:smoke && vp run -w bench:baseline:raw-read-write && vp run -w bench:baseline:active-query-sharing && vp run -w bench:baseline:grouped-admission && vp run -w bench:baseline:grouped-order-neutral && vp run -w bench:baseline:websocket-firehose && vp run -w bench:baseline:kafka-ingest && vp run -w bench:baseline:kafka-sustained-firehose",
       rawReadWrite: "node scripts/run-benchmark-baseline.mjs --profile=raw-read-write",
       rawReadWriteUpdate:
         "node scripts/run-benchmark-baseline.mjs --profile=raw-read-write --update-baseline",
@@ -343,7 +343,7 @@ describe("benchmark baseline runner", () => {
     const preGrpcGateSteps = scripts["pre-grpc:gate"].split(" && ");
     const preGrpcBenchmarkGates = preGrpcGateSteps
       .slice(1)
-      .map((step: string) => step.replace("pnpm run ", ""));
+      .map((step: string) => step.replace("vp run -w ", ""));
     const strictPreGrpcCompareBenchmarkGates = Object.entries(scripts)
       .filter(([name, command]) =>
         name.startsWith("bench:baseline:") &&
@@ -357,15 +357,15 @@ describe("benchmark baseline runner", () => {
       .sort();
 
     expect(preGrpcGateSteps).toStrictEqual([
-      "pnpm run ready",
-      "pnpm run bench:baseline:smoke",
-      "pnpm run bench:baseline:raw-read-write",
-      "pnpm run bench:baseline:active-query-sharing",
-      "pnpm run bench:baseline:grouped-admission",
-      "pnpm run bench:baseline:grouped-order-neutral",
-      "pnpm run bench:baseline:websocket-firehose",
-      "pnpm run bench:baseline:kafka-ingest",
-      "pnpm run bench:baseline:kafka-sustained-firehose",
+      "vp run -w ready",
+      "vp run -w bench:baseline:smoke",
+      "vp run -w bench:baseline:raw-read-write",
+      "vp run -w bench:baseline:active-query-sharing",
+      "vp run -w bench:baseline:grouped-admission",
+      "vp run -w bench:baseline:grouped-order-neutral",
+      "vp run -w bench:baseline:websocket-firehose",
+      "vp run -w bench:baseline:kafka-ingest",
+      "vp run -w bench:baseline:kafka-sustained-firehose",
     ]);
     expect(preGrpcBenchmarkGates.toSorted()).toStrictEqual(strictPreGrpcCompareBenchmarkGates);
     expect(preGrpcBenchmarkGates).not.toContain("bench:baseline:release");
@@ -378,10 +378,10 @@ describe("benchmark baseline runner", () => {
     const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
 
     expect(scripts["grpc:gate"].split(" && ")).toStrictEqual([
-      "pnpm run ready",
-      "pnpm run bench:baseline:grpc-materialized",
-      "pnpm run bench:baseline:grpc-leased",
-      "pnpm run bench:baseline:grpc-leased-retained",
+      "vp run -w ready",
+      "vp run -w bench:baseline:grpc-materialized",
+      "vp run -w bench:baseline:grpc-leased",
+      "vp run -w bench:baseline:grpc-leased-retained",
     ]);
   });
 
@@ -389,11 +389,11 @@ describe("benchmark baseline runner", () => {
     const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
 
     expect(scripts["release-candidate:capacity"].split(" && ")).toStrictEqual([
-      "pnpm run examples:test",
-      "pnpm run examples:build",
-      "pnpm run pre-grpc:gate",
-      "pnpm run grpc:gate",
-      "pnpm run bench:baseline:release",
+      "vp run -w examples:test",
+      "vp run -w examples:build",
+      "vp run -w pre-grpc:gate",
+      "vp run -w grpc:gate",
+      "vp run -w bench:baseline:release",
     ]);
   });
 

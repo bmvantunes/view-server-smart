@@ -8,26 +8,26 @@ ad-hoc benchmark runners for engine/runtime performance work.
 Root scripts provide benchmark profiles and regression comparison:
 
 ```sh
-pnpm run bench:baseline:smoke
-pnpm run bench:baseline:raw-read-write
-pnpm run bench:baseline:active-query-sharing
-pnpm run bench:baseline:grouped-admission
-pnpm run bench:baseline:grouped-order-neutral
-pnpm run bench:baseline:websocket-firehose
-pnpm run bench:baseline:kafka-ingest
-pnpm run bench:baseline:kafka-sustained-firehose
-pnpm run bench:baseline:grpc-materialized
-pnpm run bench:baseline:grpc-leased
-pnpm run bench:baseline:grpc-leased-retained
+vp run -w bench:baseline:smoke
+vp run -w bench:baseline:raw-read-write
+vp run -w bench:baseline:active-query-sharing
+vp run -w bench:baseline:grouped-admission
+vp run -w bench:baseline:grouped-order-neutral
+vp run -w bench:baseline:websocket-firehose
+vp run -w bench:baseline:kafka-ingest
+vp run -w bench:baseline:kafka-sustained-firehose
+vp run -w bench:baseline:grpc-materialized
+vp run -w bench:baseline:grpc-leased
+vp run -w bench:baseline:grpc-leased-retained
 ```
 
-Use `pnpm run pre-grpc:gate` before gRPC-focused work and `pnpm run grpc:gate`
+Use `vp run -w pre-grpc:gate` before gRPC-focused work and `vp run -w grpc:gate`
 for the gRPC profiles.
 
 For a release-candidate capacity pass, run:
 
 ```sh
-pnpm run release-candidate:capacity
+vp run -w release-candidate:capacity
 ```
 
 This runs example browser/type checks, example builds, `pre-grpc:gate`,

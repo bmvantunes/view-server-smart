@@ -97,7 +97,7 @@ Do not size View Server from row count alone. Capacity depends on:
 Start with conservative memory limits and run:
 
 ```sh
-pnpm run release-candidate:capacity
+vp run -w release-candidate:capacity
 ```
 
 Then run a production-like soak using your real topic shapes. Watch RSS, heap,

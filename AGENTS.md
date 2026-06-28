@@ -12,6 +12,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - [ ] Run `vp check` and `vp test` to format, lint, type check and test changes.
 - [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
+- [ ] Do not use direct `pnpm` commands for workspace scripts, package filters, execs, tests, builds, or CI. Use `vp install`, `vp exec`, `vp test`, `vp run -w <root-script>`, `vp run <package>#<task>`, or `vp run --filter <package> <task>`.
 
 <!--VITE PLUS END-->
 
@@ -115,13 +116,13 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Hot paths should avoid unnecessary allocations, schema decoding, object spreading, and health snapshots.
 - Health counters should update cheaply and publish at a bounded cadence.
 - Benchmarks must state whether they are localhost CPU/GC stress, browser stress, network-shaped, or production-like.
-- `pnpm run bench:baseline:smoke` is the smoke performance-regression gate. It must compare fresh Vitest benchmark artifacts against `benchmarks/baselines/smoke.json`; use `pnpm run bench:baseline:smoke:update` only when an accepted performance change intentionally moves the baseline.
-- `pnpm run bench:baseline:raw-read-write` is the focused raw engine read/write tradeoff gate. It must cover raw snapshots, predicate-index reads, base writes, and indexed writes so read-path optimizations cannot hide ingestion tax.
-- `pnpm run bench:baseline:kafka-ingest` is the real Kafka ingest smoke gate. It starts Apache Kafka via `compose.yaml`, uses `@platformatic/kafka`, and compares JSON/protobuf ingest plus a 2k-message mixed burst against `benchmarks/baselines/kafka-ingest.json`.
-- `pnpm run bench:baseline:websocket-firehose` is the small runtime WebSocket firehose smoke gate. It uses the production Effect RPC WebSocket + NDJSON path and bounded Vitest benchmark reads; update it only for accepted WebSocket transport or fanout performance changes.
-- `pnpm run pre-grpc:gate` is the serial pre-gRPC release gate. It runs `ready`, smoke, raw read/write, active-query-sharing, grouped admission, grouped order-neutral, WebSocket firehose, Kafka ingest, and Kafka sustained-firehose gates. Run it before starting gRPC work or declaring Kafka/performance readiness.
-- `pnpm run grpc:gate` is the gRPC runtime smoke gate. It runs `ready`, materialized gRPC baselines, and leased gRPC baselines. Keep it separate from `pre-grpc:gate`.
-- `pnpm run release-candidate:capacity` is the serial production-candidate gate. It runs example tests/builds, `pre-grpc:gate`, `grpc:gate`, and the broad no-compare release benchmark profile; use it before promoting a runtime image or claiming production-like capacity readiness.
+- `vp run -w bench:baseline:smoke` is the smoke performance-regression gate. It must compare fresh Vitest benchmark artifacts against `benchmarks/baselines/smoke.json`; use `vp run -w bench:baseline:smoke:update` only when an accepted performance change intentionally moves the baseline.
+- `vp run -w bench:baseline:raw-read-write` is the focused raw engine read/write tradeoff gate. It must cover raw snapshots, predicate-index reads, base writes, and indexed writes so read-path optimizations cannot hide ingestion tax.
+- `vp run -w bench:baseline:kafka-ingest` is the real Kafka ingest smoke gate. It starts Apache Kafka via `compose.yaml`, uses `@platformatic/kafka`, and compares JSON/protobuf ingest plus a 2k-message mixed burst against `benchmarks/baselines/kafka-ingest.json`.
+- `vp run -w bench:baseline:websocket-firehose` is the small runtime WebSocket firehose smoke gate. It uses the production Effect RPC WebSocket + NDJSON path and bounded Vitest benchmark reads; update it only for accepted WebSocket transport or fanout performance changes.
+- `vp run -w pre-grpc:gate` is the serial pre-gRPC release gate. It runs `ready`, smoke, raw read/write, active-query-sharing, grouped admission, grouped order-neutral, WebSocket firehose, Kafka ingest, and Kafka sustained-firehose gates. Run it before starting gRPC work or declaring Kafka/performance readiness.
+- `vp run -w grpc:gate` is the gRPC runtime smoke gate. It runs `ready`, materialized gRPC baselines, and leased gRPC baselines. Keep it separate from `pre-grpc:gate`.
+- `vp run -w release-candidate:capacity` is the serial production-candidate gate. It runs example tests/builds, `pre-grpc:gate`, `grpc:gate`, and the broad no-compare release benchmark profile; use it before promoting a runtime image or claiming production-like capacity readiness.
 - Do not run competing benchmark suites in parallel when comparing results.
 
 ## Package And Architecture Rules

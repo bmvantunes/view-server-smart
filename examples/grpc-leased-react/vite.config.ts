@@ -2,7 +2,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
-import { playwright } from "vitest/browser/providers/playwright";
+import { playwright } from "@vitest/browser-playwright";
 
 export default defineConfig({
   optimizeDeps: {

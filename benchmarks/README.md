@@ -5,13 +5,13 @@
 Run the gate:
 
 ```bash
-pnpm run bench:baseline:smoke
+vp run -w bench:baseline:smoke
 ```
 
 Refresh the smoke baseline only when a performance change is intentionally accepted:
 
 ```bash
-pnpm run bench:baseline:smoke:update
+vp run -w bench:baseline:smoke:update
 ```
 
 The smoke gate runs the existing Vitest benchmark files serially and compares fresh `.artifacts`
@@ -27,10 +27,10 @@ Do not run benchmark profiles in parallel when comparing results.
 Before starting the gRPC ingress adapter, run the serial pre-gRPC gate:
 
 ```bash
-pnpm run pre-grpc:gate
+vp run -w pre-grpc:gate
 ```
 
-This first runs the full correctness gate (`pnpm run ready`), then runs the strict smoke, raw
+This first runs the full correctness gate (`vp run -w ready`), then runs the strict smoke, raw
 read/write, active-query-sharing, grouped admission, grouped order-neutral, WebSocket firehose, Kafka
 ingest, and Kafka sustained-firehose baseline gates. It intentionally excludes
 `bench:baseline:release`, which is a broad no-compare collection profile rather than a pass/fail gate.
@@ -38,13 +38,13 @@ ingest, and Kafka sustained-firehose baseline gates. It intentionally excludes
 Active-query sharing has a focused engine gate:
 
 ```bash
-pnpm run bench:baseline:active-query-sharing
+vp run -w bench:baseline:active-query-sharing
 ```
 
 Refresh it only when an active-query sharing performance change is intentionally accepted:
 
 ```bash
-pnpm run bench:baseline:active-query-sharing:update
+vp run -w bench:baseline:active-query-sharing:update
 ```
 
 This profile runs `raw-live-fanout` across same-window, ten-window, unique-window, and unique-shape
@@ -54,13 +54,13 @@ the broader smoke gate while still using Vitest benchmark output and committed b
 Raw read/write performance has a focused engine gate:
 
 ```bash
-pnpm run bench:baseline:raw-read-write
+vp run -w bench:baseline:raw-read-write
 ```
 
 Refresh it only when a raw read/write performance change is intentionally accepted:
 
 ```bash
-pnpm run bench:baseline:raw-read-write:update
+vp run -w bench:baseline:raw-read-write:update
 ```
 
 This profile is localhost CPU/GC engine stress. It runs 100k-row raw snapshots, predicate-index
@@ -76,13 +76,13 @@ use repeated local runs before treating p99-only movement in this profile as a p
 WebSocket firehose smoke has a focused runtime transport gate:
 
 ```bash
-pnpm run bench:baseline:websocket-firehose
+vp run -w bench:baseline:websocket-firehose
 ```
 
 Refresh it only when a WebSocket transport performance change is intentionally accepted:
 
 ```bash
-pnpm run bench:baseline:websocket-firehose:update
+vp run -w bench:baseline:websocket-firehose:update
 ```
 
 This profile starts a real runtime WebSocket server, connects the remote client over Effect RPC
@@ -96,8 +96,8 @@ Kafka runtime profiles are separate from the default smoke gate because they sta
 container and exercise real `@platformatic/kafka` producers/consumers:
 
 ```bash
-pnpm run bench:baseline:kafka-ingest
-pnpm run bench:baseline:kafka-sustained-firehose
+vp run -w bench:baseline:kafka-ingest
+vp run -w bench:baseline:kafka-sustained-firehose
 ```
 
 `kafka-ingest` measures single JSON/protobuf source batches plus a mixed burst. `kafka-sustained-firehose`
@@ -113,23 +113,23 @@ can contain one unusually fast or slow sample.
 gRPC runtime profiles are gated separately from `pre-grpc:gate`:
 
 ```bash
-pnpm run grpc:gate
+vp run -w grpc:gate
 ```
 
-This runs `pnpm run ready`, then the materialized, leased smoke, and retained leased baselines. The
+This runs `vp run -w ready`, then the materialized, leased smoke, and retained leased baselines. The
 retained leased profile uses 50k retained rows to keep the expensive local-filter snapshot path under
 a committed baseline. Its latency stays gated with the gRPC runtime thresholds; RSS uses the wider
 noisy-runtime allowance because the retained profile deliberately exercises a large in-memory row
 set. Refresh it only when the retained-feed performance change is intentional:
 
 ```bash
-pnpm run bench:baseline:grpc-leased-retained:update
+vp run -w bench:baseline:grpc-leased-retained:update
 ```
 
 Use repeated retained runs for local stability investigation before tightening thresholds:
 
 ```bash
-pnpm run bench:baseline:grpc-leased-retained:repeat
+vp run -w bench:baseline:grpc-leased-retained:repeat
 ```
 
 The repeat command writes isolated ignored artifacts and stays report-only; it does not update or

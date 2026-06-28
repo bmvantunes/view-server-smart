@@ -25,33 +25,29 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
         with:
-          version: 11.2.2
-          run_install: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 26.2.0
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          node-version: "26"
+          version: "0.2.1"
+          cache: true
+          run-install: false
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: vp install --frozen-lockfile
 
       - name: Install browser test dependencies
-        run: pnpm --filter @view-server/react exec playwright install --with-deps chromium firefox webkit
+        working-directory: packages/react
+        run: vp exec playwright install --with-deps chromium firefox webkit
 
       - name: Effect LSP diagnostics
         run: |
-          pnpm exec effect-language-service diagnostics --project packages/config/tsconfig.json --format text --strict
-          pnpm exec effect-language-service diagnostics --project packages/column-live-view-engine/tsconfig.json --format text --strict
-          pnpm exec effect-language-service diagnostics --project packages/react/tsconfig.json --format text --strict
+          vp exec effect-language-service diagnostics --project packages/config/tsconfig.json --format text --strict
+          vp exec effect-language-service diagnostics --project packages/column-live-view-engine/tsconfig.json --format text --strict
+          vp exec effect-language-service diagnostics --project packages/react/tsconfig.json --format text --strict
 
       - name: Ready gate
-        run: pnpm run ready
+        run: vp run -w ready
 
   smoke-benchmarks:
     name: Smoke Benchmark Gate
@@ -64,30 +60,26 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
         with:
-          version: 11.2.2
-          run_install: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 26.2.0
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
+          node-version: "26"
+          version: "0.2.1"
+          cache: true
+          run-install: false
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: vp install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm exec vp run -r build
+        run: vp run -r build
 
       - name: Install Chromium benchmark dependencies
-        run: pnpm --filter @view-server/react exec playwright install --with-deps chromium
+        working-directory: packages/react
+        run: vp exec playwright install --with-deps chromium
 
       - name: Smoke benchmark regression gate
-        run: pnpm run bench:baseline:smoke
+        run: vp run -w bench:baseline:smoke
 
       - name: Raw read/write benchmark regression gate
-        run: pnpm run bench:baseline:raw-read-write
+        run: vp run -w bench:baseline:raw-read-write

@@ -1341,12 +1341,12 @@ Minimum benchmark profiles:
 Preferred serial benchmark runner:
 
 ```bash
-pnpm run bench:baseline:smoke
-pnpm run bench:baseline
-pnpm run bench:baseline:grouped-admission
-pnpm run bench:baseline:grouped-order-neutral
-pnpm run bench:baseline:kafka-ingest
-pnpm run bench:baseline:release
+vp run -w bench:baseline:smoke
+vp run -w bench:baseline
+vp run -w bench:baseline:grouped-admission
+vp run -w bench:baseline:grouped-order-neutral
+vp run -w bench:baseline:kafka-ingest
+vp run -w bench:baseline:release
 ```
 
 `bench:baseline` and `bench:baseline:smoke` run one small Chromium/browser profile plus small
@@ -1355,7 +1355,7 @@ to avoid one-sample write/read noise; browser smoke stays intentionally tiny so 
 The smoke profile is the committed performance-regression gate: it compares fresh Vitest benchmark
 artifacts against `benchmarks/baselines/smoke.json` and fails on cleanup, backpressure, queued-event,
 RSS, mean-latency, or p99-latency regressions beyond the configured thresholds. Refresh the smoke
-baseline intentionally with `pnpm run bench:baseline:smoke:update` when a performance change is
+baseline intentionally with `vp run -w bench:baseline:smoke:update` when a performance change is
 accepted.
 
 `bench:baseline:release` is the release-quality serial profile and runs the documented row
@@ -1381,8 +1381,8 @@ serial benchmarks only.
 Current Kafka ingest benchmark harness:
 
 ```bash
-pnpm run bench:baseline:kafka-ingest
-pnpm run bench:baseline:kafka-ingest:update
+vp run -w bench:baseline:kafka-ingest
+vp run -w bench:baseline:kafka-ingest:update
 ```
 
 The profile runs `runtime#bench:kafka-ingest` through the serial benchmark runner. It starts the
@@ -1710,7 +1710,7 @@ patch/delete/group-move costs can become very expensive at high row counts.
 Grouped admission tuning uses a dedicated serial baseline profile:
 
 ```bash
-pnpm run bench:baseline:grouped-admission
+vp run -w bench:baseline:grouped-admission
 ```
 
 That profile runs default incremental grouped writes with larger write batches, a forced-fallback
@@ -1722,13 +1722,13 @@ views or demoted to fallback before cleanup. `groupedWriteAdmission` also record
 evaluation and patched-evaluation counters after setup and before cleanup, so order-neutral patch
 regressions are visible in baseline comparisons. The default command compares fresh artifacts against
 `benchmarks/baselines/grouped-admission.json`; use
-`pnpm run bench:baseline:grouped-admission:update` only when accepting a new grouped-admission
+`vp run -w bench:baseline:grouped-admission:update` only when accepting a new grouped-admission
 baseline.
 
 Order-neutral grouped evaluation patching uses a dedicated serial baseline profile:
 
 ```bash
-pnpm run bench:baseline:grouped-order-neutral
+vp run -w bench:baseline:grouped-order-neutral
 ```
 
 That profile sets `VIEW_SERVER_ENGINE_BENCH_GROUPED_WRITE_READER_PROFILE=order-neutral` and runs the
@@ -1737,7 +1737,7 @@ the field-ordered grouped subscription open, so `grouped patch aggregate values`
 order-neutral evaluation patch path instead of mixing it with an aggregate-ordered subscriber that
 must rebuild the grouped window. The default command compares fresh artifacts against
 `benchmarks/baselines/grouped-order-neutral.json`; use
-`pnpm run bench:baseline:grouped-order-neutral:update` only when accepting a new order-neutral
+`vp run -w bench:baseline:grouped-order-neutral:update` only when accepting a new order-neutral
 baseline.
 
 Grouped write benchmark cases:
@@ -1795,7 +1795,7 @@ Interpretation notes:
   aggregate-ordered grouped subscription open. `grouped patch aggregate values` is therefore a mixed
   signal: the field-ordered subscription can use the order-neutral evaluation patch, while the
   aggregate-ordered subscription still rebuilds its grouped window. Use
-  `pnpm run bench:baseline:grouped-order-neutral` when the decision needs an isolated order-neutral
+  `vp run -w bench:baseline:grouped-order-neutral` when the decision needs an isolated order-neutral
   write-path signal.
 - Retained `min`/`max` removals can invalidate the current extremum. The incremental executor batches
   those invalidations and recomputes each dirty `{group, aggregate}` once after the mutation batch,

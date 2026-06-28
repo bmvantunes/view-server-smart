@@ -69,7 +69,7 @@ authoritative source:
 Before promoting a runtime build, run:
 
 ```sh
-pnpm run release-candidate:capacity
+vp run -w release-candidate:capacity
 ```
 
 The gate covers examples, build, package seam checks, strict Effect diagnostics,

@@ -762,8 +762,8 @@ Initial benchmark profiles:
 Current materialized-feed benchmark command:
 
 ```sh
-pnpm --filter @view-server/runtime run bench:grpc-materialized
-pnpm run bench:baseline:grpc-materialized
+vp run --filter @view-server/runtime bench:grpc-materialized
+vp run -w bench:baseline:grpc-materialized
 ```
 
 This benchmark uses a Queue-backed in-process gRPC stream but still exercises the
@@ -782,11 +782,11 @@ operation throughput, sample counts, and structural counters.
 Current leased-feed benchmark command:
 
 ```sh
-pnpm --filter @view-server/runtime run bench:grpc-leased
-pnpm run bench:baseline:grpc-leased
-pnpm run bench:baseline:grpc-leased-retained
-pnpm run bench:baseline:grpc-leased-retained:update
-pnpm run bench:baseline:grpc-leased-retained:repeat
+vp run --filter @view-server/runtime bench:grpc-leased
+vp run -w bench:baseline:grpc-leased
+vp run -w bench:baseline:grpc-leased-retained
+vp run -w bench:baseline:grpc-leased-retained:update
+vp run -w bench:baseline:grpc-leased-retained:repeat
 ```
 
 This benchmark uses the production lease manager with Queue-backed in-process streams:
@@ -816,7 +816,7 @@ Current leased benchmark profiles:
 - many routes with one subscriber each, including health overlay timing metadata
 - one route with many subscribers
 
-The smoke gRPC benchmark baselines are part of `pnpm run grpc:gate`, not the
+The smoke gRPC benchmark baselines are part of `vp run -w grpc:gate`, not the
 pre-gRPC gate. `pre-grpc:gate` remains the Kafka/performance readiness gate
 before gRPC work. gRPC whole-case p99 is gated with loose runtime thresholds.
 The 50k retained leased-feed profile also gates retained-snapshot, delta-fanout,
@@ -834,8 +834,8 @@ The current materialized gRPC slice is not complete until:
 - changed package tests pass with 100% coverage
 - `vp check` passes
 - focused runtime/config/protocol/client/server tests pass
-- pre-existing `pnpm run pre-grpc:gate` still passes before gRPC work
-- `pnpm run grpc:gate` passes for the current gRPC materialized and leased smoke baselines
+- pre-existing `vp run -w pre-grpc:gate` still passes before gRPC work
+- `vp run -w grpc:gate` passes for the current gRPC materialized and leased smoke baselines
 - new gRPC e2e tests prove materialized behavior and that leased feeds are ignored by materialized ingress
 - health shows materialized feed instances without rebuilding per message
 - no long-lived stream uses detached/hand-rolled lifecycle
@@ -859,7 +859,7 @@ The leased gRPC slice is not complete until:
 
 ## Implementation Sequence
 
-Implement in slices that keep `pnpm run ready`, strict Effect LSP, package seam checks, and package tests green after each PR:
+Implement in slices that keep `vp run -w ready`, strict Effect LSP, package seam checks, and package tests green after each PR:
 
 1. Source contracts and type gates
    - Add `grpc.materialized()` and `grpc.leased({ routeBy })` topic source markers.
@@ -896,7 +896,7 @@ Implement in slices that keep `pnpm run ready`, strict Effect LSP, package seam 
    - Avoid detached fibers for stream ownership.
 
 6. Review and benchmark gate
-   - Run focused package tests, `pnpm run ready`, strict Effect LSP, package seam checks, forbidden-pattern scans, and gRPC benchmarks.
+   - Run focused package tests, `vp run -w ready`, strict Effect LSP, package seam checks, forbidden-pattern scans, and gRPC benchmarks.
    - Only add CI regression thresholds after repeated benchmark runs are stable.
 
 ## Deferred Decisions

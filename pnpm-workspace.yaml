@@ -15,13 +15,15 @@ catalog:
   "@effect/language-service": 0.86.2
   "@effect/vitest": 4.0.0-beta.70
   "@types/node": 25.9.1
-  "@vitest/coverage-istanbul": 4.1.6
-  "@vitest/runner": 4.1.6
+  "@vitest/browser": 4.1.9
+  "@vitest/browser-playwright": 4.1.9
+  "@vitest/coverage-istanbul": 4.1.9
+  "@vitest/runner": 4.1.9
   effect: 4.0.0-beta.70
   typescript: 6.0.3
-  vite: npm:@voidzero-dev/vite-plus-core@0.1.23
-  vitest: npm:@voidzero-dev/vite-plus-test@0.1.23
-  vite-plus: 0.1.23
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.1
+  vitest: 4.1.9
+  vite-plus: 0.2.1
   "@effect/atom-react": 4.0.0-beta.70
   scheduler: 0.27.0
   vitest-browser-react: 2.2.0
@@ -37,15 +39,12 @@ catalog:
   tailwindcss: 4.3.1
   tsx: 4.22.4
 overrides:
-  vite: "catalog:"
-  vitest: "catalog:"
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.1
 peerDependencyRules:
   allowAny:
     - vite
-    - vitest
   allowedVersions:
     vite: "*"
-    vitest: "*"
 allowBuilds:
   esbuild: true
   msgpackr-extract: true

@@ -149,7 +149,7 @@ spec:
               memory: 4Gi
 ```
 
-Size CPU and memory from `pnpm run release-candidate:capacity` on a
+Size CPU and memory from `vp run -w release-candidate:capacity` on a
 production-like machine. Do not copy the resource values above without testing
 your topic count, row count, grouped queries, Kafka rate, gRPC routes, and
 WebSocket fanout.
@@ -164,7 +164,7 @@ restart the pod and rebuild in-memory state.
 Before promoting a runtime image:
 
 ```sh
-pnpm run release-candidate:capacity
+vp run -w release-candidate:capacity
 ```
 
 This runs examples, builds, readiness checks, pre-gRPC benchmark gates, gRPC
