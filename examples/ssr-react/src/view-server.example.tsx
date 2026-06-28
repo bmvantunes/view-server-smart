@@ -1,4 +1,5 @@
 import { useLiveQuery, useViewServerHealthSummary, ViewServerProvider } from "./view-server.config";
+import { useState } from "react";
 import { useSyncExternalStore } from "react";
 
 const subscribeToBrowserReady = (notify: () => void) => {
@@ -31,12 +32,25 @@ export function SsrExampleApp() {
 
 function ClientOnlyLivePanel() {
   const isBrowserReady = useBrowserReady();
+  const [isLivePanelEnabled, setLivePanelEnabled] = useState(false);
 
   if (!isBrowserReady) {
     return (
       <section className="panel" aria-label="ssr placeholder">
         <h2>Live data</h2>
         <p>Live queries hydrate in the browser.</p>
+      </section>
+    );
+  }
+
+  if (!isLivePanelEnabled) {
+    return (
+      <section className="panel" aria-label="optional live orders">
+        <h2>Live orders</h2>
+        <p>Start the View Server runtime, then connect the browser-only live panel.</p>
+        <button type="button" onClick={() => setLivePanelEnabled(true)}>
+          Connect live data
+        </button>
       </section>
     );
   }

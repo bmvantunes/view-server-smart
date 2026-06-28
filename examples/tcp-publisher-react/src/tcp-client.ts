@@ -34,6 +34,11 @@ export type InvalidTcpCommand = {
   };
 };
 
+export type WriteCommandOptions = {
+  readonly host?: string;
+  readonly port?: number;
+};
+
 const TcpPublishResponse = Schema.Union([
   Schema.Struct({
     ok: Schema.Literal(true),
@@ -51,26 +56,58 @@ const TcpPublishResponse = Schema.Union([
 
 export type TcpPublishResponse = typeof TcpPublishResponse.Type;
 
-export const writeCommand = (command: TcpCommand | InvalidTcpCommand) =>
+const parseTcpPublishResponse = (line: string) =>
+  Effect.try({
+    try: () => JSON.parse(line),
+    catch: (cause) =>
+      new TcpPublisherExampleError({
+        cause,
+        message: "Invalid TCP publish acknowledgement.",
+      }),
+  });
+
+export const writeCommand = (
+  command: TcpCommand | InvalidTcpCommand,
+  options: WriteCommandOptions = {},
+) =>
   Effect.tryPromise({
     try: () =>
       new Promise<unknown>((resolve, reject) => {
         let isSettled = false;
-        const socket = Net.createConnection({ host: "127.0.0.1", port: 8081 }, () => {
-          socket.write(`${JSON.stringify(command)}\n`);
+        let responseBuffer = "";
+        const socket = Net.createConnection({
+          host: options.host ?? "127.0.0.1",
+          port: options.port ?? 8081,
         });
-        const finish = (chunk: Buffer) => {
+        const writeCommand = () => {
+          socket.write(`${JSON.stringify(command)}\n`);
+        };
+        const cleanup = () => {
+          socket.off("data", onData);
+          socket.off("connect", writeCommand);
+          socket.off("error", fail);
+        };
+        const finish = (line: string) => {
           if (!isSettled) {
             isSettled = true;
+            cleanup();
             socket.end();
-            resolve(JSON.parse(chunk.toString("utf8")));
+            Effect.runPromise(parseTcpPublishResponse(line)).then(resolve, reject);
           }
         };
         const fail = (cause: unknown) => {
           if (!isSettled) {
             isSettled = true;
+            cleanup();
             socket.destroy();
             reject(cause);
+          }
+        };
+        const onData = (chunk: Buffer) => {
+          responseBuffer += chunk.toString("utf8");
+          const newlineIndex = responseBuffer.indexOf("\n");
+          if (newlineIndex >= 0) {
+            finish(responseBuffer.slice(0, newlineIndex));
           }
         };
         socket.setTimeout(5_000, () =>
@@ -81,7 +118,8 @@ export const writeCommand = (command: TcpCommand | InvalidTcpCommand) =>
           ),
         );
         socket.once("error", fail);
-        socket.once("data", finish);
+        socket.once("connect", writeCommand);
+        socket.on("data", onData);
       }),
     catch: (cause) =>
       cause instanceof TcpPublisherExampleError

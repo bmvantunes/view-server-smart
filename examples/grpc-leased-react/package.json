@@ -10,7 +10,7 @@
     "dev": "vp dev --port 3003",
     "clean-routes": "node ../../scripts/clean-tanstack-route-tree.mjs src/routeTree.gen.ts && vp check --fix src/routeTree.gen.ts",
     "generate-routes": "vp exec tsr generate && vp run clean-routes",
-    "runtime": "vp run -t @view-server/runtime#build && vp exec tsx src/runtime.ts",
+    "runtime": "vp run -t @view-server/react#build && vp run -t @view-server/runtime#build && vp exec tsx src/runtime.ts",
     "build": "vp run -t @view-server/react#build && vp run -t @view-server/runtime#build && vp run generate-routes && vp build && vp run clean-routes",
     "preview": "vp preview",
     "test": "vp run -t @view-server/react#build && vp run -t @view-server/runtime#build && vp run generate-routes && vp test run --typecheck && vp run clean-routes"
