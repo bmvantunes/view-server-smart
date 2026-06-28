@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+:root {
+  background: #eef5f8;
+  color: #14212a;
+  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+td,
+th {
+  border-bottom: 1px solid #c9d9df;
+  padding: 0.7rem;
+  text-align: left;
+}
+
+.example-shell {
+  display: grid;
+  gap: 1rem;
+  margin: 0 auto;
+  max-width: 1080px;
+  padding: 2rem;
+}
+
+.eyebrow {
+  color: #22566c;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.panel {
+  background: #fbfdff;
+  border: 1px solid #d6e4ea;
+  border-radius: 24px;
+  padding: 1.2rem;
+}

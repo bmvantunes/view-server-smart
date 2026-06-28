@@ -1,5 +1,6 @@
 packages:
   - apps/*
+  - examples/*
   - packages/*
   - tools/*
 
@@ -27,6 +28,14 @@ catalog:
   "@platformatic/kafka": 2.2.3
   "@connectrpc/connect": 2.1.2
   "@connectrpc/connect-node": 2.1.2
+  "@tailwindcss/vite": 4.3.1
+  "@tanstack/react-router": 1.170.16
+  "@tanstack/react-start": 1.168.26
+  "@tanstack/router-cli": 1.167.17
+  "@tanstack/router-plugin": 1.168.18
+  "@vitejs/plugin-react": 6.0.3
+  tailwindcss: 4.3.1
+  tsx: 4.22.4
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
@@ -38,4 +47,5 @@ peerDependencyRules:
     vite: "*"
     vitest: "*"
 allowBuilds:
+  esbuild: true
   msgpackr-extract: true

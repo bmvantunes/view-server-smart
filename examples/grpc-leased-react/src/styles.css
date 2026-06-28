@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+:root {
+  background: #f1f4ea;
+  color: #1c2313;
+  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.example-shell {
+  display: grid;
+  gap: 1rem;
+  margin: 0 auto;
+  max-width: 960px;
+  padding: 2rem;
+}
+
+.eyebrow {
+  color: #5f741c;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.panel {
+  background: #fbfff2;
+  border: 1px solid #dce8bc;
+  border-radius: 24px;
+  padding: 1.2rem;
+}

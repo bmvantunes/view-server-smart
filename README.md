@@ -10,6 +10,7 @@
 - [Query Semantics](./docs/query-semantics.md)
 - [Benchmarks And Capacity](./docs/benchmarks-and-capacity.md)
 - [Deployment](./docs/deployment.md)
+- [Examples](./examples/README.md)
 
 ## Remote React provider
 

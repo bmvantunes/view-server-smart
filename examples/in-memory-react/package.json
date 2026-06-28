@@ -1,0 +1,45 @@
+{
+  "name": "@view-server/example-in-memory-react",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "scripts": {
+    "dev": "vp dev --port 3001",
+    "clean-routes": "node ../../scripts/clean-tanstack-route-tree.mjs src/routeTree.gen.ts && vp check --fix src/routeTree.gen.ts",
+    "generate-routes": "vp exec tsr generate && vp run clean-routes",
+    "build": "vp run -t @view-server/react#build && vp run generate-routes && vp build && vp run clean-routes",
+    "preview": "vp preview",
+    "test": "vp run -t @view-server/react#build && vp run generate-routes && vp test run --coverage --typecheck && vp run clean-routes"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "@tanstack/router-plugin": "catalog:",
+    "@view-server/config": "workspace:*",
+    "@view-server/react": "workspace:*",
+    "effect": "catalog:",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "tailwindcss": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@tanstack/router-cli": "catalog:",
+    "@types/node": "25.9.1",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "@view-server/in-memory": "workspace:*",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/browser": "4.1.6",
+    "@vitest/coverage-istanbul": "catalog:",
+    "@vitest/runner": "catalog:",
+    "playwright": "1.60.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vitest-browser-react": "catalog:"
+  }
+}
