@@ -137,12 +137,14 @@ The external API should prioritize strong type inference and low boilerplate:
 ```ts
 // view-server.config.ts
 import { Schema } from "effect";
-import { defineViewServerConfig } from "@view-server/smart";
+import { defineViewServerConfig } from "@view-server/config";
+import { createViewServerReact } from "@view-server/react";
+import type { ViewServerInMemoryOptions } from "@view-server/react/testing";
 
 const Order = Schema.Struct({
   id: Schema.String,
   customerId: Schema.String,
-  status: Schema.Literal("open", "closed", "cancelled"),
+  status: Schema.Literals(["open", "closed", "cancelled"]),
   price: Schema.Number,
   region: Schema.String,
   updatedAt: Schema.Number,
@@ -169,10 +171,12 @@ export const viewServer = defineViewServerConfig({
   },
 });
 
-export const { ViewServerProvider, useLiveQuery } = viewServer.react;
+export const viewServerReact = createViewServerReact(viewServer);
+
+export const { ViewServerProvider, useLiveQuery } = viewServerReact;
 ```
 
-The browser URL must not be baked into `viewServer.react(...)`. Apps often deploy the same compiled artifact to dev/UAT/prod and inject runtime config outside the bundle.
+The browser URL must not be baked into the React binding factory. Apps often deploy the same compiled artifact to dev/UAT/prod and inject runtime config outside the bundle.
 
 Correct browser shape:
 
@@ -191,18 +195,22 @@ export function AppRoot() {
 Test/browser-in-memory shape:
 
 ```tsx
-import { createInMemoryViewServer } from "./view-server.config";
+import { Effect } from "effect";
+import { createInMemoryViewServerReact } from "@view-server/react/testing";
+import { viewServerReact } from "./view-server.config";
 
-const { ViewServerInMemoryProvider, client } = createInMemoryViewServer();
+const { ViewServerInMemoryProvider, client } = createInMemoryViewServerReact(viewServerReact);
 
-client.publish("orders", {
-  id: "order-1",
-  customerId: "customer-1",
-  status: "open",
-  price: 42,
-  region: "usa",
-  updatedAt: 1,
-});
+await Effect.runPromise(
+  client.publish("orders", {
+    id: "order-1",
+    customerId: "customer-1",
+    status: "open",
+    price: 42,
+    region: "usa",
+    updatedAt: 1,
+  }),
+);
 
 export function TestRoot() {
   return (
@@ -223,6 +231,7 @@ export function OrdersGrid() {
     where: {
       status: "open",
     },
+    select: ["id", "customerId", "status", "price", "region", "updatedAt"],
     orderBy: [{ field: "price", direction: "desc" }],
     limit: 50,
   });
@@ -248,7 +257,7 @@ Because there is no external snapshot backend, browser-mode Vitest can run full 
 
 ## Runtime API Direction
 
-`createRuntime` owns deploy-time/server-only wiring. This includes ports, Kafka brokers, Kafka topic mapping, TCP publishing, gRPC publishing, memory budgets, WAL/checkpoints, and similar runtime concerns.
+`runViewServerRuntime` / `makeViewServerRuntime` own deploy-time/server-only wiring. This includes ports, Kafka brokers, Kafka topic mapping, TCP publishing, gRPC publishing, memory budgets, WAL/checkpoints, and similar runtime concerns.
 
 Runtime config must not be imported by browser bundles.
 
@@ -270,6 +279,7 @@ import {
   tradesBufProtoValue,
 } from "@buf/generated_code/orders_buf_proto";
 import { kafka } from "@view-server/config";
+import { runViewServerRuntime } from "@view-server/runtime";
 import { viewServer } from "./view-server.config";
 
 const kafkaRegions = {
@@ -279,56 +289,57 @@ const kafkaRegions = {
 
 const kafkaTopic = viewServer.kafkaTopic<typeof kafkaRegions>();
 
-export const runtime = viewServer.createRuntime({
-  websocketPort: 8080,
-  tcpPublishPort: 8081,
+NodeRuntime.runMain(
+  runViewServerRuntime(viewServer, {
+    websocketPort: 8080,
+    tcpPublishPort: 8081,
 
-  kafka: {
-    regions: kafkaRegions,
+    kafka: {
+      consumerGroupId: "view-server-orders",
+      regions: kafkaRegions,
 
-    topics: {
-      orders: kafkaTopic({
-        regions: ["usa", "london"],
+      topics: {
+        orders: kafkaTopic({
+          regions: ["usa", "london"],
 
-        value: kafka.protobuf(ordersBufProtoValue),
-        key: kafka.protobuf(ordersBufProtoKey),
+          value: kafka.protobuf(ordersBufProtoValue),
+          key: kafka.protobuf(ordersBufProtoKey),
 
-        viewServerTopic: "orders",
+          viewServerTopic: "orders",
 
-        mapping: ({ key, value, region, schema, metadata }) => {
-          return {
-            id: key.orderId,
-            customerId: value.customerId,
-            status: value.status,
-            price: value.price,
-            region,
-            updatedAt: value.updatedAt,
-          };
-        },
-      }),
+          mapping: ({ key, value, region, schema, metadata }) => {
+            return {
+              id: key.orderId,
+              customerId: value.customerId,
+              status: value.status,
+              price: value.price,
+              region,
+              updatedAt: value.updatedAt,
+            };
+          },
+        }),
 
-      trades: kafkaTopic({
-        regions: ["usa"],
+        trades: kafkaTopic({
+          regions: ["usa"],
 
-        value: kafka.protobuf(tradesBufProtoValue),
+          value: kafka.protobuf(tradesBufProtoValue),
 
-        viewServerTopic: "trades",
+          viewServerTopic: "trades",
 
-        mapping: ({ key, value, region, schema, metadata }) => {
-          return {
-            id: key,
-            symbol: value.symbol,
-            quantity: value.quantity,
-            price: value.price,
-            region,
-          };
-        },
-      }),
+          mapping: ({ key, value, region, schema, metadata }) => {
+            return {
+              id: key,
+              symbol: value.symbol,
+              quantity: value.quantity,
+              price: value.price,
+              region,
+            };
+          },
+        }),
+      },
     },
-  },
-});
-
-NodeRuntime.runMain(runtime);
+  }),
+);
 ```
 
 ## In-Memory Browser/Test API
@@ -336,7 +347,20 @@ NodeRuntime.runMain(runtime);
 The in-memory API should be generated from the same config:
 
 ```ts
-export const { ViewServerProvider, useLiveQuery, createInMemoryViewServer } = viewServer.react;
+import { createViewServerReact } from "@view-server/react";
+import {
+  createInMemoryViewServerReact,
+  type ViewServerInMemoryOptions,
+} from "@view-server/react/testing";
+
+export const viewServerReact = createViewServerReact(viewServer);
+
+export const { ViewServerProvider, useLiveQuery } = viewServerReact;
+
+type InMemoryOptions = ViewServerInMemoryOptions<typeof viewServer.topics>;
+
+export const createInMemoryViewServer = (options?: InMemoryOptions) =>
+  createInMemoryViewServerReact(viewServerReact, options);
 ```
 
 Recommended test usage:
@@ -348,8 +372,8 @@ import { createInMemoryViewServer, useLiveQuery } from "./view-server.config";
 function Orders() {
   const result = useLiveQuery("orders", {
     where: { status: "open" },
-    orderBy: [{ field: "price", direction: "desc" }],
     select: ["id", "price"],
+    orderBy: [{ field: "price", direction: "desc" }],
     limit: 50,
   });
 
@@ -364,7 +388,7 @@ render(
   </ViewServerInMemoryProvider>,
 );
 
-Effect.runPromise(
+await Effect.runPromise(
   client.publish("orders", {
     id: "order-2",
     customerId: "customer-2",
@@ -397,7 +421,7 @@ Important boundary:
 - It should be backed by the same core engine package used by the server runtime.
 - `useLiveQuery` must not know whether it is under `ViewServerProvider` or `ViewServerInMemoryProvider`.
 - Test setup should publish through the external `client`, not through a React hook.
-- Do not expose a runtime/test hook from the React API. Publishing into the in-memory server happens through the `client` returned by `createInMemoryViewServer()`.
+- Do not expose a runtime/test hook from the React API. Publishing into the in-memory server happens through the `client` returned by the test helper created with `createInMemoryViewServerReact(viewServerReact)`.
 
 Provider options:
 
@@ -413,7 +437,7 @@ const { ViewServerInMemoryProvider, client } = createInMemoryViewServer({
 
 Default behavior:
 
-- `createInMemoryViewServer()` creates a fresh engine and typed client.
+- `createInMemoryViewServerReact(viewServerReact)` creates a fresh engine and typed client.
 - Provider supplies that engine to hooks.
 - Setup data goes through `client.publish` / `client.publishMany`; provider seed data is not supported.
 - Disposes all subscriptions and engine state on unmount.
@@ -430,7 +454,7 @@ The runtime needs first-class health. Kafka/source lag, ingestion pressure, acti
 Runtime health should be available from:
 
 ```ts
-const health = await runtime.health();
+const health = await Effect.runPromise(runtime.health());
 ```
 
 And over the network:
@@ -796,18 +820,25 @@ not hide write regressions.
 The engine should expose a direct subscription API independent of WebSockets:
 
 ```ts
-const subscription = engine.subscribe("orders", {
-  where: { status: "open" },
-  orderBy: [{ field: "price", direction: "desc" }],
-  limit: 50,
-});
+const subscription = await Effect.runPromise(
+  engine.subscribe("orders", {
+    where: { status: "open" },
+    select: ["id", "price"],
+    orderBy: [{ field: "price", direction: "desc" }],
+    limit: 50,
+  }),
+);
 
-for await (const event of subscription.events) {
-  // first event is snapshot
-  // following events are deltas/status
-}
+await Effect.runPromise(
+  Stream.runForEach(subscription.events, (event) =>
+    Effect.sync(() => {
+      // first event is snapshot
+      // following events are deltas/status
+    }),
+  ),
+);
 
-await subscription.close();
+await Effect.runPromise(subscription.close());
 ```
 
 The first event must be a snapshot:
@@ -1257,7 +1288,7 @@ TCP publish tests should cover:
 
 `ViewServerInMemoryProvider`:
 
-- is created by `createInMemoryViewServer()`
+- is created by `createInMemoryViewServerReact(viewServerReact)`
 - uses the same internal React client contract as `ViewServerProvider`
 - supports setup data through the external `client.publish` / `client.publishMany` API
 - disposes engine on unmount

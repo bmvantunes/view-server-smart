@@ -100,7 +100,7 @@ Materialized reconnect is intentionally bounded in the runtime Adapter. It prote
 disconnects without hiding permanent failures forever. Mapper validation failures and runtime publish
 failures are not reconnectable because retrying the same bad row or broken runtime path would only
 hide the real fault. The default reconnect policy is `maxReconnects: 60` with `delay: "1 second"`,
-and applications can override it with `grpc.materializedReconnect`. The reconnect budget counts
+and applications can override it with runtime `grpc.materializedReconnect`. The reconnect budget counts
 consecutive unstable exits. It resets after the stream stays open for one reconnect delay, and after
 a stream failure that already published a batch in that run. Normal completion still consumes
 reconnect budget even if a batch was published, so an emit-then-complete loop cannot run forever.
@@ -113,6 +113,8 @@ attribute decode failures separately from stream failures.
 Use for bounded or globally useful sources, for example all strategies.
 
 ```ts
+import { Effect, Stream } from "effect";
+
 const grpcFeed = viewServer.grpcFeed<typeof grpcClients>();
 
 grpcFeed.materializedFeed({
@@ -129,7 +131,7 @@ grpcFeed.materializedFeed({
           headers: session.systemHeaders,
         },
       ),
-      (cause) => new GrpcUpstreamError({ cause }),
+      (cause) => cause,
     ),
 
   map: ({ value, schema }) => ({
@@ -179,12 +181,9 @@ grpcFeed.leasedFeed({
   }),
 
   acquire: ({ client, request }) =>
-    Stream.fromAsyncIterable(
-      client.streamOrders(request),
-      (cause) => new GrpcUpstreamError({ cause }),
-    ),
+    Stream.fromAsyncIterable(client.streamOrders(request), (cause) => cause),
 
-  release: ({ client, request }) => client.closeOrdersStream?.(request) ?? Effect.void,
+  release: () => Effect.void,
 
   map: ({ value, route, schema }) => ({
     id: value.orderId,
@@ -334,6 +333,9 @@ Reasoning:
 Sketch:
 
 ```ts
+import { NodeRuntime } from "@effect/platform-node";
+import { runViewServerRuntime } from "@view-server/runtime";
+
 const grpcClients = {
   orders: grpc.connectClient({
     service: OrderService,
@@ -342,46 +344,45 @@ const grpcClients = {
 };
 const grpcFeed = viewServer.grpcFeed<typeof grpcClients>();
 
-export const runtime = viewServer.createRuntime({
-  websocketPort: 8080,
+NodeRuntime.runMain(
+  runViewServerRuntime(viewServer, {
+    websocketPort: 8080,
 
-  grpc: {
-    clients: grpcClients,
+    grpc: {
+      clients: grpcClients,
 
-    feeds: {
-      ordersByStrategyRegion: grpcFeed.leasedFeed({
-        topic: "orders",
-        client: "orders",
-        method: "streamOrders",
-        routeBy: ["strategyId", "region"],
+      feeds: {
+        ordersByStrategyRegion: grpcFeed.leasedFeed({
+          topic: "orders",
+          client: "orders",
+          method: "streamOrders",
+          routeBy: ["strategyId", "region"],
 
-        request: ({ strategyId, region }) => ({
-          strategyId,
-          region,
+          request: ({ strategyId, region }) => ({
+            strategyId,
+            region,
+          }),
+
+          acquire: ({ client, request }) =>
+            Stream.fromAsyncIterable(client.streamOrders(request), (cause) => cause),
+
+          map: ({ value, route, schema }) => ({
+            id: value.orderId,
+            strategyId: route.strategyId,
+            region: route.region,
+            instrumentId: value.instrumentId,
+            status: value.status,
+            price: value.price,
+            updatedAt: value.updatedAt,
+          }),
         }),
-
-        acquire: ({ client, request }) =>
-          Stream.fromAsyncIterable(
-            client.streamOrders(request),
-            (cause) => new GrpcUpstreamError({ cause }),
-          ),
-
-        map: ({ value, route, schema }) => ({
-          id: value.orderId,
-          strategyId: route.strategyId,
-          region: route.region,
-          instrumentId: value.instrumentId,
-          status: value.status,
-          price: value.price,
-          updatedAt: value.updatedAt,
-        }),
-      }),
+      },
     },
-  },
-});
+  }),
+);
 ```
 
-Exact package/function names can change during implementation, but the semantics should not.
+Keep the package/function names aligned with the implemented runtime API.
 
 ## Topic Ownership Rule
 
@@ -466,33 +467,38 @@ const viewServer = defineViewServerConfig({
 Runtime feed definitions then reference those topics:
 
 ```ts
+import { NodeRuntime } from "@effect/platform-node";
+import { runViewServerRuntime } from "@view-server/runtime";
+
 const grpcFeed = viewServer.grpcFeed<typeof grpcClients>();
 
-viewServer.createRuntime({
-  grpc: {
-    clients: grpcClients,
-    feeds: {
-      ordersByStrategyRegion: grpcFeed.leasedFeed({
-        topic: "orders",
-        client: "orders",
-        method: "streamOrders",
-        routeBy: ["strategyId", "region"],
-        request: ({ strategyId, region }) => ({ strategyId, region }),
-        acquire: ({ client, request }) =>
-          Stream.fromAsyncIterable(client.streamOrders(request), GrpcUpstreamError.fromUnknown),
-        map: ({ value, route }) => ({
-          id: value.orderId,
-          strategyId: route.strategyId,
-          region: route.region,
-          instrumentId: value.instrumentId,
-          status: value.status,
-          price: value.price,
-          updatedAt: value.updatedAt,
+NodeRuntime.runMain(
+  runViewServerRuntime(viewServer, {
+    grpc: {
+      clients: grpcClients,
+      feeds: {
+        ordersByStrategyRegion: grpcFeed.leasedFeed({
+          topic: "orders",
+          client: "orders",
+          method: "streamOrders",
+          routeBy: ["strategyId", "region"],
+          request: ({ strategyId, region }) => ({ strategyId, region }),
+          acquire: ({ client, request }) =>
+            Stream.fromAsyncIterable(client.streamOrders(request), (cause) => cause),
+          map: ({ value, route }) => ({
+            id: value.orderId,
+            strategyId: route.strategyId,
+            region: route.region,
+            instrumentId: value.instrumentId,
+            status: value.status,
+            price: value.price,
+            updatedAt: value.updatedAt,
+          }),
         }),
-      }),
+      },
     },
-  },
-});
+  }),
+);
 ```
 
 This is intentionally not the final "one source constructor per topic" API. It is the smallest compatible step that gives TypeScript enough information
