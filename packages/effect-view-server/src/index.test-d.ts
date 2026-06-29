@@ -1,5 +1,6 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
-import { defineViewServerConfig, type LiveQueryResult } from "effect-view-server/config";
+import { defineViewServerConfig } from "effect-view-server";
+import type { LiveQueryResult } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
 import { createInMemoryViewServerReact } from "effect-view-server/react/testing";
 import { runViewServerRuntime } from "effect-view-server/runtime";

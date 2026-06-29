@@ -84,7 +84,9 @@ export const sanitizePublicPackageJson = (packageJson) =>
     ["license", packageJson.license],
     ["repository", cloneJson(packageJson.repository)],
     ["type", packageJson.type],
+    ["sideEffects", packageJson.sideEffects],
     ["exports", cloneJson(packageJson.exports)],
+    ["engines", cloneJson(packageJson.engines)],
     ["files", ["dist", "README.md"]],
     [
       "publishConfig",

@@ -26,7 +26,12 @@
     "README.md"
   ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "import": "./dist/client.js"
@@ -137,5 +142,8 @@
     "react-dom": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=26.0.0"
   }
 }
