@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  canRecoverMissingStagedMarker,
   classifyStagePublishDuplicateOutput,
   internalPublishViolations,
   oidcPublishEnvironmentViolations,
@@ -217,6 +218,27 @@ describe("release publish policy", () => {
         ACTIONS_ID_TOKEN_REQUEST_TOKEN: "token",
       }),
     ).toStrictEqual([]);
+  });
+
+  it("recovers missing staged markers only on retried GitHub workflow attempts", () => {
+    expect(
+      canRecoverMissingStagedMarker({
+        GITHUB_ACTIONS: "true",
+        GITHUB_RUN_ATTEMPT: "2",
+      }),
+    ).toStrictEqual(true);
+    expect(
+      canRecoverMissingStagedMarker({
+        GITHUB_ACTIONS: "true",
+        GITHUB_RUN_ATTEMPT: "1",
+      }),
+    ).toStrictEqual(false);
+    expect(
+      canRecoverMissingStagedMarker({
+        GITHUB_ACTIONS: "true",
+      }),
+    ).toStrictEqual(false);
+    expect(canRecoverMissingStagedMarker({})).toStrictEqual(false);
   });
 
   it("sanitizes the public package manifest before staging the npm artifact", () => {

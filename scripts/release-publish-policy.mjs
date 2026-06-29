@@ -127,6 +127,9 @@ export const oidcPublishEnvironmentViolations = (env) =>
     .filter((name) => env[name] === undefined || env[name] === "")
     .map((name) => `${name} is required for npm trusted publishing.`);
 
+export const canRecoverMissingStagedMarker = (env) =>
+  env.GITHUB_ACTIONS === "true" && Number.parseInt(env.GITHUB_RUN_ATTEMPT ?? "1", 10) > 1;
+
 export const publishDecision = ({ env, version, workspacePackages }) => {
   if (version === "0.0.0") {
     return {

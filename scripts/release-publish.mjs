@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
+  canRecoverMissingStagedMarker,
   classifyStagePublishDuplicateOutput,
   packageTagName,
   oidcPublishEnvironmentViolations,
@@ -156,6 +157,29 @@ const isVersionAlreadyPublished = () => {
   return result.status === 0 && JSON.parse(result.stdout) === version;
 };
 
+const publishedVersionGitHead = () => {
+  const result = commandResult(
+    "npm",
+    ["view", `${publicPackageName}@${version}`, "gitHead", "--json"],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+
+  if (result.status !== 0) {
+    return undefined;
+  }
+
+  if (result.stdout.trim() === "") {
+    return undefined;
+  }
+
+  const gitHead = JSON.parse(result.stdout);
+
+  return typeof gitHead === "string" && gitHead.length > 0 ? gitHead : undefined;
+};
+
 const runStagePublish = (stageDirectory) => {
   const result = commandResult("npm", stagePublishCommandArguments(stageDirectory), {
     encoding: "utf8",
@@ -245,14 +269,15 @@ const ensureGitTag = (tagName, targetRef = "HEAD", options = {}) => {
 
 const ensurePublishedVersionTag = () => {
   const stagedTagName = stagedPackageTagName(version);
+  const targetRef = gitTagExists(stagedTagName) ? `refs/tags/${stagedTagName}` : publishedVersionGitHead();
 
-  if (!gitTagExists(stagedTagName)) {
+  if (targetRef === undefined) {
     throw new Error(
-      `Cannot create ${packageTagName(version)} because ${stagedTagName} does not exist. Stage the package before approving it.`,
+      `Cannot create ${packageTagName(version)} because ${stagedTagName} does not exist and npm did not report a gitHead for ${publicPackageName}@${version}.`,
     );
   }
 
-  ensureGitTag(packageTagName(version), `refs/tags/${stagedTagName}`);
+  ensureGitTag(packageTagName(version), targetRef);
 };
 
 let exitCode = 0;
@@ -321,8 +346,14 @@ try {
         });
       } else if (stageResult._tag === "AlreadyStaged" || stageResult._tag === "AlreadyPublished") {
         if (!gitTagExists(stagedTagName)) {
+          if (!canRecoverMissingStagedMarker(process.env)) {
+            throw new Error(
+              `npm reported ${publicPackageName}@${version} as already staged, but ${stagedTagName} is missing. Refusing to recreate it from an unrelated workflow HEAD; rerun the failed staging workflow attempt or reject the npm stage and restage.`,
+            );
+          }
+
           process.stdout.write(
-            `npm reported ${publicPackageName}@${version} as already staged; recreating missing ${stagedTagName} marker.\n`,
+            `npm reported ${publicPackageName}@${version} as already staged on a retried workflow; recreating missing ${stagedTagName} marker.\n`,
           );
           ensureGitTag(stagedTagName, "HEAD", {
             allowMove: true,
