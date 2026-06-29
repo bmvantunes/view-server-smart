@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  isDuplicateStagePublishOutput,
   internalPublishViolations,
   oidcPublishEnvironmentViolations,
   packageTagName,
@@ -7,6 +8,8 @@ import {
   publicPackageName,
   publishDecision,
   sanitizePublicPackageJson,
+  stagedPackageTagName,
+  stagePublishCommandArguments,
   stripSourceMapReference,
 } from "./release-publish-policy.mjs";
 
@@ -341,5 +344,44 @@ describe("release publish policy", () => {
 
   it("uses the public package name as the release git tag", () => {
     expect(packageTagName("1.2.3")).toStrictEqual("effect-view-server@1.2.3");
+  });
+
+  it("uses a distinct marker tag for staged packages awaiting approval", () => {
+    expect(stagedPackageTagName("1.2.3")).toStrictEqual("effect-view-server@1.2.3-staged");
+  });
+
+  it("stages npm packages instead of publishing directly", () => {
+    expect(stagePublishCommandArguments("/tmp/effect-view-server")).toStrictEqual([
+      "stage",
+      "publish",
+      "/tmp/effect-view-server",
+      "--provenance",
+      "--access",
+      "public",
+    ]);
+  });
+
+  it("detects duplicate staged package publish output for idempotent reruns", () => {
+    expect(
+      isDuplicateStagePublishOutput({
+        stderr: "npm error You cannot publish over the previously published versions: 1.2.3.",
+        stdout: "",
+        version: "1.2.3",
+      }),
+    ).toStrictEqual(true);
+    expect(
+      isDuplicateStagePublishOutput({
+        stderr: "",
+        stdout: "version 1.2.3 is already staged",
+        version: "1.2.3",
+      }),
+    ).toStrictEqual(true);
+    expect(
+      isDuplicateStagePublishOutput({
+        stderr: "npm error authentication failed",
+        stdout: "",
+        version: "1.2.3",
+      }),
+    ).toStrictEqual(false);
   });
 });

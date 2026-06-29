@@ -149,7 +149,10 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Use Changesets for release intent. If a PR should publish a new npm version, add a changeset with `vp run -w changeset`. Do not add a changeset for private-only CI, docs, examples, benchmark, or internal-only changes that should not publish.
 - Merging an ordinary PR to `main` must not publish npm. The release workflow only publishes after a changeset has produced a version bump and the generated version PR is merged to `main`.
 - npm publishing uses GitHub Actions trusted publishing/OIDC from `.github/workflows/release.yml`. Do not add `NPM_TOKEN`; keep `id-token: write` and `publishConfig.provenance: true`.
-- The release workflow may build with `vp`, but must invoke `node scripts/release-publish.mjs` directly for the final publish so GitHub's OIDC environment reaches `npm publish`.
+- The npm trusted publisher must allow `npm stage publish` only. Do not enable direct `npm publish` unless explicitly changing the release process.
+- The release workflow may build with `vp`, but must invoke `node scripts/release-publish.mjs` directly for the final stage publish so GitHub's OIDC environment reaches `npm stage publish`.
+- CI stages npm releases with `npm stage publish`; a maintainer approves the staged package later with `npm stage approve <stage-id>` or rejects it with `npm stage reject <stage-id>`.
+- The stage job may push an `effect-view-server@<version>-staged` marker tag to make reruns idempotent while npm approval is pending. Do not create the public `effect-view-server@<version>` release tag until the package is actually published.
 
 ## Common Blockers
 

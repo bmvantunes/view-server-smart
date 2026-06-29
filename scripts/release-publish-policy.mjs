@@ -16,6 +16,30 @@ const definedEntries = (entries) =>
 
 export const packageTagName = (version) => `${publicPackageName}@${version}`;
 
+export const stagedPackageTagName = (version) => `${packageTagName(version)}-staged`;
+
+export const stagePublishCommandArguments = (stageDirectory) => [
+  "stage",
+  "publish",
+  stageDirectory,
+  "--provenance",
+  "--access",
+  "public",
+];
+
+const escapedRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export const isDuplicateStagePublishOutput = ({ stderr, stdout, version }) => {
+  const output = `${stdout}\n${stderr}`;
+  const versionPattern = escapedRegExp(version);
+  const duplicatePattern = "(already exists|already staged|cannot publish over|previously published)";
+
+  return new RegExp(
+    `(?:${duplicatePattern}).*${versionPattern}|${versionPattern}.*(?:${duplicatePattern})`,
+    "i",
+  ).test(output);
+};
+
 export const stripSourceMapReference = (contents) =>
   contents.replace(/(?:\n)?\/\/# sourceMappingURL=.*(?:\n|$)/g, "\n");
 

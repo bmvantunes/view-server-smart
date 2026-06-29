@@ -16,7 +16,7 @@ Before the first publish, configure npm Trusted Publishing for the
 - Package name: `effect-view-server`
 - Repository: `bmvantunes/effect-view-server`
 - Workflow file: `release.yml`
-- Allowed action: `npm publish`
+- Allowed action: `npm stage publish`
 - Environment: leave unset unless the workflow is also changed to use a GitHub
   environment
 
@@ -27,8 +27,10 @@ publish job installs a known npm CLI version because trusted publishing requires
 modern npm OIDC support.
 
 The package already sets `publishConfig.provenance: true`, and the release
-workflow has `id-token: write`, so npm can attach provenance to published
-versions.
+workflow has `id-token: write`, so npm can attach provenance to staged
+versions. Staged publishing requires the package to already exist on npm; this
+repository was bootstrapped with a one-time manual `effect-view-server@0.0.1`
+publish before stage-only automation was enabled.
 
 ## Contributor flow
 
@@ -59,13 +61,19 @@ On every push to `main`, `.github/workflows/release.yml` runs:
 4. Changesets action
 
 If unreleased changesets exist, the action opens or updates a `Version packages`
-PR. When that PR is merged, the same workflow builds `effect-view-server`,
-stages a sanitized npm artifact, and publishes that staged artifact through
-trusted publishing. The staged artifact intentionally excludes source maps,
-source-map references, scripts, dev dependencies, internal
+PR. When that PR is merged, the same workflow builds `effect-view-server` and
+stages a sanitized npm artifact through trusted publishing. A maintainer must
+then approve the staged package with `npm stage approve <stage-id>` to publish
+it publicly, or reject it with `npm stage reject <stage-id>`. The staged
+artifact intentionally excludes source maps, source-map references, scripts,
+dev dependencies, internal
 `@effect-view-server/*` workspace metadata, and internal workspace import
 specifiers. The publish script skips `effect-view-server@0.0.0`, so enabling
 this workflow cannot accidentally publish the placeholder development version.
+The staging job may push an `effect-view-server@<version>-staged` marker tag so
+workflow reruns do not try to stage the same semver version again while approval
+is pending. The public `effect-view-server@<version>` release tag is only
+created after npm reports that the version is actually published.
 
 ## Manual checks
 

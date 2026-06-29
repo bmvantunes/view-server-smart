@@ -3,12 +3,15 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, wri
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
+  isDuplicateStagePublishOutput,
   packageTagName,
   oidcPublishEnvironmentViolations,
   publishedFileViolations,
   publicPackageName,
   publishDecision,
   sanitizePublicPackageJson,
+  stagedPackageTagName,
+  stagePublishCommandArguments,
   stripSourceMapReference,
 } from "./release-publish-policy.mjs";
 
@@ -73,7 +76,9 @@ const run = (command, args, options = {}) => {
   });
 
   if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+    throw Object.assign(new Error(`${command} ${args.join(" ")} failed.`), {
+      exitCode: result.status ?? 1,
+    });
   }
 };
 
@@ -118,15 +123,22 @@ const assertCleanPublishedFiles = (stageDirectory) => {
   const violations = publishedFileViolations(collectPublishedFiles(stageDirectory));
 
   if (violations.length > 0) {
-    process.stderr.write(
+    throw new Error(
       [
-        "Refusing npm publish because the staged package contains private workspace artifacts.",
+        "Refusing npm stage publish because the staged package contains private workspace artifacts.",
         ...violations.map((violation) => `- ${violation}`),
       ].join("\n"),
     );
-    process.stderr.write("\n");
-    process.exit(1);
   }
+};
+
+const isPackageAlreadyCreated = () => {
+  const result = commandResult("npm", ["view", publicPackageName, "name", "--json"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+  return result.status === 0 && JSON.parse(result.stdout) === publicPackageName;
 };
 
 const isVersionAlreadyPublished = () => {
@@ -142,19 +154,55 @@ const isVersionAlreadyPublished = () => {
   return result.status === 0 && JSON.parse(result.stdout) === version;
 };
 
-const ensureGitTag = () => {
-  const tagName = packageTagName(version);
+const runStagePublish = (stageDirectory) => {
+  const result = commandResult("npm", stagePublishCommandArguments(stageDirectory), {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+
+  if (result.status === 0) {
+    return {
+      _tag: "Staged",
+    };
+  }
+
+  if (
+    isDuplicateStagePublishOutput({
+      stderr: result.stderr,
+      stdout: result.stdout,
+      version,
+    })
+  ) {
+    return {
+      _tag: "AlreadyStaged",
+    };
+  }
+
+  throw Object.assign(new Error(`npm ${stagePublishCommandArguments(stageDirectory).join(" ")} failed.`), {
+    exitCode: result.status ?? 1,
+  });
+};
+
+const gitTagExists = (tagName) => {
   const existingTag = commandResult("git", ["rev-parse", "--quiet", "--verify", `refs/tags/${tagName}`], {
     stdio: "ignore",
   });
 
-  if (existingTag.status === 0) {
+  return existingTag.status === 0;
+};
+
+const ensureGitTag = (tagName) => {
+  if (gitTagExists(tagName)) {
     return;
   }
 
   run("git", ["tag", "-a", tagName, "-m", tagName]);
 };
 
+let exitCode = 0;
 const stageDirectory = mkdtempSync(join(tmpdir(), "effect-view-server-publish-"));
 
 try {
@@ -176,24 +224,49 @@ try {
 
   if (isVersionAlreadyPublished()) {
     process.stdout.write(`${publicPackageName}@${version} is already published; ensuring git tag.\n`);
-    ensureGitTag();
-    process.exit(0);
-  }
+    ensureGitTag(packageTagName(version));
+  } else {
+    if (!isPackageAlreadyCreated()) {
+      throw new Error(
+        `${publicPackageName} must exist on npm before staged publishing can be used. Publish the first version manually, then rerun this workflow.`,
+      );
+    }
 
-  const oidcViolations = oidcPublishEnvironmentViolations(process.env);
-  if (oidcViolations.length > 0) {
-    process.stderr.write(
-      [
-        "Refusing npm publish because GitHub Actions OIDC is unavailable.",
-        ...oidcViolations.map((violation) => `- ${violation}`),
-      ].join("\n"),
-    );
-    process.stderr.write("\n");
-    process.exit(1);
-  }
+    const stagedTagName = stagedPackageTagName(version);
 
-  run("npm", ["publish", stageDirectory, "--provenance", "--access", "public"]);
-  ensureGitTag();
+    if (gitTagExists(stagedTagName)) {
+      process.stdout.write(`${publicPackageName}@${version} is already staged; skipping npm stage publish.\n`);
+    } else {
+      const oidcViolations = oidcPublishEnvironmentViolations(process.env);
+      if (oidcViolations.length > 0) {
+        throw new Error(
+          [
+            "Refusing npm stage publish because GitHub Actions OIDC is unavailable.",
+            ...oidcViolations.map((violation) => `- ${violation}`),
+          ].join("\n"),
+        );
+      }
+
+      const stageResult = runStagePublish(stageDirectory);
+
+      if (stageResult._tag === "AlreadyStaged") {
+        process.stdout.write(
+          `${publicPackageName}@${version} is already staged in npm; repairing staged marker tag.\n`,
+        );
+      }
+
+      ensureGitTag(stagedTagName);
+    }
+  }
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  exitCode =
+    typeof error === "object" &&
+    error !== null &&
+    "exitCode" in error &&
+    typeof error.exitCode === "number"
+      ? error.exitCode
+      : 1;
 } finally {
   rmSync(stageDirectory, {
     force: true,
@@ -201,4 +274,4 @@ try {
   });
 }
 
-process.exit(0);
+process.exit(exitCode);
