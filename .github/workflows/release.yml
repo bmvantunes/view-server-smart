@@ -86,6 +86,9 @@ jobs:
       - name: Install dependencies
         run: vp install --frozen-lockfile
 
+      - name: Install npm for trusted publishing
+        run: npm install --global npm@11.17.0
+
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
@@ -93,6 +96,7 @@ jobs:
 
       - name: Verify npm trusted publishing OIDC
         run: |
+          npm --version
           node -e "if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) throw new Error('GitHub Actions OIDC token is unavailable. Check that the publish job has id-token: write.');"
 
       - name: Publish to npm

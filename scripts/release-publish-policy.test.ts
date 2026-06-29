@@ -43,7 +43,7 @@ const publicPackageJson = {
   license: "MIT",
   repository: {
     type: "git",
-    url: "https://github.com/bmvantunes/effect-view-server.git",
+    url: "git+https://github.com/bmvantunes/effect-view-server.git",
     directory: "packages/effect-view-server",
   },
   type: "module",
@@ -200,7 +200,7 @@ describe("release publish policy", () => {
       license: "MIT",
       repository: {
         type: "git",
-        url: "https://github.com/bmvantunes/effect-view-server.git",
+        url: "git+https://github.com/bmvantunes/effect-view-server.git",
         directory: "packages/effect-view-server",
       },
       type: "module",
