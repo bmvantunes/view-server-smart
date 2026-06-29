@@ -65,8 +65,9 @@ PR. When that PR is merged, the same workflow builds `effect-view-server` and
 stages a sanitized npm artifact through trusted publishing. A maintainer must
 then approve the staged package with `npm stage approve <stage-id>` to publish
 it publicly, or reject it with `npm stage reject <stage-id>`. After approval,
-manually run the `Release` workflow on `main`; the release script observes that
-the version is now public and creates the public
+manually run the `Release` workflow on `main` with the approved version as the
+workflow input; the release script observes that the exact version is now public
+and creates the public
 `effect-view-server@<version>` git tag. The staged artifact intentionally
 excludes source maps, source-map references, scripts, dev dependencies, internal
 `@effect-view-server/*` workspace metadata, and internal workspace import

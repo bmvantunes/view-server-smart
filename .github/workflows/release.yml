@@ -5,6 +5,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Published effect-view-server version to tag after npm stage approve"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ concurrency:
 jobs:
   version:
     name: Ready and version PR
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -51,7 +57,6 @@ jobs:
 
       - name: Create version PR
         id: changesets
-        if: github.event_name == 'push'
         uses: changesets/action@v1
         with:
           title: "Version packages"
@@ -65,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: version
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || needs.version.outputs.hasChangesets == 'false')
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.version.outputs.hasChangesets == 'false'
     permissions:
       contents: write
       id-token: write
@@ -105,3 +110,34 @@ jobs:
         run: |
           vp run effect-view-server#build
           node scripts/release-publish.mjs
+
+  finalize:
+    name: Finalize approved npm stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version: "26"
+          version: "0.2.1"
+          cache: false
+          run-install: false
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Tag approved npm version
+        run: node scripts/release-publish.mjs --finalize-version "${{ inputs.version }}"

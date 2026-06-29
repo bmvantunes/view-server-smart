@@ -17,7 +17,9 @@ import {
 
 const packageUrl = new URL("../packages/effect-view-server/package.json", import.meta.url);
 const packageJson = JSON.parse(readFileSync(packageUrl, "utf8"));
-const version = packageJson.version;
+const finalizeVersion =
+  process.argv[2] === "--finalize-version" && process.argv[3] !== undefined ? process.argv[3] : undefined;
+const version = finalizeVersion ?? packageJson.version;
 const workspacePackages = [];
 const workspacePackageDirectories = ["apps", "examples", "packages", "tools"];
 
@@ -154,28 +156,6 @@ const isVersionAlreadyPublished = () => {
   return result.status === 0 && JSON.parse(result.stdout) === version;
 };
 
-const hasPendingStageForVersion = () => {
-  const result = commandResult("npm", ["stage", "list", `${publicPackageName}@${version}`, "--json"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  if (result.status !== 0) {
-    throw Object.assign(
-      new Error(`npm stage list ${publicPackageName}@${version} --json failed.\n${result.stderr}`),
-      {
-        exitCode: result.status ?? 1,
-      },
-    );
-  }
-
-  const stages = JSON.parse(result.stdout);
-
-  return Array.isArray(stages)
-    ? stages.length > 0
-    : stages !== null && typeof stages === "object" && Object.keys(stages).length > 0;
-};
-
 const runStagePublish = (stageDirectory) => {
   const result = commandResult("npm", stagePublishCommandArguments(stageDirectory), {
     encoding: "utf8",
@@ -215,14 +195,23 @@ const gitRefTarget = (ref) => {
   return target.status === 0 ? target.stdout.trim() : undefined;
 };
 
+const gitRefObject = (ref) => {
+  const target = commandResult("git", ["rev-parse", "--quiet", "--verify", ref], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+  return target.status === 0 ? target.stdout.trim() : undefined;
+};
+
 const gitTagExists = (tagName) => gitRefTarget(`refs/tags/${tagName}`) !== undefined;
 
-const pushGitTag = (tagName, moved) => {
+const pushGitTag = (tagName, expectedRemoteObject) => {
   run(
     "git",
-    moved
-      ? ["push", `--force-with-lease=refs/tags/${tagName}`, "origin", `refs/tags/${tagName}`]
-      : ["push", "origin", `refs/tags/${tagName}`],
+    expectedRemoteObject === undefined
+      ? ["push", "origin", `refs/tags/${tagName}`]
+      : ["push", `--force-with-lease=refs/tags/${tagName}:${expectedRemoteObject}`, "origin", `refs/tags/${tagName}`],
   );
 };
 
@@ -234,6 +223,7 @@ const ensureGitTag = (tagName, targetRef = "HEAD", options = {}) => {
   }
 
   const existingTarget = gitRefTarget(`refs/tags/${tagName}`);
+  const existingObject = gitRefObject(`refs/tags/${tagName}`);
 
   if (existingTarget !== undefined) {
     if (existingTarget !== expectedTarget) {
@@ -242,7 +232,7 @@ const ensureGitTag = (tagName, targetRef = "HEAD", options = {}) => {
       }
 
       run("git", ["tag", "-f", "-a", tagName, targetRef, "-m", tagName]);
-      pushGitTag(tagName, true);
+      pushGitTag(tagName, existingObject);
       return;
     }
 
@@ -250,7 +240,7 @@ const ensureGitTag = (tagName, targetRef = "HEAD", options = {}) => {
   }
 
   run("git", ["tag", "-a", tagName, targetRef, "-m", tagName]);
-  pushGitTag(tagName, false);
+  pushGitTag(tagName, undefined);
 };
 
 const ensurePublishedVersionTag = () => {
@@ -266,50 +256,44 @@ const ensurePublishedVersionTag = () => {
 };
 
 let exitCode = 0;
-const stageDirectory = mkdtempSync(join(tmpdir(), "effect-view-server-publish-"));
+const stageDirectory =
+  finalizeVersion === undefined ? mkdtempSync(join(tmpdir(), "effect-view-server-publish-")) : undefined;
 
 try {
-  const distUrl = new URL("../packages/effect-view-server/dist/", import.meta.url);
-  const distDirectory = join(stageDirectory, "dist");
-
-  cpSync(distUrl, distDirectory, {
-    recursive: true,
-    filter: (source) => !source.endsWith(".map"),
-  });
-  stripPublishedSourceMapReferences(distDirectory);
-  cpSync(new URL("../README.md", import.meta.url), join(stageDirectory, "README.md"));
-  writeFileSync(
-    join(stageDirectory, "package.json"),
-    `${JSON.stringify(sanitizePublicPackageJson(packageJson), null, 2)}\n`,
-  );
-
-  assertCleanPublishedFiles(stageDirectory);
-
-  if (isVersionAlreadyPublished()) {
-    process.stdout.write(`${publicPackageName}@${version} is already published; ensuring git tag.\n`);
-    ensurePublishedVersionTag();
-  } else {
-    if (!isPackageAlreadyCreated()) {
-      throw new Error(
-        `${publicPackageName} must exist on npm before staged publishing can be used. Publish the first version manually, then rerun this workflow.`,
-      );
+  if (finalizeVersion !== undefined) {
+    if (!isVersionAlreadyPublished()) {
+      throw new Error(`${publicPackageName}@${version} is not published yet; approve the npm stage first.`);
     }
 
-    const stagedTagName = stagedPackageTagName(version);
+    process.stdout.write(`${publicPackageName}@${version} is published; ensuring git tag.\n`);
+    ensurePublishedVersionTag();
+  } else {
+    const distUrl = new URL("../packages/effect-view-server/dist/", import.meta.url);
+    const distDirectory = join(stageDirectory, "dist");
 
-    const pendingStageExists = hasPendingStageForVersion();
+    cpSync(distUrl, distDirectory, {
+      recursive: true,
+      filter: (source) => !source.endsWith(".map"),
+    });
+    stripPublishedSourceMapReferences(distDirectory);
+    cpSync(new URL("../README.md", import.meta.url), join(stageDirectory, "README.md"));
+    writeFileSync(
+      join(stageDirectory, "package.json"),
+      `${JSON.stringify(sanitizePublicPackageJson(packageJson), null, 2)}\n`,
+    );
 
-    if (pendingStageExists) {
-      if (!gitTagExists(stagedTagName)) {
+    assertCleanPublishedFiles(stageDirectory);
+
+    if (isVersionAlreadyPublished()) {
+      process.stdout.write(`${publicPackageName}@${version} is already published; ensuring git tag.\n`);
+      ensurePublishedVersionTag();
+    } else {
+      if (!isPackageAlreadyCreated()) {
         throw new Error(
-          `${publicPackageName}@${version} is pending npm approval, but ${stagedTagName} is missing. Refusing to create an untraceable staged marker.`,
+          `${publicPackageName} must exist on npm before staged publishing can be used. Publish the first version manually, then rerun this workflow.`,
         );
       }
 
-      process.stdout.write(
-        `${publicPackageName}@${version} is already pending npm approval; keeping ${stagedTagName}.\n`,
-      );
-    } else {
       const oidcViolations = oidcPublishEnvironmentViolations(process.env);
       if (oidcViolations.length > 0) {
         throw new Error(
@@ -320,12 +304,8 @@ try {
         );
       }
 
-      ensureGitTag(stagedTagName, "HEAD", {
-        allowMove: true,
-      });
-
+      const stagedTagName = stagedPackageTagName(version);
       const stageResult = runStagePublish(stageDirectory);
-
       const duplicateVersionIsPublished =
         (stageResult._tag === "AlreadyPublished" || stageResult._tag === "DuplicateVersion") &&
         isVersionAlreadyPublished();
@@ -335,32 +315,22 @@ try {
           `${publicPackageName}@${version} is already published; ensuring public git tag.\n`,
         );
         ensurePublishedVersionTag();
-      } else {
-        if (stageResult._tag === "DuplicateVersion") {
-          if (!hasPendingStageForVersion()) {
-            throw new Error(
-              `npm reported a duplicate ${publicPackageName}@${version}, but npm stage list does not show a pending stage and npm view does not report it as published.`,
-            );
-          }
-
-          process.stdout.write(
-            `${publicPackageName}@${version} has a pending npm stage after a duplicate response; keeping staged marker tag.\n`,
+      } else if (stageResult._tag === "Staged") {
+        ensureGitTag(stagedTagName, "HEAD", {
+          allowMove: true,
+        });
+      } else if (stageResult._tag === "AlreadyStaged" || stageResult._tag === "AlreadyPublished") {
+        if (!gitTagExists(stagedTagName)) {
+          throw new Error(
+            `npm reported ${publicPackageName}@${version} as already staged, but ${stagedTagName} is missing. Refusing to create an untraceable staged marker.`,
           );
         }
 
-        if (stageResult._tag === "AlreadyStaged" || stageResult._tag === "AlreadyPublished") {
-          if (!hasPendingStageForVersion()) {
-            throw new Error(
-              `npm reported ${publicPackageName}@${version} as staged, but npm stage list does not show a pending stage.`,
-            );
-          }
-
-          process.stdout.write(
-            `${publicPackageName}@${version} is already staged in npm; ensuring staged marker tag.\n`,
-          );
-        }
-
-        ensureGitTag(stagedTagName);
+        process.stdout.write(`${publicPackageName}@${version} is already staged; keeping ${stagedTagName}.\n`);
+      } else if (stageResult._tag === "DuplicateVersion") {
+        throw new Error(
+          `npm reported a duplicate ${publicPackageName}@${version}, but npm view does not report it as published. Refusing to guess whether a stage exists.`,
+        );
       }
     }
   }
@@ -374,10 +344,12 @@ try {
       ? error.exitCode
       : 1;
 } finally {
-  rmSync(stageDirectory, {
-    force: true,
-    recursive: true,
-  });
+  if (stageDirectory !== undefined) {
+    rmSync(stageDirectory, {
+      force: true,
+      recursive: true,
+    });
+  }
 }
 
 process.exit(exitCode);
