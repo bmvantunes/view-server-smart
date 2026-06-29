@@ -13,11 +13,16 @@ with `id-token: write`.
 Before the first publish, configure npm Trusted Publishing for the
 `effect-view-server` package:
 
+- Package name: `effect-view-server`
 - Repository: `bmvantunes/effect-view-server`
 - Workflow file: `release.yml`
 - Allowed action: `npm publish`
 - Environment: leave unset unless the workflow is also changed to use a GitHub
   environment
+
+The public package manifest uses the HTTPS repository URL
+`https://github.com/bmvantunes/effect-view-server.git`; keep that aligned with
+the npm trusted publisher repository instead of using an SSH URL.
 
 The package already sets `publishConfig.provenance: true`, and the release
 workflow has `id-token: write`, so npm can attach provenance to published

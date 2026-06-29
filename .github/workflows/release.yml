@@ -91,6 +91,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Verify npm trusted publishing OIDC
+        run: |
+          node -e "if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) throw new Error('GitHub Actions OIDC token is unavailable. Check that the publish job has id-token: write.');"
+
       - name: Publish to npm
         run: |
           vp run -w release:publish
