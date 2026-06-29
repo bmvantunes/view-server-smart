@@ -40,6 +40,7 @@ import * as runtimeRootPackage from "@effect-view-server/runtime";
 import * as serverPackage from "@effect-view-server/server";
 import * as publicClientPackage from "effect-view-server/client";
 import * as publicClientRemotePackage from "effect-view-server/client/remote";
+import * as publicRootPackage from "effect-view-server";
 import * as publicConfigPackage from "effect-view-server/config";
 import * as publicConfigGrpcPackage from "effect-view-server/config/grpc";
 import * as publicConfigHealthPackage from "effect-view-server/config/health";
@@ -127,6 +128,7 @@ const approvedPackageExports = [
   "@effect-view-server/runtime-core",
   "@effect-view-server/runtime-core/internal",
   "@effect-view-server/server",
+  "effect-view-server",
   "effect-view-server/client",
   "effect-view-server/client/remote",
   "effect-view-server/column-live-view-engine",
@@ -422,6 +424,11 @@ requireExport("@effect-view-server/runtime", runtimeRootPackage, "runViewServerR
 requireExport("@effect-view-server/server", serverPackage, "makeViewServerWebSocketServer");
 requireExport("@effect-view-server/server", serverPackage, "createViewServerWebSocketServer");
 
+requireExport("effect-view-server", publicRootPackage, "defineViewServerConfig");
+requireExport("effect-view-server", publicRootPackage, "defineKafkaTopic");
+requireExport("effect-view-server", publicRootPackage, "defineGrpcFeed");
+requireExport("effect-view-server", publicRootPackage, "grpc");
+requireExport("effect-view-server", publicRootPackage, "kafka");
 requireExport("effect-view-server/config", publicConfigPackage, "defineViewServerConfig");
 requireExport("effect-view-server/config", publicConfigPackage, "defineKafkaTopic");
 requireExport("effect-view-server/config", publicConfigPackage, "defineGrpcFeed");

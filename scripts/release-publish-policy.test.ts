@@ -52,11 +52,19 @@ const publicPackageJson = {
     directory: "packages/effect-view-server",
   },
   type: "module",
+  sideEffects: false,
   exports: {
+    ".": {
+      types: "./dist/index.d.ts",
+      import: "./dist/index.js",
+    },
     "./client": {
       types: "./dist/client.d.ts",
       import: "./dist/client.js",
     },
+  },
+  engines: {
+    node: ">=26.0.0",
   },
   files: ["dist", "README.md"],
   publishConfig: {
@@ -252,11 +260,19 @@ describe("release publish policy", () => {
         directory: "packages/effect-view-server",
       },
       type: "module",
+      sideEffects: false,
       exports: {
+        ".": {
+          types: "./dist/index.d.ts",
+          import: "./dist/index.js",
+        },
         "./client": {
           types: "./dist/client.d.ts",
           import: "./dist/client.js",
         },
+      },
+      engines: {
+        node: ">=26.0.0",
       },
       files: ["dist", "README.md"],
       publishConfig: {
@@ -283,22 +299,38 @@ describe("release publish policy", () => {
         name: publicPackageName,
         version: "1.2.3",
         type: "module",
+        sideEffects: false,
         exports: {
+          ".": {
+            types: "./dist/index.d.ts",
+            import: "./dist/index.js",
+          },
           "./client": {
             types: "./dist/client.d.ts",
             import: "./dist/client.js",
           },
+        },
+        engines: {
+          node: ">=26.0.0",
         },
       }),
     ).toStrictEqual({
       name: "effect-view-server",
       version: "1.2.3",
       type: "module",
+      sideEffects: false,
       exports: {
+        ".": {
+          types: "./dist/index.d.ts",
+          import: "./dist/index.js",
+        },
         "./client": {
           types: "./dist/client.d.ts",
           import: "./dist/client.js",
         },
+      },
+      engines: {
+        node: ">=26.0.0",
       },
       files: ["dist", "README.md"],
       publishConfig: {
