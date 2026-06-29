@@ -147,6 +147,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Publish only the `effect-view-server` package. Internal `@effect-view-server/*` workspace packages stay private and must not be published separately.
 - The npm publish artifact must be staged and sanitized before publishing. Do not publish the workspace package directory directly. The staged artifact must exclude source maps, source-map references, scripts, dev dependencies, internal `@effect-view-server/*` package metadata, and internal workspace import specifiers.
 - Use Changesets for release intent. If a PR should publish a new npm version, add a changeset with `vp run -w changeset`. Do not add a changeset for private-only CI, docs, examples, benchmark, or internal-only changes that should not publish.
+- Merging an ordinary PR to `main` must not publish npm. The release workflow only publishes after a changeset has produced a version bump and the generated version PR is merged to `main`.
 - npm publishing uses GitHub Actions trusted publishing/OIDC from `.github/workflows/release.yml`. Do not add `NPM_TOKEN`; keep `id-token: write` and `publishConfig.provenance: true`.
 
 ## Common Blockers
