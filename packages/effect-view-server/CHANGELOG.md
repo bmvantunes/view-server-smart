@@ -1,5 +1,11 @@
 # effect-view-server
 
+## 0.0.3
+
+### Patch Changes
+
+- 4893656: Harden the published package metadata by adding the root package export, preserving tree-shaking and engine metadata in the release artifact, and refreshing vulnerable transitive dependency ranges.
+
 ## 0.0.2
 
 ### Patch Changes
