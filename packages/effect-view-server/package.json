@@ -1,6 +1,6 @@
 {
   "name": "effect-view-server",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Typed Effect View Server for live query snapshots, deltas, React bindings, and runtime ingress adapters.",
   "keywords": [
     "effect",

@@ -7,5 +7,24 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": []
+  "ignore": [
+    "@effect-view-server/client",
+    "@effect-view-server/column-live-view-engine",
+    "@effect-view-server/config",
+    "@effect-view-server/effect-utils",
+    "@effect-view-server/example",
+    "@effect-view-server/example-combined-sources-react",
+    "@effect-view-server/example-grpc-leased-react",
+    "@effect-view-server/example-grpc-materialized-react",
+    "@effect-view-server/example-in-memory-react",
+    "@effect-view-server/example-kafka-react",
+    "@effect-view-server/example-ssr-react",
+    "@effect-view-server/example-tcp-publisher-react",
+    "@effect-view-server/in-memory",
+    "@effect-view-server/protocol",
+    "@effect-view-server/react",
+    "@effect-view-server/runtime",
+    "@effect-view-server/runtime-core",
+    "@effect-view-server/server"
+  ]
 }
