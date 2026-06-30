@@ -53,6 +53,7 @@ import {
   messageFromUnknown,
   offerKafkaStreamProducerFailure,
   processKafkaMessage,
+  processKafkaMessageBatch,
   recordKafkaAssignments,
   recordKafkaLag,
   recordKafkaStreamError,
@@ -4183,6 +4184,74 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect("deletes tombstones through the standalone Kafka batch processor", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      const committedOffsets: Array<bigint> = [];
+
+      yield* processKafkaMessageBatch(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        kafkaOptions,
+        ledger,
+        "local",
+        [
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "standalone-batch-tombstone",
+            value: JSON.stringify({
+              customerId: "customer-before-standalone-delete",
+              price: 10,
+            }),
+            offset: 1n,
+            onCommit: () => {
+              committedOffsets.push(1n);
+            },
+          }),
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "standalone-batch-tombstone",
+            value: null,
+            offset: 2n,
+            onCommit: () => {
+              committedOffsets.push(2n);
+            },
+          }),
+        ],
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(committedOffsets).toStrictEqual([1n, 2n]);
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 2,
+      });
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("3");
+
+      yield* runtimeCore.close;
+    }),
+  );
+
   it.effect("deletes rows when Kafka emits an undefined tombstone value for a key", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -4310,6 +4379,163 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
         version: 2,
       });
       expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("9");
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("deletes Kafka tombstones by the mapped row id remembered for the source key", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const transformedKeyOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: `mapped-${key}`,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: transformedKeyOptions.consume,
+        regions: transformedKeyOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+
+      yield* runKafkaMessageStream(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        transformedKeyOptions,
+        ledger,
+        "local",
+        (async function* () {
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "source-key-for-mapped-row",
+            value: JSON.stringify({
+              customerId: "customer-mapped-key",
+              price: 10,
+            }),
+            offset: 1n,
+          });
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "source-key-for-mapped-row",
+            value: null,
+            offset: 2n,
+          });
+        })(),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 2,
+      });
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("3");
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("publishes Kafka rows whose decoded source key is not a tombstone row id", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const numericKeyOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "numeric-key",
+              decode: () => Effect.succeed(42),
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: `numeric-${key}`,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: numericKeyOptions.consume,
+        regions: numericKeyOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+
+      yield* runKafkaMessageStream(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        numericKeyOptions,
+        ledger,
+        "local",
+        (async function* () {
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "unused-by-custom-codec",
+            value: JSON.stringify({
+              customerId: "customer-numeric-key",
+              price: 10,
+            }),
+            offset: 1n,
+          });
+        })(),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [
+          {
+            customerId: "customer-numeric-key",
+            id: "numeric-42",
+            price: 10,
+          },
+        ],
+        totalRows: 1,
+        version: 1,
+      });
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("2");
 
       yield* runtimeCore.close;
     }),
@@ -4451,6 +4677,111 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect("preserves grouped row batching when row-only Kafka topics interleave", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const preciseSourceTopic = "precise-position-row-only-source";
+      const multiTopicOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-row-only-interleave-test",
+        ...committedKafkaStart("view-server-row-only-interleave-test"),
+        regions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+          [preciseSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingPrecisePosition),
+            key: kafka.stringKey(),
+            viewServerTopic: "precisePositions",
+            mapping: ({ key, value }) => ({
+              id: key,
+              accountId: value.accountId,
+              quantity: value.quantity,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: multiTopicOptions.consume,
+        regions: multiTopicOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+          [preciseSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "precisePositions",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* ledger.topicConnected(preciseSourceTopic, "local", 1, 1_000);
+      const operations: Array<string> = [];
+      const batchingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        publishMany: (topic, rows) =>
+          Effect.sync(() => {
+            operations.push(`publishMany:${topic}:${rows.length}`);
+          }).pipe(Effect.andThen(runtimeCore.client.publishMany(topic, rows))),
+      };
+
+      yield* runKafkaMessageStream(
+        viewServer,
+        batchingClient,
+        runtimeCore.requestHealthRefresh,
+        multiTopicOptions,
+        ledger,
+        "local",
+        (async function* () {
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "row-only-order-1",
+            value: JSON.stringify({
+              customerId: "customer-row-only-1",
+              price: 30,
+            }),
+            offset: 1n,
+          });
+          yield kafkaMessage({
+            topic: preciseSourceTopic,
+            key: "row-only-position-1",
+            value: JSON.stringify({
+              accountId: "account-row-only-1",
+              quantity: "10",
+              price: "20",
+            }),
+            offset: 2n,
+          });
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "row-only-order-2",
+            value: JSON.stringify({
+              customerId: "customer-row-only-2",
+              price: 40,
+            }),
+            offset: 3n,
+          });
+        })(),
+      );
+
+      expect(operations).toStrictEqual(["publishMany:orders:2", "publishMany:precisePositions:1"]);
+
+      yield* runtimeCore.close;
+    }),
+  );
+
   it.effect("preserves cross-topic tombstone ordering inside Kafka microbatches", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -4561,9 +4892,8 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
       );
 
       expect(operations).toStrictEqual([
-        "publishMany:orders:1",
+        "publishMany:orders:2",
         "publishMany:precisePositions:1",
-        "publishMany:orders:1",
         "delete:precisePositions:cross-topic-position",
       ]);
 
@@ -7816,7 +8146,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
                 value: kafka.json(IncomingOrder),
                 key: kafka.codec({
                   name: "object-non-string-id-key",
-                  decode: () => Effect.succeed({ id: 123 }),
+                  decode: () => Effect.succeed({ id: 123, tenantId: "tenant-1" }),
                 }),
                 viewServerTopic: "orders",
                 mapping: ({ key, value }) => ({

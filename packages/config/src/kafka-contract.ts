@@ -1073,6 +1073,7 @@ export type KafkaDecodedTopicMessage<
   Topics extends KafkaTopicSchemaRegistry,
   ViewTopic extends Extract<keyof Topics, string>,
 > = {
+  readonly sourceKey: unknown;
   readonly viewServerTopic: ViewTopic;
   readonly row: TopicRow<Topics, ViewTopic>;
 };
@@ -1587,6 +1588,7 @@ const makeKafkaTopicWithKey = <
         }),
       );
       return {
+        sourceKey: key,
         viewServerTopic: topic.viewServerTopic,
         row,
       };
@@ -1629,6 +1631,7 @@ const makeKafkaTopicWithoutKey = <
         }),
       );
       return {
+        sourceKey: key,
         viewServerTopic: topic.viewServerTopic,
         row,
       };

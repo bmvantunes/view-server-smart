@@ -6005,6 +6005,7 @@ describe("public type surface", () => {
           metadata: kafkaTestMetadata("london"),
         }),
       ).toStrictEqual({
+        sourceKey: "order-1",
         viewServerTopic: "orders",
         row: {
           id: "order-1",
@@ -6077,6 +6078,10 @@ describe("public type surface", () => {
           metadata: kafkaTestMetadata("usa"),
         }),
       ).toStrictEqual({
+        sourceKey: {
+          $typeName: "viewserver.test.OrderKey",
+          orderId: "order-keyed-1",
+        },
         viewServerTopic: "orders",
         row: {
           id: "order-keyed-1",
@@ -6154,6 +6159,7 @@ describe("public type surface", () => {
           price: BigDecimal.format(decodedJsonPositionPrice),
         },
       }).toStrictEqual({
+        sourceKey: "position-json-1",
         viewServerTopic: "positions",
         row: {
           id: "position-json-1",
