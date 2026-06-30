@@ -6015,7 +6015,6 @@ describe("public type surface", () => {
           updatedAt: 1,
         },
       });
-
       const keyedTopic = kafkaTopic({
         regions: ["usa"],
         value: kafka.protobuf(ordersValueSchema),
@@ -6088,6 +6087,28 @@ describe("public type surface", () => {
           updatedAt: 2,
         },
       });
+
+      const stringKeyedTopic = kafkaTopic({
+        regions: ["usa"],
+        value: kafka.protobuf(ordersValueSchema),
+        key: kafka.stringKey(),
+        viewServerTopic: "orders",
+        mapping: ({ key, value, region }) => {
+          expectTypeOf(key).toEqualTypeOf<string>();
+          expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
+          expectTypeOf(region).toEqualTypeOf<"usa">();
+          return {
+            id: key,
+            customerId: value.customerId,
+            status: value.status,
+            price: value.price,
+            region,
+            updatedAt: value.updatedAt,
+          };
+        },
+      });
+      expect(stringKeyedTopic.key.format).toBe("string");
+
       expectTypeOf(invalidKeyedTopicRegion).not.toBeAny();
 
       const jsonPositionTopic = kafkaTopic({
@@ -6417,21 +6438,16 @@ const assertCompileTimeContracts = () => {
     }),
   });
 
-  localKafkaTopic({
-    regions: ["usa"],
-    value: kafka.protobuf(ordersValueSchema),
-    // @ts-expect-error Kafka key codecs cannot be inferred from any
-    key: JSON.parse("{}"),
-    viewServerTopic: "orders",
-    mapping: (): typeof Order.Type => ({
-      id: "order-1",
-      customerId: "customer-1",
-      status: "open",
-      price: 42,
-      region: "usa",
-      updatedAt: 1,
-    }),
-  });
+  expectTypeOf<
+    KafkaTopicDefinition<
+      typeof viewServer.topics,
+      typeof localKafkaRegions,
+      "orders",
+      typeof ordersValueKafkaCodec,
+      any,
+      readonly ["usa"]
+    >
+  >().toEqualTypeOf<never>();
 
   localKafkaTopic({
     regions: ["usa"],
@@ -6850,8 +6866,8 @@ const assertCompileTimeContracts = () => {
     // @ts-expect-error unsupported Kafka key codecs must fail instead of inferring unknown
     key: {},
     viewServerTopic: "orders",
-    mapping: ({ key, value, region }) => ({
-      id: key,
+    mapping: ({ value, region }) => ({
+      id: "order-1",
       customerId: value.customerId,
       status: value.status,
       price: value.price,
@@ -6871,11 +6887,11 @@ const assertCompileTimeContracts = () => {
   localKafkaTopic({
     regions: ["usa"],
     value: kafka.protobuf(ordersValueSchema),
-    key: kafka.protobuf(ordersKeySchema),
+    key: kafka.stringKey(),
     viewServerTopic: "orders",
     // @ts-expect-error unannotated mapping returns must match the target View Server topic row
     mapping: ({ key, value, region }) => ({
-      id: key.orderId,
+      id: key,
       customerId: value.customerId,
       status: value.status,
       price: value.price,
@@ -6886,11 +6902,11 @@ const assertCompileTimeContracts = () => {
   localKafkaTopic({
     regions: ["usa"],
     value: kafka.protobuf(ordersValueSchema),
-    key: kafka.protobuf(ordersKeySchema),
+    key: kafka.stringKey(),
     viewServerTopic: "orders",
     // @ts-expect-error unannotated mapping returns reject extra fields outside the target row
     mapping: ({ key, value, region }) => ({
-      id: key.orderId,
+      id: key,
       customerId: value.customerId,
       status: value.status,
       price: value.price,
@@ -6999,11 +7015,11 @@ const assertCompileTimeContracts = () => {
         orders: localKafkaTopic({
           regions: ["usa"],
           value: kafka.protobuf(ordersValueSchema),
-          key: kafka.protobuf(ordersKeySchema),
+          key: kafka.stringKey(),
           viewServerTopic: "orders",
           // @ts-expect-error mapping return must match the target View Server topic row type
           mapping: ({ key, value, region }) => ({
-            id: key.orderId,
+            id: key,
             customerId: value.customerId,
             status: value.status,
             price: value.price,
@@ -7025,11 +7041,11 @@ const assertCompileTimeContracts = () => {
         orders: localKafkaTopic({
           regions: ["usa"],
           value: kafka.protobuf(ordersValueSchema),
-          key: kafka.protobuf(ordersKeySchema),
+          key: kafka.stringKey(),
           viewServerTopic: "orders",
           // @ts-expect-error raw runtime topic mappings must return the target topic row
           mapping: ({ key, value, region }) => ({
-            id: key.orderId,
+            id: key,
             customerId: value.customerId,
             status: value.status,
             price: value.price,

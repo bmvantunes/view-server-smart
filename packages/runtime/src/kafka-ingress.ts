@@ -7,8 +7,11 @@ import type {
 } from "@platformatic/kafka";
 import { Buffer } from "node:buffer";
 import {
+  decodeKafkaCodec,
   decodeKafkaTopicMessage,
   kafkaErrorIsMapping,
+  type KafkaCodec,
+  type KafkaDecodeError,
   type RuntimeRegions,
   type KafkaMessageMetadata,
   type KafkaDecodedTopicMessage,
@@ -105,8 +108,23 @@ type KafkaBatchTopic<Topics extends ViewServerRuntimeTopicDefinitions> = Extract
   keyof Topics,
   string
 >;
+type KafkaDecodedTopicTombstone<Topics extends ViewServerRuntimeTopicDefinitions> = {
+  readonly _tag: "Tombstone";
+  readonly key: string;
+  readonly viewServerTopic: KafkaBatchTopic<Topics>;
+};
+type KafkaDecodedTopicRow<Topics extends ViewServerRuntimeTopicDefinitions> = {
+  readonly _tag: "Row";
+  readonly message: KafkaDecodedTopicMessage<Topics, KafkaBatchTopic<Topics>>;
+};
+type KafkaDecodedTopicMutation<Topics extends ViewServerRuntimeTopicDefinitions> =
+  | KafkaDecodedTopicRow<Topics>
+  | KafkaDecodedTopicTombstone<Topics>;
+type KafkaTopicWithKeyCodec = {
+  readonly key: KafkaCodec<unknown, unknown>;
+};
 type DecodedKafkaBatchMessage<Topics extends ViewServerRuntimeTopicDefinitions> = {
-  readonly decoded: KafkaDecodedTopicMessage<Topics, KafkaBatchTopic<Topics>>;
+  readonly decoded: KafkaDecodedTopicMutation<Topics>;
   readonly message: KafkaConsumerMessage;
   readonly messageBytes: number;
   readonly nowMillis: number;
@@ -123,6 +141,7 @@ type KafkaConsumerHealthListenerProcessedState = {
 type ViewServerKafkaHealthRefreshRequest = Effect.Effect<void>;
 
 const emptyMessageBytes = Buffer.alloc(0);
+const kafkaKeyTextDecoder = new TextDecoder();
 const kafkaMessageBatchSize = 256;
 const kafkaMessageQueueCapacity = kafkaMessageBatchSize * 4;
 const kafkaMessageBatchFlushInterval = Duration.millis(2);
@@ -390,6 +409,73 @@ const recordKafkaStreamCause = <const Topics extends ViewServerRuntimeTopicDefin
 
 const requestKafkaHealthRefresh = (requestHealthRefresh: ViewServerKafkaHealthRefreshRequest) =>
   requestHealthRefresh.pipe(ignoreKafkaHealthRefreshFailure);
+
+const kafkaMessageHasTombstoneValue = (message: KafkaConsumerMessage): boolean =>
+  message.value === null || message.value === undefined;
+
+const kafkaDecodeError = (message: string, cause: unknown): KafkaDecodeError => ({
+  _tag: "KafkaDecodeError",
+  message,
+  cause,
+});
+
+const kafkaRuntimeTopicHasKeyCodec = (topic: {
+  readonly key?: KafkaCodec<unknown, unknown>;
+}): topic is KafkaTopicWithKeyCodec => topic.key !== undefined;
+
+const kafkaDecodedObjectKeyToRowId = (
+  key: object,
+  rowKeyField: string,
+): Effect.Effect<string, KafkaDecodeError> => {
+  if (Object.hasOwn(key, rowKeyField)) {
+    const rowKey = Reflect.get(key, rowKeyField);
+    if (typeof rowKey === "string") {
+      return Effect.succeed(rowKey);
+    }
+  }
+  const stringFields = Object.entries(key).filter(
+    ([field, value]) => !field.startsWith("$") && typeof value === "string",
+  );
+  const onlyStringField = stringFields[0];
+  if (stringFields.length === 1 && onlyStringField !== undefined) {
+    return Effect.succeed(onlyStringField[1]);
+  }
+  return Effect.fail(
+    kafkaDecodeError("Kafka tombstone key must decode to the View Server row id string", key),
+  );
+};
+
+const decodeKafkaTombstoneRowKey = Effect.fn(
+  "ViewServerRuntime.kafka.message.decodeTombstoneRowKey",
+)(function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  topic: {
+    readonly key?: KafkaCodec<unknown, unknown>;
+    readonly viewServerTopic: Extract<keyof Topics, string>;
+  },
+  input: {
+    readonly keyBytes: Uint8Array;
+    readonly metadata: KafkaMessageMetadata;
+  },
+) {
+  if (!kafkaRuntimeTopicHasKeyCodec(topic)) {
+    return kafkaKeyTextDecoder.decode(input.keyBytes);
+  }
+
+  const key = yield* decodeKafkaCodec(topic.key, {
+    bytes: input.keyBytes,
+    metadata: input.metadata,
+  });
+  if (typeof key === "string") {
+    return key;
+  }
+  if (typeof key === "object" && key !== null) {
+    return yield* kafkaDecodedObjectKeyToRowId(key, config.topics[topic.viewServerTopic].key);
+  }
+  return yield* Effect.fail(
+    kafkaDecodeError("Kafka tombstone key must decode to the View Server row id string", key),
+  );
+});
 
 export const recordKafkaAssignments = Effect.fn(
   "ViewServerRuntime.kafka.consumer.recordAssignments",
@@ -661,6 +747,98 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
       headers: kafkaHeadersFromMessage(message.headers),
     };
     const requestHealthRefreshAfterLedgerUpdate = requestKafkaHealthRefresh(requestHealthRefresh);
+    if (kafkaMessageHasTombstoneValue(message)) {
+      if (message.key === null || message.key === undefined) {
+        return yield* health
+          .decodeFailed(sourceTopic, region, {
+            bytes: messageBytes,
+            message: "Kafka tombstone requires a non-null key",
+            nowMillis,
+          })
+          .pipe(
+            Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
+            Effect.andThen(
+              Effect.fail(
+                kafkaMessageDecodeError(
+                  region,
+                  sourceTopic,
+                  new Error("Kafka tombstone requires a non-null key"),
+                ),
+              ),
+            ),
+          );
+      }
+      const rowKey = yield* decodeKafkaTombstoneRowKey(config, topic, {
+        keyBytes: message.key,
+        metadata,
+      }).pipe(
+        Effect.matchCauseEffect({
+          onFailure: (cause) => {
+            const error = Cause.findErrorOption(cause);
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.failCause(kafkaNonFailureCause(cause));
+            }
+            if (Option.isSome(error)) {
+              return health
+                .decodeFailed(sourceTopic, region, {
+                  bytes: messageBytes,
+                  message: messageFromUnknown(error.value),
+                  nowMillis,
+                })
+                .pipe(
+                  Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
+                  Effect.andThen(
+                    Effect.failCause(
+                      kafkaIngressFailureCause(
+                        kafkaMessageDecodeError(
+                          region,
+                          sourceTopic,
+                          kafkaFailureCause(error.value, cause),
+                        ),
+                        cause,
+                      ),
+                    ),
+                  ),
+                );
+            }
+            return health
+              .decodeFailed(sourceTopic, region, {
+                bytes: messageBytes,
+                message: messageFromUnknown(Cause.squash(cause)),
+                nowMillis,
+              })
+              .pipe(
+                Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
+                Effect.andThen(
+                  Effect.failCause(
+                    kafkaIngressFailureCause(
+                      kafkaMessageDecodeError(
+                        region,
+                        sourceTopic,
+                        kafkaFailureCause(Cause.squash(cause), cause),
+                      ),
+                      cause,
+                    ),
+                  ),
+                ),
+              );
+          },
+          onSuccess: (key) => Effect.succeed(key),
+        }),
+      );
+      const decoded: KafkaDecodedTopicTombstone<Topics> = {
+        _tag: "Tombstone",
+        key: rowKey,
+        viewServerTopic: topic.viewServerTopic,
+      };
+      return Option.some({
+        decoded,
+        message,
+        messageBytes,
+        nowMillis,
+        sourceTopic,
+      });
+    }
     const decoded = yield* decodeKafkaTopicMessage(topic, {
       keyBytes,
       valueBytes,
@@ -744,8 +922,12 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
         onSuccess: (decodedMessage) => Effect.succeed(decodedMessage),
       }),
     );
+    const decodedMutation: KafkaDecodedTopicRow<Topics> = {
+      _tag: "Row",
+      message: decoded,
+    };
     return Option.some({
-      decoded,
+      decoded: decodedMutation,
       message,
       messageBytes,
       nowMillis,
@@ -763,29 +945,17 @@ const publishKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.publis
   region: string,
   messages: ReadonlyArray<DecodedKafkaBatchMessage<Topics>>,
 ) {
-  const rowsByTopic = new Map<
-    KafkaBatchTopic<Topics>,
-    {
-      readonly sourceTopic: string;
-      readonly rows: Array<TopicRow<Topics, KafkaBatchTopic<Topics>>>;
-      readonly messages: Array<DecodedKafkaBatchMessage<Topics>>;
-    }
-  >();
-  for (const message of messages) {
-    const topicGroup = rowsByTopic.get(message.decoded.viewServerTopic);
-    if (topicGroup === undefined) {
-      rowsByTopic.set(message.decoded.viewServerTopic, {
-        messages: [message],
-        rows: [message.decoded.row],
-        sourceTopic: message.sourceTopic,
-      });
-    } else {
-      topicGroup.messages.push(message);
-      topicGroup.rows.push(message.decoded.row);
-    }
-  }
-  for (const [topic, group] of rowsByTopic) {
-    yield* client.publishMany(topic, group.rows).pipe(
+  type KafkaRowBatchGroup = {
+    readonly sourceTopic: string;
+    readonly viewServerTopic: KafkaBatchTopic<Topics>;
+    readonly rows: Array<TopicRow<Topics, KafkaBatchTopic<Topics>>>;
+    readonly messages: Array<DecodedKafkaBatchMessage<Topics>>;
+  };
+  let rowGroup: KafkaRowBatchGroup | undefined;
+  const publishRows = Effect.fn("ViewServerRuntime.kafka.batch.publishRows")(function* (
+    group: KafkaRowBatchGroup,
+  ) {
+    yield* client.publishMany(group.viewServerTopic, group.rows).pipe(
       Effect.matchCauseEffect({
         onFailure: (cause) => {
           if (Cause.hasInterruptsOnly(cause)) {
@@ -818,7 +988,79 @@ const publishKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.publis
         onSuccess: () => Effect.succeed(true),
       }),
     );
+  });
+  const flushRows = Effect.fn("ViewServerRuntime.kafka.batch.flushRows")(function* () {
+    const group = rowGroup;
+    if (group !== undefined) {
+      rowGroup = undefined;
+      yield* publishRows(group);
+    }
+  });
+  const deleteTombstone = Effect.fn("ViewServerRuntime.kafka.batch.deleteTombstone")(function* (
+    message: DecodedKafkaBatchMessage<Topics>,
+    tombstone: KafkaDecodedTopicTombstone<Topics>,
+  ) {
+    yield* client.delete(tombstone.viewServerTopic, tombstone.key).pipe(
+      Effect.matchCauseEffect({
+        onFailure: (cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.failCause(kafkaNonFailureCause(cause));
+          }
+          const error = Cause.findErrorOption(cause);
+          const failure = Option.match(error, {
+            onNone: () => Cause.squash(cause),
+            onSome: (value) => value,
+          });
+          const processingError = kafkaMessageProcessingError(
+            region,
+            message.sourceTopic,
+            kafkaFailureCause(failure, cause),
+          );
+          return health
+            .messagePublishFailed(message.sourceTopic, region, {
+              bytes: message.messageBytes,
+              message: messageFromUnknown(failure),
+              nowMillis: message.nowMillis,
+            })
+            .pipe(
+              Effect.andThen(requestKafkaHealthRefresh(requestHealthRefresh)),
+              Effect.andThen(Effect.failCause(kafkaIngressFailureCause(processingError, cause))),
+            );
+        },
+        onSuccess: () => Effect.succeed(true),
+      }),
+    );
+  });
+  for (const message of messages) {
+    if (message.decoded._tag === "Tombstone") {
+      yield* flushRows();
+      yield* deleteTombstone(message, message.decoded);
+      continue;
+    }
+    const decodedMessage = message.decoded.message;
+    if (rowGroup === undefined) {
+      rowGroup = {
+        messages: [message],
+        rows: [decodedMessage.row],
+        sourceTopic: message.sourceTopic,
+        viewServerTopic: decodedMessage.viewServerTopic,
+      };
+      continue;
+    }
+    if (rowGroup.viewServerTopic !== decodedMessage.viewServerTopic) {
+      yield* flushRows();
+      rowGroup = {
+        messages: [message],
+        rows: [decodedMessage.row],
+        sourceTopic: message.sourceTopic,
+        viewServerTopic: decodedMessage.viewServerTopic,
+      };
+      continue;
+    }
+    rowGroup.messages.push(message);
+    rowGroup.rows.push(decodedMessage.row);
   }
+  yield* flushRows();
 });
 
 const commitKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.commit")(function* <
@@ -882,44 +1124,45 @@ export const processKafkaMessageBatch = Effect.fn("ViewServerRuntime.kafka.messa
   ) {
     const decodedMessages: Array<DecodedKafkaBatchMessage<Topics>> = [];
     for (const message of batch) {
-      const decoded = yield* decodeKafkaMessageForBatch(
-        config,
-        requestHealthRefresh,
-        options,
-        health,
-        region,
-        message,
-      ).pipe(
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.failCause(cause);
-          }
-          const preserveLastErrorForSourceTopic = Option.getOrUndefined(
-            Option.map(Cause.findErrorOption(cause), (error) => error.sourceTopic),
-          );
-          return Effect.exit(
-            publishKafkaDecodedBatch(
-              client,
-              requestHealthRefresh,
-              health,
-              region,
-              decodedMessages,
-            ).pipe(
-              Effect.andThen(
-                commitKafkaDecodedBatch(requestHealthRefresh, health, region, decodedMessages, {
-                  preserveLastErrorForSourceTopic,
-                }),
+      const decoded: Option.Option<DecodedKafkaBatchMessage<Topics>> =
+        yield* decodeKafkaMessageForBatch(
+          config,
+          requestHealthRefresh,
+          options,
+          health,
+          region,
+          message,
+        ).pipe(
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) {
+              return Effect.failCause(cause);
+            }
+            const preserveLastErrorForSourceTopic = Option.getOrUndefined(
+              Option.map(Cause.findErrorOption(cause), (error) => error.sourceTopic),
+            );
+            return Effect.exit(
+              publishKafkaDecodedBatch(
+                client,
+                requestHealthRefresh,
+                health,
+                region,
+                decodedMessages,
+              ).pipe(
+                Effect.andThen(
+                  commitKafkaDecodedBatch(requestHealthRefresh, health, region, decodedMessages, {
+                    preserveLastErrorForSourceTopic,
+                  }),
+                ),
               ),
-            ),
-          ).pipe(
-            Effect.andThen((flushExit) =>
-              Exit.isFailure(flushExit)
-                ? Effect.failCause(Cause.combine(cause, flushExit.cause))
-                : Effect.failCause(cause),
-            ),
-          );
-        }),
-      );
+            ).pipe(
+              Effect.andThen((flushExit) =>
+                Exit.isFailure(flushExit)
+                  ? Effect.failCause(Cause.combine(cause, flushExit.cause))
+                  : Effect.failCause(cause),
+              ),
+            );
+          }),
+        );
       if (Option.isSome(decoded)) {
         decodedMessages.push(decoded.value);
       }

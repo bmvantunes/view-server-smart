@@ -79,13 +79,13 @@ const preciseViewServer = defineViewServerConfig({
 type ProducerMessage = {
   readonly topic: string;
   readonly key: string;
-  readonly value: string;
+  readonly value?: string;
 };
 
 type BinaryProducerMessage = {
   readonly topic: string;
   readonly key: Buffer;
-  readonly value: Buffer;
+  readonly value: Buffer | null;
 };
 
 const nullRecord = <Value>(entries: Record<string, Value>): Record<string, Value> => {
@@ -135,7 +135,7 @@ const sendBinaryKafkaMessages = Effect.fn("ViewServerRuntime.kafka.test.produceB
   clientId: string,
   messages: ReadonlyArray<BinaryProducerMessage>,
 ) {
-  const producer = new Producer<Buffer, Buffer, Buffer, Buffer>({
+  const producer = new Producer<Buffer, Buffer | null, Buffer, Buffer>({
     bootstrapBrokers: [bootstrapServers],
     clientId,
   });
@@ -424,6 +424,192 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
           (runtime) => runtime.close.pipe(Effect.ignore),
         );
       }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.live("deletes a row when Kafka emits a tombstone value for the decoded key", () =>
+    Effect.gen(function* () {
+      const ordersSourceTopic = yield* uniqueTopicName("tombstone-orders");
+      const consumerGroupId = yield* uniqueGroupId();
+      yield* createKafkaTopics(kafkaBootstrapServers, [ordersSourceTopic]);
+
+      const regions = {
+        local: kafkaBootstrapServers,
+      };
+      const localKafkaTopic = viewServer.kafkaTopic<typeof regions>();
+
+      yield* Effect.acquireUseRelease(
+        makeViewServerRuntime(viewServer, {
+          host: "127.0.0.1",
+          websocketPort: 0,
+          kafka: {
+            consumerGroupId,
+            regions,
+            topics: {
+              [ordersSourceTopic]: localKafkaTopic({
+                regions: ["local"],
+                value: kafka.json(IncomingOrder),
+                key: kafka.stringKey(),
+                viewServerTopic: "orders",
+                mapping: ({ key, value }) => ({
+                  id: key,
+                  customerId: value.customerId,
+                  price: value.price,
+                }),
+              }),
+            },
+          },
+        }),
+        (runtime) =>
+          Effect.gen(function* () {
+            yield* sendBinaryKafkaMessages(
+              kafkaBootstrapServers,
+              "view-server-kafka-tombstone-test",
+              [
+                {
+                  topic: ordersSourceTopic,
+                  key: Buffer.from("order-tombstone", "utf-8"),
+                  value: Buffer.from(
+                    JSON.stringify({
+                      customerId: "customer-tombstone",
+                      price: 10,
+                    }),
+                    "utf-8",
+                  ),
+                },
+              ],
+            );
+
+            const insertedSnapshot = yield* runtime.client
+              .snapshot("orders", {
+                select: ["id", "customerId", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: healthPollSchedule,
+                  until: (snapshot) => snapshot.totalRows === 1,
+                }),
+              );
+            expect(insertedSnapshot).toStrictEqual({
+              status: "ready",
+              statusCode: "Ready",
+              rows: [
+                {
+                  id: "order-tombstone",
+                  customerId: "customer-tombstone",
+                  price: 10,
+                },
+              ],
+              totalRows: 1,
+              version: expect.any(Number),
+            });
+
+            yield* sendBinaryKafkaMessages(
+              kafkaBootstrapServers,
+              "view-server-kafka-tombstone-test",
+              [
+                {
+                  topic: ordersSourceTopic,
+                  key: Buffer.from("order-tombstone", "utf-8"),
+                  value: null,
+                },
+              ],
+            );
+
+            const deletedSnapshot = yield* runtime.client
+              .snapshot("orders", {
+                select: ["id", "customerId", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: healthPollSchedule,
+                  until: (snapshot) => snapshot.totalRows === 0,
+                }),
+              );
+            const health = yield* runtime.client.health().pipe(
+              Effect.repeat({
+                schedule: healthPollSchedule,
+                until: (currentHealth) =>
+                  currentHealth.engine.topics.orders.rowCount === 0 &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.status === "ready" &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.committedOffset === "2" &&
+                  currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
+                    ?.consumerLagMessages === 0n,
+              }),
+            );
+
+            expect({
+              status: health.status,
+              ordersSnapshot: deletedSnapshot,
+              engineRows: {
+                orders: health.engine.topics.orders.rowCount,
+                trades: health.engine.topics.trades.rowCount,
+              },
+              kafka: health.kafka,
+            }).toStrictEqual({
+              status: "ready",
+              ordersSnapshot: {
+                status: "ready",
+                statusCode: "Ready",
+                rows: [],
+                totalRows: 0,
+                version: expect.any(Number),
+              },
+              engineRows: {
+                orders: 0,
+                trades: 0,
+              },
+              kafka: {
+                startFrom: {
+                  consumerGroupId,
+                  fallbackMode: "earliest",
+                  mode: "committed",
+                },
+                regions: nullRecord({
+                  local: {
+                    status: "connected",
+                    brokers: kafkaBootstrapServers,
+                    lastConnectedAt: expect.any(Number),
+                    lastError: null,
+                  },
+                }),
+                topics: nullRecord({
+                  [ordersSourceTopic]: {
+                    status: "ready",
+                    sourceTopic: ordersSourceTopic,
+                    viewServerTopic: "orders",
+                    regions: nullRecord({
+                      local: {
+                        connected: true,
+                        assignedPartitions: 1,
+                        messagesPerSecond: expect.any(Number),
+                        bytesPerSecond: expect.any(Number),
+                        decodedMessagesPerSecond: expect.any(Number),
+                        decodeFailuresPerSecond: 0,
+                        mappingFailuresPerSecond: 0,
+                        publishFailuresPerSecond: 0,
+                        commitFailuresPerSecond: 0,
+                        processingFailuresPerSecond: 0,
+                        lastMessageAt: expect.any(Number),
+                        lastCommitAt: expect.any(Number),
+                        consumerLagMessages: 0n,
+                        lagSampledAt: expect.any(Number),
+                        committedOffset: "2",
+                        lastError: null,
+                      },
+                    }),
+                  },
+                }),
+              },
+            });
+          }),
+        (runtime) => runtime.close.pipe(Effect.ignore),
+      );
+    }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
   it.live("ingests multiple Kafka topics across logical regions independently", () =>
@@ -963,7 +1149,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
               ],
             );
 
-            const ordersSnapshot = yield* runtime.client
+            const insertedSnapshot = yield* runtime.client
               .snapshot("orders", {
                 select: ["id", "customerId", "price"],
                 orderBy: [{ field: "id", direction: "asc" }],
@@ -975,14 +1161,59 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                   until: (snapshot) => snapshot.totalRows === 1,
                 }),
               );
+            expect(insertedSnapshot).toStrictEqual({
+              status: "ready",
+              statusCode: "Ready",
+              rows: [
+                {
+                  id: "protobuf-order-1",
+                  customerId: "protobuf-customer-1",
+                  price: 42,
+                },
+              ],
+              totalRows: 1,
+              version: expect.any(Number),
+            });
+
+            yield* sendBinaryKafkaMessages(
+              kafkaBootstrapServers,
+              "view-server-kafka-protobuf-ingress-test",
+              [
+                {
+                  topic: ordersSourceTopic,
+                  key: Buffer.from(
+                    toBinary(
+                      OrderKeySchema,
+                      create(OrderKeySchema, {
+                        orderId: "protobuf-order-1",
+                      }),
+                    ),
+                  ),
+                  value: null,
+                },
+              ],
+            );
+
+            const deletedSnapshot = yield* runtime.client
+              .snapshot("orders", {
+                select: ["id", "customerId", "price"],
+                orderBy: [{ field: "id", direction: "asc" }],
+                limit: 10,
+              })
+              .pipe(
+                Effect.repeat({
+                  schedule: healthPollSchedule,
+                  until: (snapshot) => snapshot.totalRows === 0,
+                }),
+              );
             const health = yield* runtime.client.health().pipe(
               Effect.repeat({
                 schedule: healthPollSchedule,
                 until: (currentHealth) =>
-                  currentHealth.engine.topics.orders.rowCount === 1 &&
+                  currentHealth.engine.topics.orders.rowCount === 0 &&
                   currentHealth.kafka?.topics[ordersSourceTopic]?.status === "ready" &&
                   currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
-                    ?.committedOffset === "1" &&
+                    ?.committedOffset === "2" &&
                   currentHealth.kafka?.topics[ordersSourceTopic]?.regions["local"]
                     ?.consumerLagMessages === 0n,
               }),
@@ -990,7 +1221,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
 
             expect({
               status: health.status,
-              ordersSnapshot,
+              ordersSnapshot: deletedSnapshot,
               engineRows: {
                 orders: health.engine.topics.orders.rowCount,
                 trades: health.engine.topics.trades.rowCount,
@@ -1001,18 +1232,12 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
               ordersSnapshot: {
                 status: "ready",
                 statusCode: "Ready",
-                rows: [
-                  {
-                    id: "protobuf-order-1",
-                    customerId: "protobuf-customer-1",
-                    price: 42,
-                  },
-                ],
-                totalRows: 1,
+                rows: [],
+                totalRows: 0,
                 version: expect.any(Number),
               },
               engineRows: {
-                orders: 1,
+                orders: 0,
                 trades: 0,
               },
               kafka: {
@@ -1050,7 +1275,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                         lastCommitAt: expect.any(Number),
                         consumerLagMessages: 0n,
                         lagSampledAt: expect.any(Number),
-                        committedOffset: "1",
+                        committedOffset: "2",
                         lastError: null,
                       },
                     }),

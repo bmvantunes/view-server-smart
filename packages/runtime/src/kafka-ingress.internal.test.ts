@@ -4124,6 +4124,514 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
       }),
   );
 
+  it.effect("deletes rows when Kafka emits a tombstone value for a key", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* runtimeCore.client.publish("orders", {
+        id: "tombstone-delete",
+        customerId: "customer-before-delete",
+        price: 10,
+      });
+      let committed = false;
+
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        kafkaOptions,
+        ledger,
+        "local",
+        kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "tombstone-delete",
+          value: null,
+          offset: 8n,
+          onCommit: () => {
+            committed = true;
+          },
+        }),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(committed).toBe(true);
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 2,
+      });
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("9");
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("deletes rows when Kafka emits an undefined tombstone value for a key", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* runtimeCore.client.publish("orders", {
+        id: "undefined-tombstone-delete",
+        customerId: "customer-before-undefined-delete",
+        price: 10,
+      });
+      let committed = false;
+
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        kafkaOptions,
+        ledger,
+        "local",
+        kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "undefined-tombstone-delete",
+          offset: 8n,
+          onCommit: () => {
+            committed = true;
+          },
+        }),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(committed).toBe(true);
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 2,
+      });
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("9");
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("deletes unkeyed Kafka tombstones by decoding the raw Kafka key as UTF-8", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const optionsWithUnkeyedSource: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* runtimeCore.client.publish("orders", {
+        id: "unkeyed-tombstone-delete",
+        customerId: "customer-before-unkeyed-delete",
+        price: 10,
+      });
+      let committed = false;
+
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        optionsWithUnkeyedSource,
+        ledger,
+        "local",
+        kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "unkeyed-tombstone-delete",
+          value: null,
+          offset: 8n,
+          onCommit: () => {
+            committed = true;
+          },
+        }),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(committed).toBe(true);
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 2,
+      });
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("9");
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("commits Kafka tombstones for already-missing row keys as idempotent deletes", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let committed = false;
+
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        kafkaOptions,
+        ledger,
+        "local",
+        kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "already-missing-tombstone",
+          value: null,
+          offset: 8n,
+          onCommit: () => {
+            committed = true;
+          },
+        }),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(committed).toBe(true);
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 0,
+      });
+      expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("9");
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("preserves tombstone ordering inside Kafka microbatches", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* runtimeCore.client.publish("orders", {
+        id: "ordered-tombstone",
+        customerId: "customer-before-tombstone",
+        price: 10,
+      });
+      const operations: Array<string> = [];
+      const batchingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        delete: (topic, key) =>
+          Effect.sync(() => {
+            operations.push(`delete:${topic}:${key}`);
+          }).pipe(Effect.andThen(runtimeCore.client.delete(topic, key))),
+        publishMany: (topic, rows) =>
+          Effect.sync(() => {
+            operations.push(`publishMany:${topic}:${rows.length}`);
+          }).pipe(Effect.andThen(runtimeCore.client.publishMany(topic, rows))),
+      };
+
+      yield* runKafkaMessageStream(
+        viewServer,
+        batchingClient,
+        runtimeCore.requestHealthRefresh,
+        kafkaOptions,
+        ledger,
+        "local",
+        (async function* () {
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "ordered-tombstone",
+            value: null,
+            offset: 1n,
+          });
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "ordered-tombstone",
+            value: JSON.stringify({
+              customerId: "customer-after-tombstone",
+              price: 20,
+            }),
+            offset: 2n,
+          });
+        })(),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(operations).toStrictEqual(["delete:orders:ordered-tombstone", "publishMany:orders:1"]);
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [
+          {
+            id: "ordered-tombstone",
+            customerId: "customer-after-tombstone",
+            price: 20,
+          },
+        ],
+        totalRows: 1,
+        version: 3,
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("preserves cross-topic tombstone ordering inside Kafka microbatches", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const preciseSourceTopic = "precise-position-cross-topic-source";
+      const multiTopicOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-cross-topic-tombstone-test",
+        ...committedKafkaStart("view-server-cross-topic-tombstone-test"),
+        regions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+          [preciseSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingPrecisePosition),
+            key: kafka.stringKey(),
+            viewServerTopic: "precisePositions",
+            mapping: ({ key, value }) => ({
+              id: key,
+              accountId: value.accountId,
+              quantity: value.quantity,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: multiTopicOptions.consume,
+        regions: multiTopicOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+          [preciseSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "precisePositions",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* ledger.topicConnected(preciseSourceTopic, "local", 1, 1_000);
+      const operations: Array<string> = [];
+      const batchingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        delete: (topic, key) =>
+          Effect.sync(() => {
+            operations.push(`delete:${topic}:${key}`);
+          }).pipe(Effect.andThen(runtimeCore.client.delete(topic, key))),
+        publishMany: (topic, rows) =>
+          Effect.sync(() => {
+            operations.push(`publishMany:${topic}:${rows.length}`);
+          }).pipe(Effect.andThen(runtimeCore.client.publishMany(topic, rows))),
+      };
+
+      yield* runKafkaMessageStream(
+        viewServer,
+        batchingClient,
+        runtimeCore.requestHealthRefresh,
+        multiTopicOptions,
+        ledger,
+        "local",
+        (async function* () {
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "cross-topic-order",
+            value: JSON.stringify({
+              customerId: "customer-cross-topic",
+              price: 30,
+            }),
+            offset: 1n,
+          });
+          yield kafkaMessage({
+            topic: preciseSourceTopic,
+            key: "cross-topic-position",
+            value: JSON.stringify({
+              accountId: "account-cross-topic",
+              quantity: "10",
+              price: "20",
+            }),
+            offset: 2n,
+          });
+          yield kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "cross-topic-order-after-position",
+            value: JSON.stringify({
+              customerId: "customer-cross-topic-after-position",
+              price: 40,
+            }),
+            offset: 3n,
+          });
+          yield kafkaMessage({
+            topic: preciseSourceTopic,
+            key: "cross-topic-position",
+            value: null,
+            offset: 4n,
+          });
+        })(),
+      );
+
+      expect(operations).toStrictEqual([
+        "publishMany:orders:1",
+        "publishMany:precisePositions:1",
+        "publishMany:orders:1",
+        "delete:precisePositions:cross-topic-position",
+      ]);
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("treats zero-length Kafka values as payloads rather than tombstones", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* runtimeCore.client.publish("orders", {
+        id: "empty-buffer-is-not-tombstone",
+        customerId: "customer-before-empty-buffer",
+        price: 10,
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
+          kafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "empty-buffer-is-not-tombstone",
+            value: "",
+            offset: 3n,
+          }),
+        ),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [
+          {
+            id: "empty-buffer-is-not-tombstone",
+            customerId: "customer-before-empty-buffer",
+            price: 10,
+          },
+        ],
+        totalRows: 1,
+        version: 1,
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
   it.effect("flushes Kafka microbatches when the configured batch size is reached", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -6766,7 +7274,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
-  it.effect("records nullable Kafka key and value bytes as decode failures", () =>
+  it.effect("records Kafka tombstones without keys as decode failures", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
       const ledger = makeViewServerKafkaHealthLedger<Topics>({
@@ -6826,7 +7334,920 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             consumerLagMessages: null,
             lagSampledAt: null,
             committedOffset: null,
-            lastError: "Failed to parse Kafka JSON payload",
+            lastError: "Kafka tombstone requires a non-null key",
+          },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records Kafka tombstone key decode failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const keyCodecError = new KafkaIngressTestError({
+        message: "custom tombstone key codec failed",
+      });
+      const optionsWithFailingKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "failing-tombstone-key",
+              decode: (): Effect.Effect<string, KafkaIngressTestError> =>
+                Effect.fail(keyCodecError),
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          requestHealthRefresh,
+          optionsWithFailingKeyCodec,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad",
+            value: null,
+            offset: 6n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(healthRefreshRequestCount).toBe(1);
+      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+        status: "degraded",
+        sourceTopic: ordersSourceTopic,
+        viewServerTopic: "orders",
+        regions: nullRecord({
+          local: {
+            connected: true,
+            assignedPartitions: 1,
+            messagesPerSecond: 1,
+            bytesPerSecond: 3,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
+            publishFailuresPerSecond: 0,
+            commitFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: 0,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "custom tombstone key codec failed",
+          },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("preserves Kafka tombstone key decode interruptions", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const optionsWithInterruptingKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "interrupting-tombstone-key",
+              decode: (): Effect.Effect<string> => Effect.interrupt,
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          requestHealthRefresh,
+          optionsWithInterruptingKeyCodec,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad",
+            value: null,
+            offset: 6n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        healthRefreshRequestCount,
+        interrupted: Exit.hasInterrupts(exit),
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        healthRefreshRequestCount: 0,
+        interrupted: true,
+        kafkaTopic: {
+          status: "ready",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              publishFailuresPerSecond: 0,
+              commitFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: null,
+            },
+          }),
+        },
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records Kafka tombstone key codec defects as decode failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const optionsWithDefectingKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "defecting-tombstone-key",
+              decode: (): Effect.Effect<string> => Effect.die(new Error("tombstone key defect")),
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          requestHealthRefresh,
+          optionsWithDefectingKeyCodec,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad",
+            value: null,
+            offset: 6n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(Exit.hasDies(exit)).toBe(true);
+      expect(healthRefreshRequestCount).toBe(1);
+      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+        status: "degraded",
+        sourceTopic: ordersSourceTopic,
+        viewServerTopic: "orders",
+        regions: nullRecord({
+          local: {
+            connected: true,
+            assignedPartitions: 1,
+            messagesPerSecond: 1,
+            bytesPerSecond: 3,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
+            publishFailuresPerSecond: 0,
+            commitFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: 0,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "tombstone key defect",
+          },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records Kafka tombstone ambiguous object keys as decode failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const optionsWithAmbiguousObjectKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "ambiguous-object-key",
+              decode: () => Effect.succeed({ accountId: "also-bad", orderId: "bad" }),
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key.orderId,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          requestHealthRefresh,
+          optionsWithAmbiguousObjectKeyCodec,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad",
+            value: null,
+            offset: 6n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(healthRefreshRequestCount).toBe(1);
+      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+        status: "degraded",
+        sourceTopic: ordersSourceTopic,
+        viewServerTopic: "orders",
+        regions: nullRecord({
+          local: {
+            connected: true,
+            assignedPartitions: 1,
+            messagesPerSecond: 1,
+            bytesPerSecond: 3,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
+            publishFailuresPerSecond: 0,
+            commitFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: 0,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "Kafka tombstone key must decode to the View Server row id string",
+          },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records Kafka tombstone primitive non-string keys as decode failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const optionsWithNumberKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "number-key",
+              decode: (): Effect.Effect<number> => Effect.succeed(123),
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: String(key),
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          requestHealthRefresh,
+          optionsWithNumberKeyCodec,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "123",
+            value: null,
+            offset: 6n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(healthRefreshRequestCount).toBe(1);
+      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+        status: "degraded",
+        sourceTopic: ordersSourceTopic,
+        viewServerTopic: "orders",
+        regions: nullRecord({
+          local: {
+            connected: true,
+            assignedPartitions: 1,
+            messagesPerSecond: 1,
+            bytesPerSecond: 3,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 1,
+            mappingFailuresPerSecond: 0,
+            publishFailuresPerSecond: 0,
+            commitFailuresPerSecond: 0,
+            processingFailuresPerSecond: 0,
+            lastMessageAt: 0,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "Kafka tombstone key must decode to the View Server row id string",
+          },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect(
+    "records Kafka tombstone object row id fields with non-string values as decode failures",
+    () =>
+      Effect.gen(function* () {
+        const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+        const ledger = makeViewServerKafkaHealthLedger<Topics>({
+          regions: kafkaOptions.regions,
+          topics: {
+            [ordersSourceTopic]: {
+              regions: ["local"],
+              viewServerTopic: "orders",
+            },
+          },
+        });
+        const optionsWithNonStringObjectIdKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> =
+          {
+            ...kafkaOptions,
+            topics: {
+              [ordersSourceTopic]: localKafkaTopic({
+                regions: ["local"],
+                value: kafka.json(IncomingOrder),
+                key: kafka.codec({
+                  name: "object-non-string-id-key",
+                  decode: () => Effect.succeed({ id: 123 }),
+                }),
+                viewServerTopic: "orders",
+                mapping: ({ key, value }) => ({
+                  id: String(key.id),
+                  customerId: value.customerId,
+                  price: value.price,
+                }),
+              }),
+            },
+          };
+        yield* ledger.regionConnected("local", 1_000);
+        yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+        let healthRefreshRequestCount = 0;
+        const requestHealthRefresh = Effect.sync(() => {
+          healthRefreshRequestCount += 1;
+        });
+
+        const exit = yield* Effect.exit(
+          processKafkaMessage(
+            viewServer,
+            runtimeCore.client,
+            requestHealthRefresh,
+            optionsWithNonStringObjectIdKeyCodec,
+            ledger,
+            "local",
+            kafkaMessage({
+              topic: ordersSourceTopic,
+              key: "123",
+              value: null,
+              offset: 6n,
+            }),
+          ),
+        );
+        const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(healthRefreshRequestCount).toBe(1);
+        expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+          status: "degraded",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 1,
+              bytesPerSecond: 3,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 1,
+              mappingFailuresPerSecond: 0,
+              publishFailuresPerSecond: 0,
+              commitFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: 0,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: "Kafka tombstone key must decode to the View Server row id string",
+            },
+          }),
+        });
+
+        yield* runtimeCore.close;
+      }),
+  );
+
+  it.effect("deletes Kafka tombstones whose decoded object key contains the row id field", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const optionsWithObjectIdKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "object-id-key",
+              decode: () => Effect.succeed({ id: "object-key-tombstone" }),
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key.id,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* runtimeCore.client.publish("orders", {
+        id: "object-key-tombstone",
+        customerId: "customer-object-key-tombstone",
+        price: 10,
+      });
+
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        optionsWithObjectIdKeyCodec,
+        ledger,
+        "local",
+        kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "ignored-by-custom-codec",
+          value: null,
+          offset: 6n,
+        }),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 2,
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("deletes Kafka tombstones whose decoded object key has one string field", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const optionsWithSingleStringObjectKeyCodec: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        ...kafkaOptions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.codec({
+              name: "single-string-object-key",
+              decode: () => Effect.succeed({ orderId: "single-string-object-key-tombstone" }),
+            }),
+            viewServerTopic: "orders",
+            mapping: ({ key, value }) => ({
+              id: key.orderId,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      yield* runtimeCore.client.publish("orders", {
+        id: "single-string-object-key-tombstone",
+        customerId: "customer-single-string-object-key-tombstone",
+        price: 10,
+      });
+
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        optionsWithSingleStringObjectKeyCodec,
+        ledger,
+        "local",
+        kafkaMessage({
+          topic: ordersSourceTopic,
+          key: "ignored-by-custom-codec",
+          value: null,
+          offset: 6n,
+        }),
+      );
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+        orderBy: [{ field: "id", direction: "asc" }],
+        limit: 10,
+      });
+
+      expect(snapshot).toStrictEqual({
+        status: "ready",
+        statusCode: "Ready",
+        rows: [],
+        totalRows: 0,
+        version: 2,
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("preserves Kafka tombstone delete interruptions", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const interruptingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        delete: () => Effect.interrupt,
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          interruptingClient,
+          requestHealthRefresh,
+          kafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad",
+            value: null,
+            offset: 6n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        healthRefreshRequestCount,
+        interrupted: Exit.hasInterrupts(exit),
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        healthRefreshRequestCount: 0,
+        interrupted: true,
+        kafkaTopic: {
+          status: "ready",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 0,
+              bytesPerSecond: 0,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              publishFailuresPerSecond: 0,
+              commitFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: null,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: null,
+            },
+          }),
+        },
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records Kafka tombstone delete defects as publish failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const defectingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        delete: () => Effect.die(new Error("tombstone delete defect")),
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          defectingClient,
+          requestHealthRefresh,
+          kafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad",
+            value: null,
+            offset: 6n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(Exit.hasDies(exit)).toBe(true);
+      expect(healthRefreshRequestCount).toBe(1);
+      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+        status: "degraded",
+        sourceTopic: ordersSourceTopic,
+        viewServerTopic: "orders",
+        regions: nullRecord({
+          local: {
+            connected: true,
+            assignedPartitions: 1,
+            messagesPerSecond: 1,
+            bytesPerSecond: 3,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 0,
+            mappingFailuresPerSecond: 0,
+            publishFailuresPerSecond: 1,
+            commitFailuresPerSecond: 0,
+            processingFailuresPerSecond: 1,
+            lastMessageAt: 0,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "tombstone delete defect",
+          },
+        }),
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("records Kafka tombstone delete failures without committing", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        regions: kafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      const deleteFailingClient: ViewServerRuntimeClient<Topics> = {
+        ...runtimeCore.client,
+        delete: () => Effect.fail(runtimeUnavailable),
+      };
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let committed = false;
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const exit = yield* Effect.exit(
+        processKafkaMessage(
+          viewServer,
+          deleteFailingClient,
+          requestHealthRefresh,
+          kafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad",
+            value: null,
+            offset: 6n,
+            onCommit: () => {
+              committed = true;
+            },
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(committed).toBe(false);
+      expect(healthRefreshRequestCount).toBe(1);
+      expect(health.kafka?.topics[ordersSourceTopic]).toStrictEqual({
+        status: "degraded",
+        sourceTopic: ordersSourceTopic,
+        viewServerTopic: "orders",
+        regions: nullRecord({
+          local: {
+            connected: true,
+            assignedPartitions: 1,
+            messagesPerSecond: 1,
+            bytesPerSecond: 3,
+            decodedMessagesPerSecond: 0,
+            decodeFailuresPerSecond: 0,
+            mappingFailuresPerSecond: 0,
+            publishFailuresPerSecond: 1,
+            commitFailuresPerSecond: 0,
+            processingFailuresPerSecond: 1,
+            lastMessageAt: 0,
+            lastCommitAt: null,
+            consumerLagMessages: null,
+            lagSampledAt: null,
+            committedOffset: null,
+            lastError: "publish failed",
           },
         }),
       });

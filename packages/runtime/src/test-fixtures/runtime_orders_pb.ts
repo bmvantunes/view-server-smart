@@ -1,7 +1,7 @@
 // Generated-style protobuf fixture for runtime Kafka e2e tests.
 import type { Message } from "@bufbuild/protobuf";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
-import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import type { GenFile } from "@bufbuild/protobuf/codegenv2";
 
 /**
  * Describes the file viewserver/runtime/test.proto.
@@ -30,10 +30,7 @@ export type OrderValueJson = {
  * Describes the message viewserver.runtime.test.OrderValue.
  * Use `create(OrderValueSchema)` to create a new message.
  */
-export const OrderValueSchema: GenMessage<OrderValue, { jsonType: OrderValueJson }> = messageDesc(
-  file_viewserver_runtime_test,
-  0,
-);
+export const OrderValueSchema = messageDesc<OrderValue>(file_viewserver_runtime_test, 0);
 
 /**
  * @generated from message viewserver.runtime.test.OrderKey
@@ -53,7 +50,4 @@ export type OrderKeyJson = {
  * Describes the message viewserver.runtime.test.OrderKey.
  * Use `create(OrderKeySchema)` to create a new message.
  */
-export const OrderKeySchema: GenMessage<OrderKey, { jsonType: OrderKeyJson }> = messageDesc(
-  file_viewserver_runtime_test,
-  1,
-);
+export const OrderKeySchema = messageDesc<OrderKey>(file_viewserver_runtime_test, 1);
