@@ -43,6 +43,7 @@ export const kafkaTopics = {
     value: kafka.json(KafkaOrder),
     key: kafka.stringKey(),
     viewServerTopic: "orders",
+    getSafeRowKey: ({ key }) => key,
     mapping: ({ key, value, region }) => ({
       id: key,
       customerId: value.customerId,

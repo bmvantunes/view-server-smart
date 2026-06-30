@@ -80,6 +80,7 @@ export const kafkaTopics = {
     value: kafka.json(KafkaTrade),
     key: kafka.stringKey(),
     viewServerTopic: "trades",
+    getSafeRowKey: ({ key }) => key,
     mapping: ({ key, value, region }) => ({
       id: key,
       symbol: value.symbol,

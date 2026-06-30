@@ -101,6 +101,7 @@ NodeRuntime.runMain(
           value: kafka.protobuf(OrdersValue),
           key: kafka.protobuf(OrdersKey),
           viewServerTopic: "orders",
+          getSafeRowKey: ({ key }) => key.orderId,
           mapping: ({ key, value, region }) => ({
             id: key.orderId,
             customerId: value.customerId,

@@ -210,6 +210,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                   value: kafka.json(IncomingOrder),
                   key: kafka.stringKey(),
                   viewServerTopic: "orders",
+                  getSafeRowKey: ({ key }) => key,
                   mapping: ({ key, value }) => ({
                     id: key,
                     customerId: value.customerId,
@@ -221,6 +222,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                   value: kafka.json(IncomingTrade),
                   key: kafka.stringKey(),
                   viewServerTopic: "trades",
+                  getSafeRowKey: ({ key }) => key,
                   mapping: ({ key, value }) => ({
                     id: key,
                     symbol: value.symbol,
@@ -450,6 +452,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                 value: kafka.json(IncomingOrder),
                 key: kafka.stringKey(),
                 viewServerTopic: "orders",
+                getSafeRowKey: ({ key }) => key,
                 mapping: ({ key, value }) => ({
                   id: key,
                   customerId: value.customerId,
@@ -642,6 +645,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                 value: kafka.json(IncomingOrder),
                 key: kafka.stringKey(),
                 viewServerTopic: "orders",
+                getSafeRowKey: ({ key, region }) => `${region}:${key}`,
                 mapping: ({ key, value, region }) => {
                   expectTypeOf(region).toEqualTypeOf<"usa" | "london">();
                   return {
@@ -656,6 +660,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                 value: kafka.json(IncomingTrade),
                 key: kafka.stringKey(),
                 viewServerTopic: "trades",
+                getSafeRowKey: ({ key }) => key,
                 mapping: ({ key, value, region }) => {
                   expectTypeOf(region).toEqualTypeOf<"usa">();
                   return {
@@ -939,6 +944,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                 value: kafka.json(IncomingPrecisePosition),
                 key: kafka.stringKey(),
                 viewServerTopic: "positions",
+                getSafeRowKey: ({ key }) => key,
                 mapping: ({ key, value, region }) => {
                   expectTypeOf(key).toEqualTypeOf<string>();
                   expectTypeOf(value).toEqualTypeOf<typeof IncomingPrecisePosition.Type>();
@@ -1106,6 +1112,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
                 value: kafka.protobuf(OrderValueSchema),
                 key: kafka.protobuf(OrderKeySchema),
                 viewServerTopic: "orders",
+                getSafeRowKey: ({ key }) => key.orderId,
                 mapping: ({ key, value, region }) => {
                   expectTypeOf(key).toEqualTypeOf<OrderKey>();
                   expectTypeOf(value).toEqualTypeOf<OrderValue>();
@@ -1312,6 +1319,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
               value: kafka.json(IncomingOrder),
               key: kafka.stringKey(),
               viewServerTopic: "orders",
+              getSafeRowKey: ({ key }) => key,
               mapping: ({ key, value }) => ({
                 id: key,
                 customerId: value.customerId,
@@ -1572,6 +1580,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
               value: kafka.json(IncomingOrder),
               key: kafka.stringKey(),
               viewServerTopic: "orders",
+              getSafeRowKey: ({ key }) => key,
               mapping: ({ key, value }) => ({
                 id: key,
                 customerId: value.customerId,
@@ -1767,6 +1776,7 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
               value: kafka.json(IncomingOrder),
               key: kafka.stringKey(),
               viewServerTopic: "orders",
+              getSafeRowKey: ({ key }) => key,
               mapping: ({ key, value }) => ({
                 id: key,
                 customerId: value.customerId,

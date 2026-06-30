@@ -5,7 +5,7 @@ import type { TopicSourceDefinition } from "./source-contract";
 export type TopicName = string;
 export type SortDirection = "asc" | "desc";
 
-export type SchemaType<S> = Schema.Schema.Type<S>;
+export type SchemaType<S extends { readonly Type: unknown }> = S["Type"];
 export type RowSchema = Schema.Codec<object, unknown, never, never> & {
   readonly fields: Readonly<
     Record<string, Schema.Codec<unknown, unknown, never, never> | undefined>

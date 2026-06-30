@@ -2878,6 +2878,7 @@ describe("@effect-view-server/runtime", () => {
                 value: kafka.json(Order),
                 key: kafka.stringKey(),
                 viewServerTopic: "audit",
+                getSafeRowKey: ({ key }) => key,
                 mapping: ({ key, value }) => ({
                   id: key,
                   price: value.price,
@@ -3991,6 +3992,7 @@ describe("@effect-view-server/runtime", () => {
               value: kafka.json(Order),
               key: kafka.stringKey(),
               viewServerTopic: "orders",
+              getSafeRowKey: ({ key }) => key,
               mapping: ({ key, value }) => ({
                 id: key,
                 price: value.price,
@@ -5162,6 +5164,7 @@ describe("@effect-view-server/runtime", () => {
                 value: kafka.json(Order),
                 key: kafka.stringKey(),
                 viewServerTopic: "audit",
+                getSafeRowKey: ({ key }) => key,
                 mapping: ({ key, value }) => ({
                   id: key,
                   price: value.price,
@@ -11709,6 +11712,7 @@ describe("@effect-view-server/runtime", () => {
           value: kafka.json(Order),
           key: kafka.stringKey(),
           viewServerTopic: "orders",
+          getSafeRowKey: ({ key }) => key,
           mapping: ({ key, value }) => ({
             id: key,
             price: value.price,
@@ -11806,6 +11810,7 @@ describe("@effect-view-server/runtime", () => {
         value: kafka.json(Order),
         key: kafka.stringKey(),
         viewServerTopic: "orders",
+        getSafeRowKey: ({ key }) => key,
         mapping: ({ key, value }) => ({
           id: key,
           price: value.price,
@@ -11894,6 +11899,7 @@ describe("@effect-view-server/runtime", () => {
                 value: kafka.json(Order),
                 key: kafka.stringKey(),
                 viewServerTopic: "orders",
+                getSafeRowKey: ({ key }) => key,
                 mapping: ({ key, value }) => ({
                   id: key,
                   price: value.price,
@@ -12030,6 +12036,7 @@ describe("@effect-view-server/runtime", () => {
               value: kafka.json(Order),
               key: kafka.stringKey(),
               viewServerTopic: "orders",
+              getSafeRowKey: ({ key }) => key,
               mapping: ({ key, value }) => ({
                 id: key,
                 price: value.price,
@@ -12172,6 +12179,7 @@ describe("@effect-view-server/runtime", () => {
                 value: kafka.json(Order),
                 key: kafka.stringKey(),
                 viewServerTopic: "orders",
+                getSafeRowKey: ({ key }) => key,
                 mapping: ({ key, value }) => ({
                   id: key,
                   price: value.price,

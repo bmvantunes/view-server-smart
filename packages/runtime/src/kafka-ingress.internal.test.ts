@@ -182,6 +182,7 @@ const kafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
       value: kafka.json(IncomingOrder),
       key: kafka.stringKey(),
       viewServerTopic: "orders",
+      getSafeRowKey: ({ key }) => key,
       mapping: ({ key, value }) => ({
         id: key,
         customerId: value.customerId,
@@ -4330,6 +4331,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             regions: ["local"],
             value: kafka.json(IncomingOrder),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -4394,7 +4396,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
-  it.effect("deletes Kafka tombstones by the mapped row id remembered for the source key", () =>
+  it.effect("deletes Kafka tombstones by an explicit safe transformed row key", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
       const transformedKeyOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
@@ -4405,6 +4407,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingOrder),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => `mapped-${key}`,
             mapping: ({ key, value }) => ({
               id: `mapped-${key}`,
               customerId: value.customerId,
@@ -4485,6 +4488,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: () => Effect.succeed(42),
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => `numeric-${key}`,
             mapping: ({ key, value }) => ({
               id: `numeric-${key}`,
               customerId: value.customerId,
@@ -4565,6 +4569,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: () => Effect.succeed({ id: 123, tenantId: "tenant-1" }),
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => `mapped-${key.id}-${key.tenantId}`,
             mapping: ({ key, value }) => ({
               id: `mapped-${key.id}-${key.tenantId}`,
               customerId: value.customerId,
@@ -4781,6 +4786,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingOrder),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -4792,6 +4798,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingPrecisePosition),
             key: kafka.stringKey(),
             viewServerTopic: "precisePositions",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               accountId: value.accountId,
@@ -4886,6 +4893,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingOrder),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -4897,6 +4905,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingPrecisePosition),
             key: kafka.stringKey(),
             viewServerTopic: "precisePositions",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               accountId: value.accountId,
@@ -5678,6 +5687,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingOrder),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -5689,6 +5699,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingOrder),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -5870,6 +5881,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             }),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -6178,6 +6190,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             }),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -6341,6 +6354,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             }),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key }) => ({
               id: key,
               customerId: "unreachable",
@@ -6470,6 +6484,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             }),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -7008,6 +7023,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingOrder),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -7230,6 +7246,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingPrecisePosition),
             key: kafka.stringKey(),
             viewServerTopic: "precisePositions",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               accountId: value.accountId,
@@ -7314,6 +7331,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             value: kafka.json(IncomingOrder),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: () => {
               throw new Error("mapping failed");
             },
@@ -7401,6 +7419,108 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
+  it.effect("records tombstone row key resolver failures as mapping failures", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const throwingRowKeyKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-tombstone-row-key-mapping-failure-test",
+        ...committedKafkaStart("view-server-tombstone-row-key-mapping-failure-test"),
+        regions,
+        topics: {
+          [ordersSourceTopic]: localKafkaTopic({
+            regions: ["local"],
+            value: kafka.json(IncomingOrder),
+            key: kafka.stringKey(),
+            viewServerTopic: "orders",
+            getSafeRowKey: () => {
+              throw new Error("row key mapping failed");
+            },
+            mapping: ({ key, value }) => ({
+              id: key,
+              customerId: value.customerId,
+              price: value.price,
+            }),
+          }),
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: throwingRowKeyKafkaOptions.consume,
+        regions: throwingRowKeyKafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      let healthRefreshRequestCount = 0;
+      const requestHealthRefresh = Effect.sync(() => {
+        healthRefreshRequestCount += 1;
+      });
+
+      const error = yield* Effect.flip(
+        processKafkaMessage(
+          viewServer,
+          runtimeCore.client,
+          requestHealthRefresh,
+          throwingRowKeyKafkaOptions,
+          ledger,
+          "local",
+          kafkaMessage({
+            topic: ordersSourceTopic,
+            key: "bad-row-key",
+            value: null,
+            offset: 7n,
+          }),
+        ),
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+
+      expect({
+        error: kafkaIngressErrorDetails(error),
+        healthRefreshRequestCount,
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+      }).toStrictEqual({
+        error: {
+          causeMessage: "Failed to resolve Kafka row key",
+          message: `Failed to map Kafka message for source topic ${ordersSourceTopic}`,
+          region: "local",
+          sourceTopic: ordersSourceTopic,
+        },
+        healthRefreshRequestCount: 1,
+        kafkaTopic: {
+          status: "degraded",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 1,
+              bytesPerSecond: 11,
+              decodedMessagesPerSecond: 0,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 1,
+              publishFailuresPerSecond: 0,
+              commitFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: 0,
+              lastCommitAt: null,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: null,
+              lastError: "Failed to resolve Kafka row key",
+            },
+          }),
+        },
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
   it.effect("records untagged codec failures as decode failures", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -7417,6 +7537,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             }),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key }) => ({
               id: key,
               customerId: "unused",
@@ -7511,6 +7632,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             }),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key }) => ({
               id: key,
               customerId: "unused",
@@ -7610,6 +7732,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             }),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key }) => ({
               id: key,
               customerId: "unused",
@@ -7784,6 +7907,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
                 Effect.fail(keyCodecError),
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -7872,6 +7996,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: (): Effect.Effect<string> => Effect.interrupt,
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -7966,6 +8091,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: (): Effect.Effect<string> => Effect.die(new Error("tombstone key defect")),
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               customerId: value.customerId,
@@ -8031,7 +8157,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
-  it.effect("commits Kafka tombstones with ambiguous object keys as idempotent no-ops", () =>
+  it.effect("deletes Kafka tombstones with explicit object-key row key resolvers", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
       const ledger = makeViewServerKafkaHealthLedger<Topics>({
@@ -8054,6 +8180,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: () => Effect.succeed({ accountId: "also-bad", orderId: "bad" }),
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key.orderId,
             mapping: ({ key, value }) => ({
               id: key.orderId,
               customerId: value.customerId,
@@ -8112,14 +8239,9 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
             id: "also-bad",
             price: 10,
           },
-          {
-            customerId: "customer-ambiguous-order",
-            id: "bad",
-            price: 20,
-          },
         ],
-        totalRows: 2,
-        version: 1,
+        totalRows: 1,
+        version: 2,
       });
       expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe("7");
 
@@ -8127,7 +8249,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
     }),
   );
 
-  it.effect("commits Kafka tombstones with primitive non-string keys as idempotent no-ops", () =>
+  it.effect("commits Kafka tombstones for unsafe value-derived row keys as idempotent no-ops", () =>
     Effect.gen(function* () {
       const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
       const ledger = makeViewServerKafkaHealthLedger<Topics>({
@@ -8150,8 +8272,9 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: (): Effect.Effect<number> => Effect.succeed(123),
             }),
             viewServerTopic: "orders",
+            getUnsafeRowKey: ({ key, value }) => `${key}:${value.customerId}`,
             mapping: ({ key, value }) => ({
-              id: String(key),
+              id: `${key}:${value.customerId}`,
               customerId: value.customerId,
               price: value.price,
             }),
@@ -8161,7 +8284,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
       yield* ledger.regionConnected("local", 1_000);
       yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
       yield* runtimeCore.client.publish("orders", {
-        id: "123",
+        id: "123:customer-primitive-key",
         customerId: "customer-primitive-key",
         price: 10,
       });
@@ -8198,7 +8321,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
         rows: [
           {
             customerId: "customer-primitive-key",
-            id: "123",
+            id: "123:customer-primitive-key",
             price: 10,
           },
         ],
@@ -8212,7 +8335,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
   );
 
   it.effect(
-    "commits Kafka tombstone object row id fields with non-string values as idempotent no-ops",
+    "deletes Kafka tombstones when object-key row key resolvers stringify non-string fields",
     () =>
       Effect.gen(function* () {
         const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
@@ -8237,6 +8360,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
                   decode: () => Effect.succeed({ id: 123, tenantId: "tenant-1" }),
                 }),
                 viewServerTopic: "orders",
+                getSafeRowKey: ({ key }) => String(key.id),
                 mapping: ({ key, value }) => ({
                   id: String(key.id),
                   customerId: value.customerId,
@@ -8291,18 +8415,13 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
           statusCode: "Ready",
           rows: [
             {
-              customerId: "customer-object-id",
-              id: "123",
-              price: 10,
-            },
-            {
               customerId: "customer-object-tenant",
               id: "tenant-1",
               price: 20,
             },
           ],
-          totalRows: 2,
-          version: 1,
+          totalRows: 1,
+          version: 2,
         });
         expect(health.kafka?.topics[ordersSourceTopic]?.regions["local"]?.committedOffset).toBe(
           "7",
@@ -8335,6 +8454,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: () => Effect.succeed({ id: "object-key-tombstone" }),
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key.id,
             mapping: ({ key, value }) => ({
               id: key.id,
               customerId: value.customerId,
@@ -8406,6 +8526,7 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
               decode: () => Effect.succeed({ orderId: "single-string-object-key-tombstone" }),
             }),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key.orderId,
             mapping: ({ key, value }) => ({
               id: key.orderId,
               customerId: value.customerId,

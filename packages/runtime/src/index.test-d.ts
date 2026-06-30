@@ -96,6 +96,7 @@ const londonKafkaTopic = viewServer.kafkaTopic<typeof londonKafkaRegions>()({
   value: kafka.json(Order),
   key: kafka.stringKey(),
   viewServerTopic: "orders",
+  getSafeRowKey: ({ key }) => key,
   mapping: ({ key, value }) => ({
     id: key,
     price: value.price,
@@ -309,6 +310,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,
@@ -331,6 +333,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,
@@ -351,6 +354,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,
@@ -374,6 +378,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,
@@ -396,6 +401,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,
@@ -419,6 +425,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,
@@ -439,6 +446,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,
@@ -457,6 +465,7 @@ describe("runtime type contracts", () => {
             value: kafka.json(Order),
             key: kafka.stringKey(),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value }) => ({
               id: key,
               price: value.price,

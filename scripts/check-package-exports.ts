@@ -514,7 +514,7 @@ const _healthHttpJsonType: ViewServerHealthHttpJson | undefined = undefined;
 const _wireEventType: ViewServerWireEvent | undefined = undefined;
 const _mappingInputType:
   | KafkaMappingInput<
-      { readonly orders: { readonly schema: never } },
+      { readonly orders: { readonly schema: never; readonly key: "id" } },
       "orders",
       "usa",
       never,

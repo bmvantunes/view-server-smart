@@ -348,6 +348,7 @@ const setupBenchmark = Effect.fn("ViewServerRuntime.kafka.bench.setup")(function
           value: kafka.json(IncomingJsonOrder),
           key: kafka.stringKey(),
           viewServerTopic: "jsonOrders",
+          getSafeRowKey: ({ key }) => key,
           mapping: ({ key, value }) => ({
             id: key,
             customerId: value.customerId,
@@ -359,6 +360,7 @@ const setupBenchmark = Effect.fn("ViewServerRuntime.kafka.bench.setup")(function
           value: kafka.protobuf(OrderValueSchema),
           key: kafka.protobuf(OrderKeySchema),
           viewServerTopic: "protobufOrders",
+          getSafeRowKey: ({ key }) => key.orderId,
           mapping: ({ key, value }) => ({
             id: key.orderId,
             customerId: value.customerId,

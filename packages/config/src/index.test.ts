@@ -22,6 +22,7 @@ import {
 import {
   decodeKafkaCodec,
   decodeKafkaTopicMessage,
+  decodeKafkaTopicRowKey,
   defineKafkaTopic,
   defineGrpcFeed,
   defineViewServerConfig,
@@ -2435,6 +2436,8 @@ describe("defineViewServerConfig", () => {
         key: kafka.stringKey(),
         // @ts-expect-error Kafka runtime topics cannot publish into gRPC-owned leased topics.
         viewServerTopic: "orders",
+        // @ts-expect-error invalid target topic narrows Kafka row-key resolution away.
+        getSafeRowKey: () => "order-1",
         mapping: ({ key, value }) => ({
           id: key,
           accountId: "account-1",
@@ -2455,6 +2458,8 @@ describe("defineViewServerConfig", () => {
         key: kafka.stringKey(),
         // @ts-expect-error Kafka runtime topics cannot publish into gRPC-owned materialized topics.
         viewServerTopic: "trades",
+        // @ts-expect-error invalid target topic narrows Kafka row-key resolution away.
+        getSafeRowKey: () => "trade-1",
         mapping: ({ key, value }) => ({
           id: key,
           accountId: "account-1",
@@ -2475,6 +2480,8 @@ describe("defineViewServerConfig", () => {
         key: kafka.stringKey(),
         // @ts-expect-error hostile JS callers can still target missing View Server topics.
         viewServerTopic: "missing",
+        // @ts-expect-error invalid target topic narrows Kafka row-key resolution away.
+        getSafeRowKey: () => "missing-1",
         mapping: ({ key, value }) => ({
           id: key,
           accountId: "account-1",
@@ -2491,6 +2498,7 @@ describe("defineViewServerConfig", () => {
     const malformedSourceKafkaTopic = defineKafkaTopic({
       malformed: {
         schema: Position,
+        key: "id",
         source: { kind: 1 },
       },
     })<typeof kafkaRegions>();
@@ -2499,6 +2507,7 @@ describe("defineViewServerConfig", () => {
       value: tradesValueKafkaCodec,
       key: kafka.stringKey(),
       viewServerTopic: "malformed",
+      getSafeRowKey: ({ key }) => key,
       mapping: ({ key, value }) => ({
         id: key,
         accountId: "account-1",
@@ -2517,6 +2526,7 @@ describe("defineViewServerConfig", () => {
       value: tradesValueKafkaCodec,
       key: kafka.stringKey(),
       viewServerTopic: "positions",
+      getSafeRowKey: ({ key }) => key,
       mapping: ({ key, value }) => ({
         id: key,
         accountId: "account-1",
@@ -3077,6 +3087,7 @@ describe("defineViewServerConfig", () => {
             value: kafka.protobuf(ordersValueSchema),
             key: kafka.protobuf(ordersKeySchema),
             viewServerTopic: "orders",
+            getSafeRowKey: ({ key }) => key.orderId,
             mapping: ({ key, value, region }) => {
               expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
               expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
@@ -3095,6 +3106,7 @@ describe("defineViewServerConfig", () => {
             regions: ["usa"],
             value: kafka.protobuf(tradesValueSchema),
             viewServerTopic: "trades",
+            getSafeRowKey: ({ key }) => key,
             mapping: ({ key, value, region }) => {
               expectTypeOf(key).toEqualTypeOf<string>();
               expectTypeOf(value).toEqualTypeOf<TradesValueMessage>();
@@ -5973,6 +5985,7 @@ describe("public type surface", () => {
         regions: ["usa", "london"],
         value: kafka.protobuf(ordersValueSchema),
         viewServerTopic: "orders",
+        getSafeRowKey: ({ key }) => key,
         mapping: ({ key, value, region }) => {
           expectTypeOf(key).toEqualTypeOf<string>();
           expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
@@ -6006,6 +6019,7 @@ describe("public type surface", () => {
         }),
       ).toStrictEqual({
         viewServerTopic: "orders",
+        rowKey: "order-1",
         row: {
           id: "order-1",
           customerId: "customer-1",
@@ -6020,6 +6034,7 @@ describe("public type surface", () => {
         value: kafka.protobuf(ordersValueSchema),
         key: kafka.protobuf(ordersKeySchema),
         viewServerTopic: "orders",
+        getSafeRowKey: ({ key }) => key.orderId,
         mapping: ({ key, value, region }) => {
           expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
           expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
@@ -6078,6 +6093,7 @@ describe("public type surface", () => {
         }),
       ).toStrictEqual({
         viewServerTopic: "orders",
+        rowKey: "order-keyed-1",
         row: {
           id: "order-keyed-1",
           customerId: "customer-keyed-1",
@@ -6088,11 +6104,25 @@ describe("public type surface", () => {
         },
       });
 
+      expect(
+        yield* decodeKafkaTopicRowKey(keyedTopic, {
+          keyBytes: toBinary(
+            ordersKeySchema,
+            create(ordersKeySchema, {
+              orderId: "order-keyed-1",
+            }),
+          ),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toBe("order-keyed-1");
+
       const stringKeyedTopic = kafkaTopic({
         regions: ["usa"],
         value: kafka.protobuf(ordersValueSchema),
         key: kafka.stringKey(),
         viewServerTopic: "orders",
+        getSafeRowKey: ({ key }) => key,
         mapping: ({ key, value, region }) => {
           expectTypeOf(key).toEqualTypeOf<string>();
           expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
@@ -6115,6 +6145,7 @@ describe("public type surface", () => {
         regions: ["usa"],
         value: kafka.json(Position),
         viewServerTopic: "positions",
+        getSafeRowKey: ({ key }) => key,
         mapping: ({ key, value, region }) => {
           expectTypeOf(key).toEqualTypeOf<string>();
           expectTypeOf(value).toEqualTypeOf<typeof Position.Type>();
@@ -6155,6 +6186,7 @@ describe("public type surface", () => {
         },
       }).toStrictEqual({
         viewServerTopic: "positions",
+        rowKey: "position-json-1",
         row: {
           id: "position-json-1",
           accountId: "account-json-1",
@@ -6172,6 +6204,7 @@ describe("public type surface", () => {
         regions: ["usa"],
         value: kafka.protobuf(ordersValueSchema),
         viewServerTopic: "orders",
+        getSafeRowKey: ({ key }) => key,
         mapping: () => {
           throw new Error("mapper failed");
         },
@@ -6202,6 +6235,198 @@ describe("public type surface", () => {
         mappingFailure: true,
         forgedMappingFailure: false,
       });
+
+      const rowKeyThrowingTopic = kafkaTopic({
+        regions: ["usa"],
+        value: kafka.protobuf(ordersValueSchema),
+        viewServerTopic: "orders",
+        getSafeRowKey: () => {
+          throw new Error("row key failed");
+        },
+        mapping: ({ key, value, region }) => ({
+          id: key,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const rowKeyFailure = yield* Effect.flip(
+        decodeKafkaTopicRowKey(rowKeyThrowingTopic, {
+          keyBytes: textEncoder.encode("order-row-key-throws"),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      const rowCompletionThrowingTopic = kafkaTopic({
+        regions: ["usa"],
+        value: kafka.protobuf(ordersValueSchema),
+        viewServerTopic: "orders",
+        getSafeRowKey: ({ key }) => key,
+        mapping: ({ key, value, region }) => ({
+          id: key,
+          customerId: value.customerId,
+          get status(): "open" {
+            throw new Error("row getter failed");
+          },
+          price: value.price,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      });
+      const rowCompletionFailure = yield* Effect.flip(
+        decodeKafkaTopicMessage(rowCompletionThrowingTopic, {
+          keyBytes: textEncoder.encode("order-completion-throws"),
+          valueBytes: toBinary(
+            ordersValueSchema,
+            create(ordersValueSchema, {
+              customerId: "customer-completion-throws",
+              status: "open",
+              price: 1,
+              updatedAt: 1,
+            }),
+          ),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      );
+      expect({
+        rowCompletionFailure: kafkaErrorIsMapping(rowCompletionFailure),
+        rowKeyFailure: kafkaErrorIsMapping(rowKeyFailure),
+      }).toStrictEqual({
+        rowCompletionFailure: true,
+        rowKeyFailure: true,
+      });
+
+      const unsafeKeyedTopic = kafkaTopic({
+        regions: ["usa"],
+        value: kafka.protobuf(ordersValueSchema),
+        key: kafka.protobuf(ordersKeySchema),
+        viewServerTopic: "orders",
+        getUnsafeRowKey: ({ value }) => value.customerId,
+        mapping: ({ key, value, region }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region,
+          updatedAt: key.orderId.length,
+        }),
+      });
+      const unsafeUnkeyedTopic = kafkaTopic({
+        regions: ["usa"],
+        value: kafka.protobuf(ordersValueSchema),
+        viewServerTopic: "orders",
+        getUnsafeRowKey: ({ value }) => value.customerId,
+        mapping: ({ key, value, region }) => ({
+          id: value.customerId,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region,
+          updatedAt: key.length,
+        }),
+      });
+      const safeUnkeyedTopic = kafkaTopic({
+        regions: ["usa"],
+        value: kafka.protobuf(ordersValueSchema),
+        viewServerTopic: "orders",
+        getSafeRowKey: ({ key }) => `safe-${key}`,
+        mapping: ({ key, value, region }) => ({
+          id: `safe-${key}`,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region,
+          updatedAt: key.length,
+        }),
+      });
+      expect(
+        yield* decodeKafkaTopicRowKey(unsafeKeyedTopic, {
+          keyBytes: toBinary(
+            ordersKeySchema,
+            create(ordersKeySchema, {
+              orderId: "unsafe-keyed-1",
+            }),
+          ),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toBe(null);
+      expect(
+        yield* decodeKafkaTopicMessage(unsafeKeyedTopic, {
+          keyBytes: toBinary(
+            ordersKeySchema,
+            create(ordersKeySchema, {
+              orderId: "unsafe-keyed-1",
+            }),
+          ),
+          valueBytes: toBinary(
+            ordersValueSchema,
+            create(ordersValueSchema, {
+              customerId: "customer-unsafe-keyed-1",
+              status: "closed",
+              price: 2,
+              updatedAt: 3,
+            }),
+          ),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        viewServerTopic: "orders",
+        rowKey: "customer-unsafe-keyed-1",
+        row: {
+          id: "customer-unsafe-keyed-1",
+          customerId: "customer-unsafe-keyed-1",
+          status: "closed",
+          price: 2,
+          region: "usa",
+          updatedAt: 14,
+        },
+      });
+      expect(
+        yield* decodeKafkaTopicRowKey(unsafeUnkeyedTopic, {
+          keyBytes: textEncoder.encode("unsafe-unkeyed-1"),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toBe(null);
+      expect(
+        yield* decodeKafkaTopicMessage(unsafeUnkeyedTopic, {
+          keyBytes: textEncoder.encode("unsafe-unkeyed-1"),
+          valueBytes: toBinary(
+            ordersValueSchema,
+            create(ordersValueSchema, {
+              customerId: "customer-unsafe-unkeyed-1",
+              status: "open",
+              price: 4,
+              updatedAt: 5,
+            }),
+          ),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toStrictEqual({
+        viewServerTopic: "orders",
+        rowKey: "customer-unsafe-unkeyed-1",
+        row: {
+          id: "customer-unsafe-unkeyed-1",
+          customerId: "customer-unsafe-unkeyed-1",
+          status: "open",
+          price: 4,
+          region: "usa",
+          updatedAt: 16,
+        },
+      });
+      expect(
+        yield* decodeKafkaTopicRowKey(safeUnkeyedTopic, {
+          keyBytes: textEncoder.encode("unkeyed-1"),
+          region: "usa",
+          metadata: kafkaTestMetadata("usa"),
+        }),
+      ).toBe("safe-unkeyed-1");
     }),
   );
 
@@ -6210,6 +6435,7 @@ describe("public type surface", () => {
       regions: ["usa"],
       value: kafka.json(Order),
       viewServerTopic: "orders",
+      getSafeRowKey: ({ key }) => key,
       mapping: ({ key, value, region }) => {
         expectTypeOf(key).toEqualTypeOf<string>();
         expectTypeOf(value).toEqualTypeOf<typeof Order.Type>();
@@ -6239,6 +6465,7 @@ describe("public type surface", () => {
           }),
       }),
       viewServerTopic: "trades",
+      getUnsafeRowKey: ({ value }) => value.tradeId,
       mapping: ({ key, value, region }) => {
         expectTypeOf(key).toEqualTypeOf<string>();
         expectTypeOf(value).toEqualTypeOf<{
@@ -6273,6 +6500,7 @@ const assertGeneratedSchemaContracts = () => {
     value: kafka.protobuf(generatedOrdersValueSchema),
     key: kafka.protobuf(generatedOrdersKeySchema),
     viewServerTopic: "orders",
+    getSafeRowKey: ({ key }) => key.orderId,
     mapping: ({ key, value, region }) => {
       expectTypeOf(key).toEqualTypeOf<
         Message<"viewserver.test.OrderKey"> & { readonly orderId: string }
@@ -6307,6 +6535,7 @@ const assertGeneratedSchemaContracts = () => {
     regions: ["usa", "london"],
     value: kafka.protobuf(generatedOrdersValueSchema),
     viewServerTopic: "orders",
+    getSafeRowKey: ({ key }) => key,
     mapping: ({ key, value, region }) => {
       expectTypeOf(key).toEqualTypeOf<string>();
       expectTypeOf(value).toEqualTypeOf<
@@ -6342,6 +6571,7 @@ const assertCompileTimeContracts = () => {
     regions: ["london"],
     value: kafka.protobuf(ordersValueSchema),
     viewServerTopic: "orders",
+    getSafeRowKey: ({ key }) => key,
     mapping: ({ key, value, region }) => ({
       id: key,
       customerId: value.customerId,
@@ -6355,6 +6585,7 @@ const assertCompileTimeContracts = () => {
     regions: ["usa"],
     value: kafka.protobuf(ordersValueSchema),
     viewServerTopic: "orders",
+    getSafeRowKey: ({ key }) => key,
     mapping: ({ key, value, region }) => ({
       id: key,
       customerId: value.customerId,
@@ -6369,6 +6600,7 @@ const assertCompileTimeContracts = () => {
     value: kafka.protobuf(ordersValueSchema),
     key: kafka.protobuf(ordersKeySchema),
     viewServerTopic: "orders",
+    getSafeRowKey: ({ key }) => key.orderId,
     mapping: ({ key, value, region }) => ({
       id: key.orderId,
       customerId: value.customerId,
@@ -6428,6 +6660,8 @@ const assertCompileTimeContracts = () => {
     // @ts-expect-error Kafka value codecs cannot be inferred from any
     value: JSON.parse("{}"),
     viewServerTopic: "orders",
+    // @ts-expect-error invalid value codec narrows Kafka row-key resolution away.
+    getSafeRowKey: () => "order-1",
     mapping: (): typeof Order.Type => ({
       id: "order-1",
       customerId: "customer-1",
@@ -6454,6 +6688,8 @@ const assertCompileTimeContracts = () => {
     // @ts-expect-error Kafka value codecs cannot be widened to KafkaCodec<any>
     value: unsafeValueCodec,
     viewServerTopic: "orders",
+    // @ts-expect-error invalid value codec narrows Kafka row-key resolution away.
+    getSafeRowKey: () => "order-1",
     mapping: (): typeof Order.Type => ({
       id: "order-1",
       customerId: "customer-1",
@@ -6469,6 +6705,8 @@ const assertCompileTimeContracts = () => {
     // @ts-expect-error Kafka codec error channels cannot be widened to any
     value: unsafeErrorCodec,
     viewServerTopic: "orders",
+    // @ts-expect-error invalid value codec narrows Kafka row-key resolution away.
+    getSafeRowKey: () => "order-1",
     mapping: (): typeof Order.Type => ({
       id: "order-1",
       customerId: "customer-1",
@@ -6484,6 +6722,8 @@ const assertCompileTimeContracts = () => {
     // @ts-expect-error Kafka codec error channels cannot be widened to unknown
     value: unknownErrorCodec,
     viewServerTopic: "orders",
+    // @ts-expect-error invalid value codec narrows Kafka row-key resolution away.
+    getSafeRowKey: () => "order-1",
     mapping: (): typeof Order.Type => ({
       id: "order-1",
       customerId: "customer-1",
@@ -6753,6 +6993,7 @@ const assertCompileTimeContracts = () => {
           regions: ["usa"],
           value: kafka.protobuf(ordersValueSchema),
           viewServerTopic: "orders",
+          getSafeRowKey: () => "order-1",
           mapping: () => ({
             id: "order-1",
             customerId: "customer-1",
@@ -6866,6 +7107,8 @@ const assertCompileTimeContracts = () => {
     // @ts-expect-error unsupported Kafka key codecs must fail instead of inferring unknown
     key: {},
     viewServerTopic: "orders",
+    // @ts-expect-error invalid key codec narrows Kafka row-key resolution away.
+    getSafeRowKey: () => "order-1",
     mapping: ({ value, region }) => ({
       id: "order-1",
       customerId: value.customerId,
@@ -6878,8 +7121,11 @@ const assertCompileTimeContracts = () => {
 
   localKafkaTopic({
     regions: ["usa"],
+    // @ts-expect-error returning source JSON value directly rejects fields outside the target row
     value: kafka.json(OrderWithExtraSourceField),
     viewServerTopic: "orders",
+    // @ts-expect-error rejected source shape narrows Kafka row-key resolution away.
+    getSafeRowKey: ({ key }) => key,
     // @ts-expect-error returning source JSON value directly rejects fields outside the target row
     mapping: ({ value }) => value,
   });
@@ -6889,6 +7135,8 @@ const assertCompileTimeContracts = () => {
     value: kafka.protobuf(ordersValueSchema),
     key: kafka.stringKey(),
     viewServerTopic: "orders",
+    // @ts-expect-error rejected mapping narrows Kafka row-key resolution away.
+    getSafeRowKey: ({ key }) => key,
     // @ts-expect-error unannotated mapping returns must match the target View Server topic row
     mapping: ({ key, value, region }) => ({
       id: key,
@@ -6904,6 +7152,8 @@ const assertCompileTimeContracts = () => {
     value: kafka.protobuf(ordersValueSchema),
     key: kafka.stringKey(),
     viewServerTopic: "orders",
+    // @ts-expect-error rejected mapping narrows Kafka row-key resolution away.
+    getSafeRowKey: ({ key }) => key,
     // @ts-expect-error unannotated mapping returns reject extra fields outside the target row
     mapping: ({ key, value, region }) => ({
       id: key,
@@ -6921,6 +7171,7 @@ const assertCompileTimeContracts = () => {
     value: kafka.protobuf(ordersValueSchema),
     key: kafka.protobuf(ordersKeySchema),
     viewServerTopic: "orders",
+    getSafeRowKey: ({ key }) => key.orderId,
     mapping: ({ key, value, schema, metadata }) => {
       expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
       expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
@@ -7712,6 +7963,7 @@ const assertCompileTimeContracts = () => {
           value: kafka.protobuf(ordersValueSchema),
           key: kafka.protobuf(ordersKeySchema),
           viewServerTopic: "orders",
+          getSafeRowKey: ({ key }) => key.orderId,
           mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<OrdersKeyMessage>();
             expectTypeOf(value).toEqualTypeOf<OrdersValueMessage>();
@@ -7730,6 +7982,7 @@ const assertCompileTimeContracts = () => {
           regions: ["usa"],
           value: kafka.protobuf(tradesValueSchema),
           viewServerTopic: "trades",
+          getSafeRowKey: ({ key }) => key,
           mapping: ({ key, value, region }) => {
             expectTypeOf(key).toEqualTypeOf<string>();
             expectTypeOf(value).toEqualTypeOf<TradesValueMessage>();
