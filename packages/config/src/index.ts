@@ -174,6 +174,7 @@ export type { TopicSourceDefinition } from "./source-contract";
 export type {
   KafkaBytesCodec,
   KafkaDecodedTopicMessage,
+  KafkaDecodedTopicSourceMessage,
   ExactRuntimeOptions,
   KafkaCodec,
   KafkaCodecDecodeInput,

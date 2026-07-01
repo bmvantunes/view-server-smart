@@ -17,6 +17,7 @@ import {
   type ViewServerRuntimeClient,
 } from "@effect-view-server/config";
 import { isKafkaRuntimeTopicSourceDefinition } from "@effect-view-server/config/internal";
+import type { ViewServerRuntimeCoreInternalClient } from "@effect-view-server/runtime-core/internal";
 import {
   ignoreLoggedTypedFailuresPreserveNonTypedFailures,
   runAllFinalizers,
@@ -107,12 +108,18 @@ type KafkaBatchTopic<Topics extends ViewServerRuntimeTopicDefinitions> = Extract
   string
 >;
 type DecodedKafkaBatchMessage<Topics extends ViewServerRuntimeTopicDefinitions> = {
-  readonly decoded: KafkaDecodedTopicMessage<Topics, KafkaBatchTopic<Topics>>;
+  readonly decoded: KafkaDecodedTopicMessage<Topics, KafkaBatchTopic<Topics>> & {
+    readonly rowKey?: string;
+  };
   readonly message: KafkaConsumerMessage;
   readonly messageBytes: number;
   readonly nowMillis: number;
   readonly sourceTopic: string;
 };
+type KafkaIngressRuntimeClient<Topics extends ViewServerRuntimeTopicDefinitions> =
+  ViewServerRuntimeClient<Topics> & {
+    readonly publishManyWithStorageKeys?: ViewServerRuntimeCoreInternalClient<Topics>["publishManyWithStorageKeys"];
+  };
 type KafkaConsumerHealthListenerWaiter = {
   readonly expected: number;
   readonly deferred: Deferred.Deferred<void>;
@@ -686,80 +693,17 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
     }
     const topicDefinition = config.topics[viewServerTopic];
     const requestHealthRefreshAfterLedgerUpdate = requestKafkaHealthRefresh(requestHealthRefresh);
-    const decoded = yield* (
-      isKafkaRuntimeTopicSourceDefinition(topic)
-        ? decodeKafkaTopicMessage(topic, {
-            keyBytes,
-            valueBytes,
-            region: topicRegion,
-            metadata,
-            rowKeyField: topicDefinition.key,
-            schema: topicDefinition.schema,
-            viewServerTopic,
-          })
-        : decodeKafkaTopicMessage(topic, {
-            keyBytes,
-            valueBytes,
-            region: topicRegion,
-            metadata,
-          })
-    ).pipe(
-      Effect.matchCauseEffect({
-        onFailure: (cause) => {
-          const error = Cause.findErrorOption(cause);
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.failCause(kafkaNonFailureCause(cause));
-          }
-          if (Option.isSome(error)) {
-            if (kafkaErrorIsMapping(error.value)) {
-              return health
-                .mappingFailed(sourceTopic, region, {
-                  bytes: messageBytes,
-                  message: messageFromUnknown(error.value),
-                  nowMillis,
-                })
-                .pipe(
-                  Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
-                  Effect.andThen(
-                    Effect.failCause(
-                      kafkaIngressFailureCause(
-                        kafkaMessageMappingError(
-                          region,
-                          sourceTopic,
-                          kafkaFailureCause(error.value, cause),
-                        ),
-                        cause,
-                      ),
-                    ),
-                  ),
-                );
-            }
-            return health
-              .decodeFailed(sourceTopic, region, {
-                bytes: messageBytes,
-                message: messageFromUnknown(error.value),
-                nowMillis,
-              })
-              .pipe(
-                Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
-                Effect.andThen(
-                  Effect.failCause(
-                    kafkaIngressFailureCause(
-                      kafkaMessageDecodeError(
-                        region,
-                        sourceTopic,
-                        kafkaFailureCause(error.value, cause),
-                      ),
-                      cause,
-                    ),
-                  ),
-                ),
-              );
-          }
+    const handleDecodeFailure = (cause: Cause.Cause<unknown>) => {
+      const error = Cause.findErrorOption(cause);
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.failCause(kafkaNonFailureCause(cause));
+      }
+      if (Option.isSome(error)) {
+        if (kafkaErrorIsMapping(error.value)) {
           return health
-            .decodeFailed(sourceTopic, region, {
+            .mappingFailed(sourceTopic, region, {
               bytes: messageBytes,
-              message: messageFromUnknown(Cause.squash(cause)),
+              message: messageFromUnknown(error.value),
               nowMillis,
             })
             .pipe(
@@ -767,24 +711,101 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
               Effect.andThen(
                 Effect.failCause(
                   kafkaIngressFailureCause(
-                    kafkaMessageDecodeError(
+                    kafkaMessageMappingError(
                       region,
                       sourceTopic,
-                      kafkaFailureCause(Cause.squash(cause), cause),
+                      kafkaFailureCause(error.value, cause),
                     ),
                     cause,
                   ),
                 ),
               ),
             );
-        },
-        onSuccess: (decodedMessage) => Effect.succeed(decodedMessage),
-      }),
-    );
+        }
+        return health
+          .decodeFailed(sourceTopic, region, {
+            bytes: messageBytes,
+            message: messageFromUnknown(error.value),
+            nowMillis,
+          })
+          .pipe(
+            Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
+            Effect.andThen(
+              Effect.failCause(
+                kafkaIngressFailureCause(
+                  kafkaMessageDecodeError(
+                    region,
+                    sourceTopic,
+                    kafkaFailureCause(error.value, cause),
+                  ),
+                  cause,
+                ),
+              ),
+            ),
+          );
+      }
+      return health
+        .decodeFailed(sourceTopic, region, {
+          bytes: messageBytes,
+          message: messageFromUnknown(Cause.squash(cause)),
+          nowMillis,
+        })
+        .pipe(
+          Effect.andThen(requestHealthRefreshAfterLedgerUpdate),
+          Effect.andThen(
+            Effect.failCause(
+              kafkaIngressFailureCause(
+                kafkaMessageDecodeError(
+                  region,
+                  sourceTopic,
+                  kafkaFailureCause(Cause.squash(cause), cause),
+                ),
+                cause,
+              ),
+            ),
+          ),
+        );
+    };
+    const decoded = isKafkaRuntimeTopicSourceDefinition(topic)
+      ? yield* decodeKafkaTopicMessage(topic, {
+          keyBytes,
+          valueBytes,
+          region: topicRegion,
+          metadata,
+          rowKeyField: topicDefinition.key,
+          schema: topicDefinition.schema,
+          viewServerTopic,
+        }).pipe(
+          Effect.matchCauseEffect({
+            onFailure: handleDecodeFailure,
+            onSuccess: (decodedMessage) => Effect.succeed(decodedMessage),
+          }),
+        )
+      : yield* decodeKafkaTopicMessage(topic, {
+          keyBytes,
+          valueBytes,
+          region: topicRegion,
+          metadata,
+        }).pipe(
+          Effect.matchCauseEffect({
+            onFailure: handleDecodeFailure,
+            onSuccess: (decodedMessage) => Effect.succeed(decodedMessage),
+          }),
+        );
+    const decodedBatchMessage =
+      "rowKey" in decoded && typeof decoded.rowKey === "string"
+        ? {
+            row: decoded.row,
+            rowKey: decoded.rowKey,
+            viewServerTopic,
+          }
+        : {
+            row: decoded.row,
+            viewServerTopic,
+          };
     return Option.some({
       decoded: {
-        row: decoded.row,
-        viewServerTopic,
+        ...decodedBatchMessage,
       },
       message,
       messageBytes,
@@ -794,38 +815,16 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
   },
 );
 
-const publishKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.publish")(function* <
-  const Topics extends ViewServerRuntimeTopicDefinitions,
->(
-  client: ViewServerRuntimeClient<Topics>,
-  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
-  health: ViewServerKafkaHealthLedger<Topics>,
-  region: string,
-  messages: ReadonlyArray<DecodedKafkaBatchMessage<Topics>>,
-) {
-  const rowsByTopic = new Map<
-    KafkaBatchTopic<Topics>,
-    {
-      readonly sourceTopic: string;
-      readonly rows: Array<TopicRow<Topics, KafkaBatchTopic<Topics>>>;
-      readonly messages: Array<DecodedKafkaBatchMessage<Topics>>;
-    }
-  >();
-  for (const message of messages) {
-    const topicGroup = rowsByTopic.get(message.decoded.viewServerTopic);
-    if (topicGroup === undefined) {
-      rowsByTopic.set(message.decoded.viewServerTopic, {
-        messages: [message],
-        rows: [message.decoded.row],
-        sourceTopic: message.sourceTopic,
-      });
-    } else {
-      topicGroup.messages.push(message);
-      topicGroup.rows.push(message.decoded.row);
-    }
-  }
-  for (const [topic, group] of rowsByTopic) {
-    yield* client.publishMany(topic, group.rows).pipe(
+const publishKafkaRowsForMessages = Effect.fn("ViewServerRuntime.kafka.batch.publishRows")(
+  function* <const Topics extends ViewServerRuntimeTopicDefinitions>(
+    requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
+    health: ViewServerKafkaHealthLedger<Topics>,
+    region: string,
+    sourceTopic: string,
+    messages: ReadonlyArray<DecodedKafkaBatchMessage<Topics>>,
+    publishEffect: Effect.Effect<void, unknown>,
+  ) {
+    yield* publishEffect.pipe(
       Effect.matchCauseEffect({
         onFailure: (cause) => {
           if (Cause.hasInterruptsOnly(cause)) {
@@ -838,11 +837,11 @@ const publishKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.publis
           });
           const processingError = kafkaMessageProcessingError(
             region,
-            group.sourceTopic,
+            sourceTopic,
             kafkaFailureCause(failure, cause),
           );
           return Effect.forEach(
-            group.messages,
+            messages,
             (message) =>
               health.messagePublishFailed(message.sourceTopic, region, {
                 bytes: message.messageBytes,
@@ -855,9 +854,98 @@ const publishKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.publis
             Effect.andThen(Effect.failCause(kafkaIngressFailureCause(processingError, cause))),
           );
         },
-        onSuccess: () => Effect.succeed(true),
+        onSuccess: () => Effect.void,
       }),
     );
+  },
+);
+
+const publishKafkaDecodedBatch = Effect.fn("ViewServerRuntime.kafka.batch.publish")(function* <
+  const Topics extends ViewServerRuntimeTopicDefinitions,
+>(
+  client: KafkaIngressRuntimeClient<Topics>,
+  requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
+  health: ViewServerKafkaHealthLedger<Topics>,
+  region: string,
+  messages: ReadonlyArray<DecodedKafkaBatchMessage<Topics>>,
+) {
+  const rowsByTopic = new Map<
+    KafkaBatchTopic<Topics>,
+    {
+      readonly sourceTopic: string;
+      readonly rows: Array<{
+        readonly message: DecodedKafkaBatchMessage<Topics>;
+        readonly row: TopicRow<Topics, KafkaBatchTopic<Topics>>;
+        readonly storageKey?: string;
+      }>;
+    }
+  >();
+  for (const message of messages) {
+    const row = {
+      message,
+      row: message.decoded.row,
+      ...(message.decoded.rowKey === undefined ? {} : { storageKey: message.decoded.rowKey }),
+    };
+    const topicGroup = rowsByTopic.get(message.decoded.viewServerTopic);
+    if (topicGroup === undefined) {
+      rowsByTopic.set(message.decoded.viewServerTopic, {
+        rows: [row],
+        sourceTopic: message.sourceTopic,
+      });
+    } else {
+      topicGroup.rows.push(row);
+    }
+  }
+  for (const [topic, group] of rowsByTopic) {
+    const plainRows: Array<TopicRow<Topics, KafkaBatchTopic<Topics>>> = [];
+    const plainMessages: Array<DecodedKafkaBatchMessage<Topics>> = [];
+    const storageRows: Array<{
+      readonly storageKey: string;
+      readonly row: TopicRow<Topics, KafkaBatchTopic<Topics>>;
+    }> = [];
+    const storageMessages: Array<DecodedKafkaBatchMessage<Topics>> = [];
+    for (const row of group.rows) {
+      if (row.storageKey === undefined) {
+        plainRows.push(row.row);
+        plainMessages.push(row.message);
+      } else {
+        storageRows.push({
+          row: row.row,
+          storageKey: row.storageKey,
+        });
+        storageMessages.push(row.message);
+      }
+    }
+    if (plainRows.length > 0) {
+      yield* publishKafkaRowsForMessages(
+        requestHealthRefresh,
+        health,
+        region,
+        group.sourceTopic,
+        plainMessages,
+        client.publishMany(topic, plainRows),
+      );
+    }
+    if (storageRows.length > 0) {
+      const publishWithStorageKeys = client.publishManyWithStorageKeys;
+      yield* publishKafkaRowsForMessages(
+        requestHealthRefresh,
+        health,
+        region,
+        group.sourceTopic,
+        storageMessages,
+        publishWithStorageKeys === undefined
+          ? Effect.fail(
+              new ViewServerKafkaIngressError({
+                message: `Kafka source requires storage-key publishing for source topic ${group.sourceTopic}`,
+                cause: "missing-storage-key-publisher",
+                region,
+                sourceTopic: group.sourceTopic,
+              }),
+            )
+          : publishWithStorageKeys(topic, storageRows),
+      );
+    }
   }
 });
 
@@ -913,7 +1001,7 @@ export const processKafkaMessageBatch = Effect.fn("ViewServerRuntime.kafka.messa
     const Regions extends RuntimeRegions,
   >(
     config: ViewServerConfig<Topics>,
-    client: ViewServerRuntimeClient<Topics>,
+    client: KafkaIngressRuntimeClient<Topics>,
     requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
     options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
     health: ViewServerKafkaHealthLedger<Topics>,
@@ -974,7 +1062,7 @@ export const processKafkaMessage = Effect.fn("ViewServerRuntime.kafka.message.pr
   const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  client: KafkaIngressRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
@@ -1113,7 +1201,7 @@ export const runKafkaMessageStream = Effect.fn("ViewServerRuntime.kafka.stream.r
   const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  client: KafkaIngressRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
@@ -1367,7 +1455,7 @@ const startRegionConsumer = Effect.fn("ViewServerRuntime.kafka.region.start")(fu
   const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  client: KafkaIngressRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
@@ -1501,7 +1589,7 @@ export const makeViewServerKafkaIngress: <
   const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  client: KafkaIngressRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,
@@ -1512,7 +1600,7 @@ export const makeViewServerKafkaIngress: <
   const Regions extends RuntimeRegions,
 >(
   config: ViewServerConfig<Topics>,
-  client: ViewServerRuntimeClient<Topics>,
+  client: KafkaIngressRuntimeClient<Topics>,
   requestHealthRefresh: ViewServerKafkaHealthRefreshRequest,
   options: ResolvedViewServerKafkaRuntimeOptions<Topics, Regions>,
   health: ViewServerKafkaHealthLedger<Topics>,

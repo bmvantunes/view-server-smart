@@ -137,7 +137,7 @@ type MakeViewServerRuntimeWithDependencies = {
     dependencies: ViewServerRuntimeDependencies<Topics>,
     config: ViewServerConfig<Topics, Regions, GrpcClients>,
     options: Options & ViewServerRuntimeOptionsInput<Topics, Regions, GrpcClients, Options>,
-  ): Effect.Effect<ViewServerRuntime<Topics>, ViewServerRuntimeFactoryError>;
+  ): Effect.Effect<ViewServerRuntime<Topics, Options>, ViewServerRuntimeFactoryError>;
 };
 
 export const makeViewServerRuntimeWithDependencies: MakeViewServerRuntimeWithDependencies =

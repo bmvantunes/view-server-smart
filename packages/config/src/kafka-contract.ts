@@ -1332,6 +1332,13 @@ export type KafkaDecodedTopicMessage<
   readonly row: TopicRow<Topics, ViewTopic>;
 };
 
+export type KafkaDecodedTopicSourceMessage<
+  Topics extends KafkaTopicSchemaRegistry,
+  ViewTopic extends Extract<keyof Topics, string>,
+> = KafkaDecodedTopicMessage<Topics, ViewTopic> & {
+  readonly rowKey: string;
+};
+
 type KafkaTopicWithoutKeyInput<
   Topics extends KafkaTopicSchemaRegistry,
   Regions extends RuntimeRegions,
@@ -1647,6 +1654,7 @@ const decodeKafkaTopicMessageEffect: (
 ) => Effect.Effect<
   {
     readonly row: object;
+    readonly rowKey?: string;
     readonly viewServerTopic: string;
   },
   unknown
@@ -1698,6 +1706,7 @@ const decodeKafkaTopicMessageEffect: (
   return {
     viewServerTopic: decoded.viewServerTopic,
     row: decoded.row,
+    rowKey: decoded.rowKey,
   };
 });
 
@@ -1747,7 +1756,10 @@ type DecodedTopicMessage<Topic> =
 
 type DecodedSourceTopicMessage<Topic> =
   DecodedSourceTopicViewTopic<Topic> extends Extract<keyof DecodedSourceTopicTopics<Topic>, string>
-    ? KafkaDecodedTopicMessage<DecodedSourceTopicTopics<Topic>, DecodedSourceTopicViewTopic<Topic>>
+    ? KafkaDecodedTopicSourceMessage<
+        DecodedSourceTopicTopics<Topic>,
+        DecodedSourceTopicViewTopic<Topic>
+      >
     : never;
 
 export function decodeKafkaTopicMessage<Topic extends AnyKafkaRuntimeSourceTopic>(
@@ -1766,6 +1778,7 @@ export function decodeKafkaTopicMessage(
 ): Effect.Effect<
   {
     readonly row: object;
+    readonly rowKey?: string;
     readonly viewServerTopic: string;
   },
   unknown

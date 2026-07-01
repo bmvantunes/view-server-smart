@@ -13,6 +13,7 @@ export type {
   KafkaCodecType,
   KafkaCustomCodec,
   KafkaDecodedTopicMessage,
+  KafkaDecodedTopicSourceMessage,
   KafkaDecodeError,
   KafkaJsonCodec,
   KafkaMappingError,

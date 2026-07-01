@@ -14,7 +14,7 @@ main fiber and run Effect finalizers.
 
 ```ts
 import { NodeRuntime } from "@effect/platform-node";
-import { runViewServerRuntime } from "@effect-view-server/runtime";
+import { runViewServerRuntime } from "effect-view-server/runtime";
 import { viewServer } from "./view-server-config";
 
 NodeRuntime.runMain(
@@ -40,7 +40,7 @@ non-`200` status when the runtime is starting, degraded, or stopping.
 The JSON response is the current runtime health snapshot. Internal `bigint`
 fields, such as Kafka lag, are encoded as decimal strings.
 
-React applications should use the pushed health hooks from `@effect-view-server/react`;
+React applications should use the pushed health hooks from `effect-view-server/react`;
 `GET /health` is for infrastructure and smoke checks, not UI polling.
 
 ## Metrics
@@ -78,8 +78,8 @@ consumer group and optional start position:
 ```ts
 import { Config } from "effect";
 import { NodeRuntime } from "@effect/platform-node";
-import { defineViewServerConfig, kafka } from "@effect-view-server/config";
-import { runViewServerRuntime } from "@effect-view-server/runtime";
+import { defineViewServerConfig, kafka } from "effect-view-server/config";
+import { runViewServerRuntime } from "effect-view-server/runtime";
 import { KafkaTrade, Order, Trade } from "./schemas";
 import { OrdersValueSchema } from "./generated/orders";
 
@@ -218,8 +218,8 @@ gRPC sources are also declared on the topic that owns the rows. Runtime options
 then provide the concrete ConnectRPC clients and feed implementations:
 
 ```ts
-import { defineViewServerConfig, grpc } from "@effect-view-server/config";
-import { runViewServerRuntime } from "@effect-view-server/runtime";
+import { defineViewServerConfig, grpc } from "effect-view-server/config";
+import { runViewServerRuntime } from "effect-view-server/runtime";
 import { NodeRuntime } from "@effect/platform-node";
 import { Stream } from "effect";
 import { Order, Strategy } from "./schemas";

@@ -68,7 +68,7 @@ export function makeViewServerRuntime<
     Options
   >
 ): Effect.Effect<
-  ViewServerRuntime<Topics>,
+  ViewServerRuntime<Topics, Options>,
   | HttpServerError.ServeError
   | Config.ConfigError
   | ViewServerRuntimeError

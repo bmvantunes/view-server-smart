@@ -3,6 +3,7 @@ import {
   defineViewServerConfig,
   grpc,
   kafka,
+  type GrpcConnectClientDefinition,
   type GrpcFeedDefinition,
   type GrpcRuntimeClients,
   type RuntimeRegions,
@@ -121,6 +122,24 @@ const londonKafkaTopic = viewServer.kafkaTopic<typeof londonKafkaRegions>()({
 });
 
 const runtimeEffect = makeViewServerRuntime(viewServer);
+const legacyKafkaRuntimeEffect = makeViewServerRuntime(viewServer, {
+  kafka: {
+    consumerGroupId: "view-server-legacy-kafka-owned-type-test",
+    regions: usaKafkaRegions,
+    topics: {
+      orders: usaKafkaTopic({
+        regions: ["usa"],
+        value: kafka.json(Order),
+        key: kafka.stringKey(),
+        viewServerTopic: "orders",
+        mapping: ({ key, value }) => ({
+          id: key,
+          price: value.price,
+        }),
+      }),
+    },
+  },
+});
 const kafkaOwnedRuntimeEffect = makeViewServerRuntime(kafkaOwnedViewServer, {
   kafka: {
     consumerGroupId: "view-server-kafka-owned-type-test",
@@ -184,8 +203,12 @@ const runtimeWithAuth = makeViewServerRuntime(viewServer, {
 });
 const runEffect = runViewServerRuntime(viewServer);
 declare const runtime: Effect.Success<typeof runtimeEffect>;
+declare const legacyKafkaRuntime: Effect.Success<typeof legacyKafkaRuntimeEffect>;
 declare const kafkaOwnedRuntime: Effect.Success<typeof kafkaOwnedRuntimeEffect>;
 declare const grpcRuntimeClients: GrpcRuntimeClients;
+declare const exactGrpcRuntimeClients: {
+  readonly ordersClient: GrpcConnectClientDefinition;
+};
 declare const grpcOrdersFeed: GrpcFeedDefinition<
   typeof materializedGrpcViewServer.topics,
   typeof grpcRuntimeClients
@@ -207,7 +230,7 @@ declare const leasedGrpcOrdersFeed: GrpcFeedDefinition<
 >;
 const materializedGrpcViewServerWithConfigClients = defineViewServerConfig({
   grpc: {
-    clients: grpcRuntimeClients,
+    clients: exactGrpcRuntimeClients,
   },
   topics: {
     orders: {
@@ -219,7 +242,7 @@ const materializedGrpcViewServerWithConfigClients = defineViewServerConfig({
 });
 declare const grpcOrdersFeedForConfigClients: GrpcFeedDefinition<
   typeof materializedGrpcViewServerWithConfigClients.topics,
-  typeof grpcRuntimeClients
+  typeof exactGrpcRuntimeClients
 >;
 const materializedGrpcRuntimeEffect = makeViewServerRuntime(materializedGrpcViewServer, {
   grpc: {
@@ -238,6 +261,17 @@ const leasedRuntimeEffect = makeViewServerRuntime(leasedViewServer, {
   },
 });
 declare const leasedRuntime: Effect.Success<typeof leasedRuntimeEffect>;
+const invalidMaterializedGrpcRuntimeWithoutClients = makeViewServerRuntime(
+  materializedGrpcViewServer,
+  {
+    // @ts-expect-error runtime gRPC feeds require clients when config.grpc.clients is absent.
+    grpc: {
+      feeds: {
+        ordersFeed: grpcOrdersFeed,
+      },
+    },
+  },
+);
 const materializedGrpcRuntimeWithConfigClientsEffect = makeViewServerRuntime(
   materializedGrpcViewServerWithConfigClients,
   {
@@ -361,12 +395,16 @@ describe("runtime type contracts", () => {
     const materializedGrpcSnapshot = materializedGrpcRuntime.client.snapshot("orders", {
       select: ["id", "price"],
     });
+    const legacyKafkaSnapshot = legacyKafkaRuntime.client.snapshot("orders", {
+      select: ["id", "price"],
+    });
 
     expectTypeOf<Effect.Error<typeof publish>>().toEqualTypeOf<ViewServerRuntimeError>();
     expectTypeOf(subscribe).not.toBeAny();
     expectTypeOf(leasedSubscribe).not.toBeAny();
     expectTypeOf(kafkaOwnedSnapshot).not.toBeAny();
     expectTypeOf(materializedGrpcSnapshot).not.toBeAny();
+    expectTypeOf(legacyKafkaSnapshot).not.toBeAny();
 
     const missingRouteQuery = {
       select: ["id"],
@@ -419,6 +457,26 @@ describe("runtime type contracts", () => {
     const invalidKafkaOwnedDelete = kafkaOwnedRuntime.client.delete("orders", "order-1");
     // @ts-expect-error source-owned runtimes reject direct runtime reset.
     const invalidKafkaOwnedReset = kafkaOwnedRuntime.client.reset();
+    // @ts-expect-error legacy runtime Kafka topics reject direct runtime publishes.
+    const invalidLegacyKafkaPublish = legacyKafkaRuntime.client.publish("orders", {
+      id: "order-1",
+      price: 10,
+    });
+    // @ts-expect-error legacy runtime Kafka topics reject direct runtime batch publishes.
+    const invalidLegacyKafkaPublishMany = legacyKafkaRuntime.client.publishMany("orders", [
+      {
+        id: "order-1",
+        price: 10,
+      },
+    ]);
+    // @ts-expect-error legacy runtime Kafka topics reject direct runtime patches.
+    const invalidLegacyKafkaPatch = legacyKafkaRuntime.client.patch("orders", "order-1", {
+      price: 11,
+    });
+    // @ts-expect-error legacy runtime Kafka topics reject direct runtime deletes.
+    const invalidLegacyKafkaDelete = legacyKafkaRuntime.client.delete("orders", "order-1");
+    // @ts-expect-error legacy runtime Kafka topics reject direct runtime reset.
+    const invalidLegacyKafkaReset = legacyKafkaRuntime.client.reset();
     // @ts-expect-error materialized gRPC-owned topics reject direct runtime publishes.
     const invalidMaterializedGrpcPublish = materializedGrpcRuntime.client.publish("orders", {
       id: "order-1",
@@ -438,6 +496,11 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidKafkaOwnedPatch).not.toBeAny();
     expectTypeOf(invalidKafkaOwnedDelete).not.toBeAny();
     expectTypeOf(invalidKafkaOwnedReset).not.toBeAny();
+    expectTypeOf(invalidLegacyKafkaPublish).not.toBeAny();
+    expectTypeOf(invalidLegacyKafkaPublishMany).not.toBeAny();
+    expectTypeOf(invalidLegacyKafkaPatch).not.toBeAny();
+    expectTypeOf(invalidLegacyKafkaDelete).not.toBeAny();
+    expectTypeOf(invalidLegacyKafkaReset).not.toBeAny();
     expectTypeOf(invalidMaterializedGrpcPublish).not.toBeAny();
     expectTypeOf(invalidLeasedSubscribe).not.toBeAny();
     expectTypeOf(runtime.client.reset).not.toBeAny();
@@ -836,6 +899,7 @@ describe("runtime type contracts", () => {
     expectTypeOf(invalidMissingKafkaConsumerGroup).not.toBeAny();
     expectTypeOf(invalidKafkaOwnedRuntimeWithoutOptions).not.toBeAny();
     expectTypeOf(invalidKafkaOwnedRuntimeWithExplicitTopics).not.toBeAny();
+    expectTypeOf(invalidMaterializedGrpcRuntimeWithoutClients).not.toBeAny();
     expectTypeOf(invalidKafkaRegionRuntime).not.toBeAny();
     expectTypeOf<Effect.Success<typeof runtimeWithGrpc>>().toMatchTypeOf<
       ViewServerRuntime<typeof materializedGrpcViewServer.topics>
