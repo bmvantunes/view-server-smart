@@ -476,6 +476,80 @@ describe("@effect-view-server/runtime Kafka ingress", () => {
     }),
   );
 
+  it.effect("rejects topic-owned Kafka source ingestion without storage-key publishing", () =>
+    Effect.gen(function* () {
+      const regions = {
+        local: kafkaBootstrapServers,
+      };
+      const topicOwnedViewServer = defineViewServerConfig({
+        kafka: regions,
+        topics: {
+          orders: {
+            schema: Order,
+            key: "id",
+            kafkaSource: kafka.source({
+              topic: "orders-source",
+              regions: ["local"],
+              value: kafka.json(IncomingOrder),
+              key: kafka.stringKey(),
+              map: ({ value, rowKey }) => ({
+                id: `${rowKey}-${value.customerId}`,
+                customerId: value.customerId,
+                price: value.price,
+              }),
+            }),
+          },
+        },
+      });
+      const resolved = yield* resolveViewServerRuntimeOptions(topicOwnedViewServer, {
+        kafka: {
+          consumerGroupId: "view-server-topic-owned-missing-storage-publisher",
+        },
+      });
+      const kafkaOptions = Option.getOrThrow(Option.fromNullishOr(resolved.kafkaOptions));
+      const runtimeCore = yield* makeViewServerRuntimeCoreInternal(topicOwnedViewServer, {});
+      const health = makeViewServerKafkaHealthLedger<typeof topicOwnedViewServer.topics>({
+        regions: kafkaOptions.regions,
+        startFrom: kafkaOptions.consume,
+        topics: {
+          "orders-source": {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+
+      const error = yield* Effect.flip(
+        processKafkaMessage(
+          topicOwnedViewServer,
+          runtimeCore.client,
+          runtimeCore.requestHealthRefresh,
+          kafkaOptions,
+          health,
+          "local",
+          kafkaProcessorMessage({
+            key: "order-1",
+            topic: "orders-source",
+            value: JSON.stringify({
+              customerId: "customer-1",
+              price: 10,
+            }),
+          }),
+        ),
+      );
+      yield* runtimeCore.close;
+
+      expect(error).toStrictEqual(
+        new ViewServerKafkaIngressError({
+          message: "Kafka source requires storage-key publishing for source topic orders-source",
+          cause: "missing-storage-key-publisher",
+          region: "local",
+          sourceTopic: "orders-source",
+        }),
+      );
+    }),
+  );
+
   it.live(
     "ingests isolated Kafka topics into independent View Server topics and reports health",
     () =>

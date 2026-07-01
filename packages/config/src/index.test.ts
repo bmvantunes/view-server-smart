@@ -6616,6 +6616,7 @@ describe("public type surface", () => {
         }),
       ).toStrictEqual({
         viewServerTopic: "orders",
+        rowKey: "order-owned-1",
         row: {
           id: "order-owned-1",
           customerId: "customer-owned-1",
@@ -6712,6 +6713,7 @@ describe("public type surface", () => {
         }),
       ).toStrictEqual({
         viewServerTopic: "trades",
+        rowKey: "trade-owned-1",
         row: {
           id: "trade-owned-1",
           symbol: "AAPL",
@@ -6772,6 +6774,7 @@ describe("public type surface", () => {
         }),
       ).toStrictEqual({
         viewServerTopic: "orders",
+        rowKey: "order-direct-key-1",
         row: {
           id: "order-direct-key-1",
           customerId: "customer-direct-key-1",
