@@ -101,7 +101,7 @@
     "provenance": true
   },
   "scripts": {
-    "build": "vp run -t @effect-view-server/client#build && vp run -t @effect-view-server/column-live-view-engine#build && vp run -t @effect-view-server/config#build && vp run -t @effect-view-server/in-memory#build && vp run -t @effect-view-server/react#build && vp run -t @effect-view-server/runtime#build && vp run -t @effect-view-server/server#build && vp pack",
+    "build": "vp pack",
     "test": "vp run -t effect-view-server#build && vp test run --typecheck"
   },
   "dependencies": {
@@ -133,8 +133,7 @@
   "peerDependencies": {
     "@effect/atom-react": "4.0.0-beta.91",
     "react": "19.2.6",
-    "react-dom": "19.2.6",
-    "scheduler": "0.27.0"
+    "react-dom": "19.2.6"
   },
   "peerDependenciesMeta": {
     "@effect/atom-react": {
@@ -144,9 +143,6 @@
       "optional": true
     },
     "react-dom": {
-      "optional": true
-    },
-    "scheduler": {
       "optional": true
     }
   },

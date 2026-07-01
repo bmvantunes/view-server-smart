@@ -7,40 +7,63 @@ row that matches the target View Server topic schema.
 ```ts
 import { Config } from "effect";
 import { NodeRuntime } from "@effect/platform-node";
-import { kafka } from "effect-view-server/config";
+import { defineViewServerConfig, kafka } from "effect-view-server/config";
 import { runViewServerRuntime } from "effect-view-server/runtime";
-import { viewServer } from "./view-server-config";
-import { OrderKeySchema, OrderValueSchema } from "./generated/orders";
+import { KafkaTrade, Order, Trade } from "./schemas";
+import { OrderValueSchema } from "./generated/orders";
 
 const kafkaRegions = {
   usa: Config.string("KAFKA_USA_BOOTSTRAP"),
   london: Config.string("KAFKA_LONDON_BOOTSTRAP"),
 };
 
-const kafkaTopic = viewServer.kafkaTopic<typeof kafkaRegions>();
+export const viewServer = defineViewServerConfig({
+  kafka: kafkaRegions,
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      kafkaSource: kafka.source({
+        topic: "sourceOrdersUsa",
+        regions: ["usa"],
+        value: kafka.protobuf(OrderValueSchema),
+        key: kafka.stringKey(),
+        map: ({ value, region, rowKey }) => ({
+          id: rowKey,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      }),
+    },
+    trades: {
+      schema: Trade,
+      key: "id",
+      kafkaSource: kafka.source({
+        topic: "sourceTradesLondon",
+        regions: ["london"],
+        value: kafka.json(KafkaTrade),
+        key: kafka.stringKey(),
+        map: ({ value, region, rowKey }) => ({
+          id: rowKey,
+          symbol: value.symbol,
+          side: value.side,
+          quantity: value.quantity,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      }),
+    },
+  },
+});
 
 NodeRuntime.runMain(
   runViewServerRuntime(viewServer, {
     websocketPort: 8080,
     kafka: {
       consumerGroupId: "orders-view-server",
-      regions: kafkaRegions,
-      topics: {
-        sourceOrders: kafkaTopic({
-          regions: ["usa", "london"],
-          value: kafka.protobuf(OrderValueSchema),
-          key: kafka.protobuf(OrderKeySchema),
-          viewServerTopic: "orders",
-          mapping: ({ key, value, region }) => ({
-            id: key.orderId,
-            customerId: value.customerId,
-            status: value.status,
-            price: value.price,
-            region,
-            updatedAt: value.updatedAt,
-          }),
-        }),
-      },
     },
   }),
 );
@@ -49,14 +72,23 @@ NodeRuntime.runMain(
 `kafka.protobuf(...)` expects the Buf generated `DescMessage` descriptor symbol,
 not a TypeScript value type.
 
+The region names in each `kafkaSource.regions` tuple are checked against
+`config.kafka`. In the example above, `["usa"]` and `["london"]` are valid, but
+`["paris"]` fails at compile time.
+
 ## Contract
 
 - `regions` is type-checked against the configured Kafka region names.
-- `viewServerTopic` is type-checked against the configured View Server topics.
+- `kafkaSource` is owned by exactly one View Server topic, so the runtime cannot
+  accidentally publish the same source into a different topic.
 - `key` is typed from the configured key codec. If no key codec is configured,
   the key is a string.
 - `value` is typed from the configured value codec.
-- `mapping` output is validated against the target topic schema before publish.
+- `map` output is validated against the target topic schema before publish.
+
+The legacy `viewServer.kafkaTopic()` + `runtime.kafka.topics` API is still
+available for admin-owned/manual source wiring, but new Kafka integrations
+should prefer topic-owned `kafkaSource` definitions.
 
 ## Delivery
 
@@ -76,3 +108,10 @@ position such as `startFrom: "earliest"` or a fresh rebuild consumer group.
 
 Committed consumer-group resume is useful for live at-least-once processing, but
 it is not durable View Server recovery by itself.
+
+`startFrom` is currently a runtime-level consumer policy. A single View Server
+runtime cannot read one Kafka source topic from `"earliest"` and another from
+`"latest"` with the same consumer group. If you need mixed start positions today,
+run separate runtime instances with separate consumer groups and configs, for
+example a replay/rebuild runtime using `startFrom: "earliest"` and a live-tail
+runtime using `startFrom: "latest"`.

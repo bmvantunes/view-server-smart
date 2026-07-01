@@ -16,6 +16,7 @@ import {
   type ViewServerConfig,
   type ViewServerRuntimeClient,
 } from "@effect-view-server/config";
+import { isKafkaRuntimeTopicSourceDefinition } from "@effect-view-server/config/internal";
 import {
   ignoreLoggedTypedFailuresPreserveNonTypedFailures,
   runAllFinalizers,
@@ -127,6 +128,10 @@ const kafkaMessageBatchSize = 256;
 const kafkaMessageQueueCapacity = kafkaMessageBatchSize * 4;
 const kafkaMessageBatchFlushInterval = Duration.millis(2);
 const kafkaMessageBatchFlushIntervalMillis = Duration.toMillis(kafkaMessageBatchFlushInterval);
+const isKafkaBatchTopic = <Topics extends ViewServerRuntimeTopicDefinitions>(
+  config: ViewServerConfig<Topics>,
+  topic: string,
+): topic is KafkaBatchTopic<Topics> => Object.hasOwn(config.topics, topic);
 const ignoreKafkaConsumerCloseFailure = ignoreLoggedTypedFailuresPreserveNonTypedFailures(
   "Ignoring Kafka consumer close failure.",
 );
@@ -199,7 +204,9 @@ export const sourceTopicsForRegion = <
 ): ReadonlyArray<string> => {
   const topics: Array<string> = [];
   for (const [sourceTopic, topic] of Object.entries(options.topics)) {
-    if (topic.regions.some((topicRegion) => topicRegion === region)) {
+    if (
+      topic.regions.some((topicRegion: (typeof topic.regions)[number]) => topicRegion === region)
+    ) {
       topics.push(sourceTopic);
     }
   }
@@ -362,6 +369,11 @@ const kafkaIngressFailureCause = (
 
 const kafkaNonFailureCause = (cause: Cause.Cause<unknown>): Cause.Cause<never> =>
   Cause.fromReasons(cause.reasons.filter(isNonFailureKafkaCauseReason));
+
+export const kafkaIngressErrorSourceTopic = (error: unknown): Option.Option<string> =>
+  error instanceof ViewServerKafkaIngressError
+    ? Option.fromUndefinedOr(error.sourceTopic)
+    : Option.none();
 
 export const recordKafkaStreamError = <const Topics extends ViewServerRuntimeTopicDefinitions>(
   health: ViewServerKafkaHealthLedger<Topics>,
@@ -583,9 +595,9 @@ export const closeStartedKafkaRegionConsumers = Effect.fn(
 
 export const closeKafkaConsumerOnPostConsumeStartupFailure = Effect.fn(
   "ViewServerRuntime.kafka.consumer.closeOnPostConsumeStartupFailure",
-)(function* <A, E>(
+)(function* <A, E, R>(
   closeResources: Effect.Effect<void, ViewServerKafkaIngressError>,
-  startup: Effect.Effect<A, E>,
+  startup: Effect.Effect<A, E, R>,
 ) {
   return yield* startup.pipe(
     Effect.onExit((exit) => (Exit.isFailure(exit) ? closeResources : Effect.void)),
@@ -644,7 +656,9 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
     if (topic === undefined) {
       return Option.none<DecodedKafkaBatchMessage<Topics>>();
     }
-    const topicRegion = topic.regions.find((candidate) => candidate === region);
+    const topicRegion = topic.regions.find(
+      (candidate: (typeof topic.regions)[number]) => candidate === region,
+    );
     if (topicRegion === undefined) {
       return Option.none<DecodedKafkaBatchMessage<Topics>>();
     }
@@ -660,13 +674,36 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
       timestamp: Number(message.timestamp),
       headers: kafkaHeadersFromMessage(message.headers),
     };
+    const viewServerTopic = topic.viewServerTopic;
+    if (!isKafkaBatchTopic(config, viewServerTopic)) {
+      const viewServerTopicMessage = String(viewServerTopic);
+      return yield* new ViewServerKafkaIngressError({
+        message: `Kafka source references unknown View Server topic: ${viewServerTopicMessage}`,
+        cause: "missing-view-server-topic",
+        region,
+        sourceTopic,
+      });
+    }
+    const topicDefinition = config.topics[viewServerTopic];
     const requestHealthRefreshAfterLedgerUpdate = requestKafkaHealthRefresh(requestHealthRefresh);
-    const decoded = yield* decodeKafkaTopicMessage(topic, {
-      keyBytes,
-      valueBytes,
-      region: topicRegion,
-      metadata,
-    }).pipe(
+    const decoded = yield* (
+      isKafkaRuntimeTopicSourceDefinition(topic)
+        ? decodeKafkaTopicMessage(topic, {
+            keyBytes,
+            valueBytes,
+            region: topicRegion,
+            metadata,
+            rowKeyField: topicDefinition.key,
+            schema: topicDefinition.schema,
+            viewServerTopic,
+          })
+        : decodeKafkaTopicMessage(topic, {
+            keyBytes,
+            valueBytes,
+            region: topicRegion,
+            metadata,
+          })
+    ).pipe(
       Effect.matchCauseEffect({
         onFailure: (cause) => {
           const error = Cause.findErrorOption(cause);
@@ -745,7 +782,10 @@ const decodeKafkaMessageForBatch = Effect.fn("ViewServerRuntime.kafka.message.de
       }),
     );
     return Option.some({
-      decoded,
+      decoded: {
+        row: decoded.row,
+        viewServerTopic,
+      },
       message,
       messageBytes,
       nowMillis,
@@ -895,7 +935,7 @@ export const processKafkaMessageBatch = Effect.fn("ViewServerRuntime.kafka.messa
             return Effect.failCause(cause);
           }
           const preserveLastErrorForSourceTopic = Option.getOrUndefined(
-            Option.map(Cause.findErrorOption(cause), (error) => error.sourceTopic),
+            Option.flatMap(Cause.findErrorOption(cause), kafkaIngressErrorSourceTopic),
           );
           return Effect.exit(
             publishKafkaDecodedBatch(

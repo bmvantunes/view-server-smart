@@ -1,6 +1,6 @@
 import { NodeRuntime } from "@effect/platform-node";
 import { runViewServerRuntime } from "effect-view-server/runtime";
-import { kafkaRegions, kafkaTopics, viewServer } from "./view-server.config";
+import { viewServer } from "./view-server.config";
 
 NodeRuntime.runMain(
   runViewServerRuntime(viewServer, {
@@ -8,8 +8,6 @@ NodeRuntime.runMain(
     kafka: {
       consumerGroupId: "view-server-example-kafka-react",
       startFrom: "latest",
-      regions: kafkaRegions,
-      topics: kafkaTopics,
     },
   }),
 );

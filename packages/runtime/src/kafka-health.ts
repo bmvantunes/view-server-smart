@@ -330,7 +330,7 @@ export const makeViewServerKafkaHealthLedger = <
     Record<
       string,
       {
-        readonly viewServerTopic: Extract<keyof Topics, string>;
+        readonly viewServerTopic: string;
         readonly regions: ReadonlyArray<string>;
       }
     >

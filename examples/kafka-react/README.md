@@ -5,9 +5,9 @@ TanStack Start app backed by Apache Kafka ingestion.
 Run:
 
 ```bash
-docker compose up -d kafka
-vp run -view-server/example-kafka-react#runtime
-vp run -view-server/example-kafka-react#dev
+docker compose up -d kafka kafka-london
+vp run @effect-view-server/example-kafka-react#runtime
+vp run @effect-view-server/example-kafka-react#dev
 ```
 
 This example demonstrates:

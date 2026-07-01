@@ -40,6 +40,7 @@ import {
   kafkaHeadersFromMessage,
   kafkaConsumerCloseError,
   kafkaConsumerStartError,
+  kafkaIngressErrorSourceTopic,
   kafkaMessageCommitError,
   kafkaMessageDecodeError,
   kafkaMessageProcessingError,
@@ -249,6 +250,9 @@ const kafkaIngressErrorSummary = (error: unknown) =>
       }
     : null;
 
+const kafkaIngressErrorSourceTopicOrNull = (error: unknown): string | null =>
+  Option.getOrNull(kafkaIngressErrorSourceTopic(error));
+
 const kafkaMessage = (input: {
   readonly topic: string;
   readonly key?: string | null;
@@ -367,6 +371,13 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
         [{ topic: ordersSourceTopic, partitions: [0, 1] }],
         unknownSourceTopic,
       ),
+      errorSourceTopic: kafkaIngressErrorSourceTopicOrNull(
+        kafkaMessageDecodeError("local", ordersSourceTopic, "decode-down"),
+      ),
+      errorSourceTopicWithoutSource: kafkaIngressErrorSourceTopicOrNull(
+        kafkaConsumerCloseError("close-down"),
+      ),
+      unrelatedErrorSourceTopic: kafkaIngressErrorSourceTopicOrNull(new Error("not kafka")),
     }).toStrictEqual({
       errorMessage: "boom",
       taggedErrorMessage: "publish failed",
@@ -375,6 +386,9 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
       bootstrapBrokers: ["localhost:9092", "localhost:9094"],
       assignedOrdersPartitions: 2,
       assignedMissingPartitions: 0,
+      errorSourceTopic: ordersSourceTopic,
+      errorSourceTopicWithoutSource: null,
+      unrelatedErrorSourceTopic: null,
     });
     expect(Object.getPrototypeOf(normalizedHeaders)).toBe(null);
     expect(normalizedHeaders["trace"]).toStrictEqual([
@@ -6367,6 +6381,117 @@ describe("@effect-view-server/runtime Kafka ingress internals", () => {
         ],
         totalRows: 1,
         version: 1,
+      });
+
+      yield* runtimeCore.close;
+    }),
+  );
+
+  it.effect("decodes legacy runtime Kafka topics with erased source-topic discriminants", () =>
+    Effect.gen(function* () {
+      const runtimeCore = yield* makeViewServerRuntimeCore(viewServer, {});
+      const legacyTopicWithExtraSourceField = Object.assign(
+        localKafkaTopic({
+          regions: ["local"],
+          value: kafka.json(IncomingOrder),
+          key: kafka.stringKey(),
+          viewServerTopic: "orders",
+          mapping: ({ key, value }) => ({
+            id: key,
+            customerId: value.customerId,
+            price: value.price,
+          }),
+        }),
+        { topic: ordersSourceTopic },
+      );
+      const legacyKafkaOptions: ResolvedViewServerKafkaRuntimeOptions<Topics> = {
+        consumerGroupId: "view-server-legacy-extra-topic-field-test",
+        ...committedKafkaStart("view-server-legacy-extra-topic-field-test"),
+        regions,
+        topics: {
+          [ordersSourceTopic]: legacyTopicWithExtraSourceField,
+        },
+      };
+      const ledger = makeViewServerKafkaHealthLedger<Topics>({
+        startFrom: legacyKafkaOptions.consume,
+        regions: legacyKafkaOptions.regions,
+        topics: {
+          [ordersSourceTopic]: {
+            regions: ["local"],
+            viewServerTopic: "orders",
+          },
+        },
+      });
+      yield* ledger.regionConnected("local", 1_000);
+      yield* ledger.topicConnected(ordersSourceTopic, "local", 1, 1_000);
+      const legacyMessage = kafkaMessage({
+        topic: ordersSourceTopic,
+        key: "order-legacy-extra-topic-field",
+        value: JSON.stringify({
+          customerId: "customer-legacy-extra-topic-field",
+          price: 80,
+        }),
+        offset: 8n,
+      });
+      const expectedMessageBytes =
+        (legacyMessage.key?.byteLength ?? 0) + (legacyMessage.value?.byteLength ?? 0);
+
+      yield* processKafkaMessage(
+        viewServer,
+        runtimeCore.client,
+        runtimeCore.requestHealthRefresh,
+        legacyKafkaOptions,
+        ledger,
+        "local",
+        legacyMessage,
+      );
+      const health = ledger.healthOverlay(yield* runtimeCore.client.health(), 0);
+      const snapshot = yield* runtimeCore.client.snapshot("orders", {
+        select: ["id", "customerId", "price"],
+      });
+
+      expect({
+        kafkaTopic: health.kafka?.topics[ordersSourceTopic],
+        snapshot,
+      }).toStrictEqual({
+        kafkaTopic: {
+          status: "ready",
+          sourceTopic: ordersSourceTopic,
+          viewServerTopic: "orders",
+          regions: nullRecord({
+            local: {
+              connected: true,
+              assignedPartitions: 1,
+              messagesPerSecond: 1,
+              bytesPerSecond: expectedMessageBytes,
+              decodedMessagesPerSecond: 1,
+              decodeFailuresPerSecond: 0,
+              mappingFailuresPerSecond: 0,
+              publishFailuresPerSecond: 0,
+              commitFailuresPerSecond: 0,
+              processingFailuresPerSecond: 0,
+              lastMessageAt: 0,
+              lastCommitAt: 0,
+              consumerLagMessages: null,
+              lagSampledAt: null,
+              committedOffset: "9",
+              lastError: null,
+            },
+          }),
+        },
+        snapshot: {
+          status: "ready",
+          statusCode: "Ready",
+          rows: [
+            {
+              id: "order-legacy-extra-topic-field",
+              customerId: "customer-legacy-extra-topic-field",
+              price: 80,
+            },
+          ],
+          totalRows: 1,
+          version: 1,
+        },
       });
 
       yield* runtimeCore.close;

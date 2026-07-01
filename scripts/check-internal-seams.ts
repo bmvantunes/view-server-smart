@@ -1529,6 +1529,7 @@ const approvedPublicViewServerSpecifiers = new Set([
   "@effect-view-server/config",
   "@effect-view-server/config/grpc",
   "@effect-view-server/config/health",
+  "@effect-view-server/config/internal",
   "@effect-view-server/config/kafka",
   "@effect-view-server/config/live-protocol",
   "@effect-view-server/config/query",
@@ -2213,6 +2214,7 @@ assertNoEngineSeamViolations(collectEngineSeamViolations());
 const viewServerPackages = {
   client: "@effect-view-server/client",
   config: "@effect-view-server/config",
+  configInternal: "@effect-view-server/config/internal",
   effectUtils: "@effect-view-server/effect-utils",
   engine: "@effect-view-server/column-live-view-engine",
   engineInternal: "@effect-view-server/column-live-view-engine/internal",
@@ -2278,6 +2280,7 @@ const restrictedPackageImports: ReadonlyArray<RestrictedPackageImport> = [
     allowedSpecifiers: new Set([
       viewServerPackages.client,
       viewServerPackages.config,
+      viewServerPackages.configInternal,
       viewServerPackages.effectUtils,
       viewServerPackages.runtimeCore,
       viewServerPackages.runtimeCoreInternal,

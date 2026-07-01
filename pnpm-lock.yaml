@@ -898,9 +898,6 @@ importers:
       react-dom:
         specifier: 19.2.6
         version: 19.2.6(react@19.2.6)
-      scheduler:
-        specifier: 0.27.0
-        version: 0.27.0
     devDependencies:
       '@effect-view-server/client':
         specifier: workspace:*

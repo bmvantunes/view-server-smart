@@ -314,7 +314,7 @@ const readDirectConnectRows = Effect.fn("ViewServerRuntime.grpc.connectRpc.direc
 const waitForMaterializedSnapshot = Effect.fn(
   "ViewServerRuntime.grpc.connectRpc.materialized.snapshot.wait",
 )(function* (
-  client: ViewServerRuntimeClient<typeof materializedViewServer.topics>,
+  client: Pick<ViewServerRuntimeClient<typeof materializedViewServer.topics>, "snapshot">,
   expectedTotalRows: number,
 ) {
   const poll = (

@@ -22,6 +22,7 @@ export default defineConfig({
     "src/live-protocol.ts",
     "src/kafka-contract.ts",
     "src/grpc-contract.ts",
+    "src/internal.ts",
   ]),
   lint: {
     options: {

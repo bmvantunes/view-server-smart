@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from "@effect/vitest";
 import type { LiveQueryResult } from "effect-view-server/config";
-import { kafkaTopics, useLiveQuery } from "./view-server.config";
+import { grpcClients, useLiveQuery, viewServer } from "./view-server.config";
 
 describe("combined sources example type contracts", () => {
   it("types Kafka, leased gRPC, and materialized gRPC topics independently", () => {
@@ -45,7 +45,11 @@ describe("combined sources example type contracts", () => {
 
   it("keeps Kafka ownership separate from gRPC source topics", () => {
     expectTypeOf(
-      kafkaTopics["view-server-example-trades"].viewServerTopic,
-    ).toEqualTypeOf<"trades">();
+      viewServer.topics.trades.kafkaSource.topic,
+    ).toEqualTypeOf<"view-server-example-trades">();
+    expectTypeOf(viewServer.topics.trades.kafkaSource.regions).toEqualTypeOf<
+      readonly ["usa", "london"]
+    >();
+    expectTypeOf<keyof typeof grpcClients>().toEqualTypeOf<"orders" | "strategies">();
   });
 });

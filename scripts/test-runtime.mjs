@@ -37,6 +37,11 @@ const run = (command, args, options = {}) => {
   return result.status ?? 1;
 };
 
+const vpTransitiveBuild = (packageTask) =>
+  run("vp", ["run", "--concurrency-limit", "1", "-t", packageTask], {
+    cwd: runtimeDirectory,
+  });
+
 let didCleanup = false;
 const cleanup = () => {
   if (!shouldStartKafka || didCleanup) {
@@ -69,21 +74,19 @@ let exitCode = shouldStartKafka
   : 0;
 
 if (exitCode === 0) {
-  exitCode = run("vp", ["run", "-t", "@effect-view-server/effect-utils#build"], {
-    cwd: runtimeDirectory,
-  });
+  exitCode = vpTransitiveBuild("@effect-view-server/config#build");
 }
 
 if (exitCode === 0) {
-  exitCode = run("vp", ["run", "-t", "@effect-view-server/runtime-core#build"], {
-    cwd: runtimeDirectory,
-  });
+  exitCode = vpTransitiveBuild("@effect-view-server/effect-utils#build");
 }
 
 if (exitCode === 0) {
-  exitCode = run("vp", ["run", "-t", "@effect-view-server/server#build"], {
-    cwd: runtimeDirectory,
-  });
+  exitCode = vpTransitiveBuild("@effect-view-server/runtime-core#build");
+}
+
+if (exitCode === 0) {
+  exitCode = vpTransitiveBuild("@effect-view-server/server#build");
 }
 
 if (exitCode === 0) {

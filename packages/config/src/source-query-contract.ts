@@ -31,18 +31,28 @@ type UnionToIntersection<Union> = (Union extends unknown ? (value: Union) => voi
   : never;
 
 export type TopicRouteBy<Topics, Topic extends keyof Topics> = Topics[Topic] extends {
-  readonly source: TopicLeasedSourceDefinition<infer RouteBy>;
+  readonly grpcSource: TopicLeasedSourceDefinition<infer RouteBy>;
 }
   ? Extract<RouteBy[number], string>
-  : never;
+  : Topics[Topic] extends {
+        readonly source: TopicLeasedSourceDefinition<infer RouteBy>;
+      }
+    ? Extract<RouteBy[number], string>
+    : never;
 
 export type TopicRouteByTuple<Topics, Topic extends keyof Topics> = Topics[Topic] extends {
-  readonly source: TopicLeasedSourceDefinition<infer RouteBy>;
+  readonly grpcSource: TopicLeasedSourceDefinition<infer RouteBy>;
 }
   ? RouteBy extends NonEmptyRouteBy
     ? RouteBy
     : never
-  : never;
+  : Topics[Topic] extends {
+        readonly source: TopicLeasedSourceDefinition<infer RouteBy>;
+      }
+    ? RouteBy extends NonEmptyRouteBy
+      ? RouteBy
+      : never
+    : never;
 
 type NoLeasedRouteRequirement = Readonly<Record<never, never>>;
 
@@ -104,7 +114,11 @@ export const validateLiveQuerySourceRoute = <Topics extends TopicDefinitions>(
   if (topicDefinition === undefined) {
     return undefined;
   }
-  const routeBy = sourceLeasedRouteBy(topicDefinition.source);
+  const sourceAwareTopic: {
+    readonly source?: TopicSourceDefinition | undefined;
+    readonly grpcSource?: TopicSourceDefinition | undefined;
+  } = topicDefinition;
+  const routeBy = sourceLeasedRouteBy(sourceAwareTopic.grpcSource ?? sourceAwareTopic.source);
   if (routeBy === undefined) {
     return undefined;
   }

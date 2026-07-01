@@ -71,46 +71,71 @@ NodeRuntime.runMain(
 
 ## Kafka Ingestion
 
-Kafka is optional. When configured, runtime options must provide an explicit
-consumer group and typed source topics:
+Kafka is optional. Prefer topic-owned `kafkaSource` definitions in the View
+Server config. Runtime options then provide only operational values such as the
+consumer group and optional start position:
 
 ```ts
 import { Config } from "effect";
 import { NodeRuntime } from "@effect/platform-node";
-import { kafka } from "@effect-view-server/config";
+import { defineViewServerConfig, kafka } from "@effect-view-server/config";
 import { runViewServerRuntime } from "@effect-view-server/runtime";
-import { viewServer } from "./view-server-config";
-import { OrdersKey, OrdersValue } from "./generated/orders";
+import { KafkaTrade, Order, Trade } from "./schemas";
+import { OrdersValueSchema } from "./generated/orders";
 
 const kafkaRegions = {
   usa: Config.string("KAFKA_USA_BOOTSTRAP"),
   london: Config.string("KAFKA_LONDON_BOOTSTRAP"),
 };
 
-const kafkaTopic = viewServer.kafkaTopic<typeof kafkaRegions>();
+const viewServer = defineViewServerConfig({
+  kafka: kafkaRegions,
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      kafkaSource: kafka.source({
+        topic: "sourceOrdersUsa",
+        regions: ["usa"],
+        value: kafka.protobuf(OrdersValueSchema),
+        key: kafka.stringKey(),
+        map: ({ value, region, rowKey }) => ({
+          id: rowKey,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      }),
+    },
+    trades: {
+      schema: Trade,
+      key: "id",
+      kafkaSource: kafka.source({
+        topic: "sourceTradesLondon",
+        regions: ["london"],
+        value: kafka.json(KafkaTrade),
+        key: kafka.stringKey(),
+        map: ({ value, region, rowKey }) => ({
+          id: rowKey,
+          symbol: value.symbol,
+          side: value.side,
+          quantity: value.quantity,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      }),
+    },
+  },
+});
 
 NodeRuntime.runMain(
   runViewServerRuntime(viewServer, {
     websocketPort: 8080,
     kafka: {
       consumerGroupId: "orders-view-server",
-      regions: kafkaRegions,
-      topics: {
-        sourceOrders: kafkaTopic({
-          regions: ["usa", "london"],
-          value: kafka.protobuf(OrdersValue),
-          key: kafka.protobuf(OrdersKey),
-          viewServerTopic: "orders",
-          mapping: ({ key, value, region }) => ({
-            id: key.orderId,
-            customerId: value.customerId,
-            status: value.status,
-            price: value.price,
-            region,
-            updatedAt: value.updatedAt,
-          }),
-        }),
-      },
+      startFrom: "latest",
     },
   }),
 );
@@ -119,6 +144,10 @@ NodeRuntime.runMain(
 Startup fails through Effect `Config` if required environment-backed Kafka
 broker values are missing. Do not silently default brokers or production
 secrets.
+
+The older `viewServer.kafkaTopic()` + `runtime.kafka.topics` shape remains
+available for admin-owned/manual source wiring. Do not mix it with topic-owned
+`kafkaSource` definitions in the same runtime.
 
 ## Kafka Delivery Contract
 
@@ -147,6 +176,33 @@ overall runtime health becomes degraded.
 
 The default is `{ committedConsumerGroup: consumerGroupId, fallback: "earliest" }`.
 
+`startFrom` is a runtime-level policy for the Kafka consumers in one View Server
+runtime. If one source must replay from `"earliest"` and another must tail from
+`"latest"`, run separate runtime instances with separate consumer groups. Do not
+model that as one runtime until per-source Kafka seek policy exists.
+
+```ts
+NodeRuntime.runMain(
+  runViewServerRuntime(rebuildViewServer, {
+    websocketPort: 8080,
+    kafka: {
+      consumerGroupId: "orders-view-server-rebuild",
+      startFrom: "earliest",
+    },
+  }),
+);
+
+NodeRuntime.runMain(
+  runViewServerRuntime(liveTailViewServer, {
+    websocketPort: 8081,
+    kafka: {
+      consumerGroupId: "orders-view-server-live-tail",
+      startFrom: "latest",
+    },
+  }),
+);
+```
+
 Important: committed consumer-group resume is not durable View Server recovery
 by itself. Runtime Core rows are in memory and this package does not yet provide
 a WAL or checkpoint. If the process dies after committing Kafka offsets, a
@@ -155,6 +211,98 @@ restart from committed offsets can skip rows that existed only in memory.
 Deployments that need rebuild-after-restart semantics must replay Kafka from an
 authoritative position, such as `startFrom: "earliest"` or a fresh/reset
 dedicated rebuild consumer group, until durable checkpoints are added.
+
+## gRPC Ingestion
+
+gRPC sources are also declared on the topic that owns the rows. Runtime options
+then provide the concrete ConnectRPC clients and feed implementations:
+
+```ts
+import { defineViewServerConfig, grpc } from "@effect-view-server/config";
+import { runViewServerRuntime } from "@effect-view-server/runtime";
+import { NodeRuntime } from "@effect/platform-node";
+import { Stream } from "effect";
+import { Order, Strategy } from "./schemas";
+import { ordersService, strategiesService } from "./generated/grpc";
+
+const viewServer = defineViewServerConfig({
+  grpc: {
+    clients: {
+      orders: grpc.connectClient({
+        service: ordersService,
+        baseUrl: "https://orders-grpc.example.com",
+      }),
+      strategies: grpc.connectClient({
+        service: strategiesService,
+        baseUrl: "https://strategies-grpc.example.com",
+      }),
+    },
+  },
+  topics: {
+    orders: {
+      schema: Order,
+      key: "id",
+      grpcSource: grpc.leased({ routeBy: ["strategyId", "region"] }),
+    },
+    strategies: {
+      schema: Strategy,
+      key: "id",
+      grpcSource: grpc.materialized(),
+    },
+  },
+});
+
+const grpcFeed = viewServer.grpcFeed();
+
+const ordersByStrategy = grpcFeed.leasedFeed({
+  topic: "orders",
+  client: "orders",
+  method: "streamOrders",
+  routeBy: ["strategyId", "region"],
+  request: ({ strategyId, region }) => ({ strategyId, region }),
+  acquire: ({ client, request }) =>
+    Stream.fromAsyncIterable(client.streamOrders(request), (cause) => cause),
+  map: ({ value, route }) => ({
+    id: `${route.strategyId}:${route.region}:${value.orderId}`,
+    strategyId: route.strategyId,
+    region: route.region,
+    customerId: value.customerId,
+    status: value.status,
+    price: value.price,
+    updatedAt: value.updatedAt,
+  }),
+});
+
+const strategies = grpcFeed.materializedFeed({
+  topic: "strategies",
+  client: "strategies",
+  method: "streamStrategies",
+  request: () => ({ universe: "global" }),
+  acquire: ({ client, request }) =>
+    Stream.fromAsyncIterable(client.streamStrategies(request), (cause) => cause),
+  map: ({ value }) => ({
+    id: `${value.strategyId}:${value.region}`,
+    strategyId: value.strategyId,
+    region: value.region,
+    status: value.status,
+    notional: value.notional,
+    updatedAt: value.updatedAt,
+  }),
+});
+
+NodeRuntime.runMain(
+  runViewServerRuntime(viewServer, {
+    websocketPort: 8080,
+    grpc: {
+      feeds: { ordersByStrategy, strategies },
+    },
+  }),
+);
+```
+
+Leased gRPC topics require the `routeBy` fields in user queries, so the runtime
+can open exactly one shared upstream stream per route key instead of accidentally
+materializing an unbounded upstream dataset.
 
 ## TCP Publish Ingress
 

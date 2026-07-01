@@ -17,13 +17,7 @@ service with:
 import { NodeRuntime } from "@effect/platform-node";
 import { runViewServerRuntime } from "effect-view-server/runtime";
 import { Config, Effect } from "effect";
-import {
-  viewServer,
-  kafkaRegions,
-  kafkaTopics,
-  grpcClients,
-  grpcFeeds,
-} from "./view-server.config";
+import { viewServer, grpcClients, grpcFeeds } from "./view-server.config";
 
 const program = Effect.gen(function* () {
   const websocketPort = yield* Config.number("VIEW_SERVER_WEBSOCKET_PORT");
@@ -37,8 +31,6 @@ const program = Effect.gen(function* () {
     kafka: {
       consumerGroupId: kafkaConsumerGroupId,
       startFrom: "latest",
-      regions: kafkaRegions,
-      topics: kafkaTopics,
     },
     grpc: {
       clients: grpcClients,
@@ -50,9 +42,18 @@ const program = Effect.gen(function* () {
 NodeRuntime.runMain(program);
 ```
 
+Kafka regions and source mappings should be declared on `viewServer` with
+topic-owned `kafkaSource` definitions; runtime options only provide the
+deployment consumer group and start policy.
+
 Use a deployment-unique `VIEW_SERVER_KAFKA_GROUP_ID`. The current supported
 deployment model is one active View Server runtime for a logical deployment.
 Multi-replica Kafka rebalance/revoke handoff is intentionally out of scope.
+
+One runtime instance has one Kafka start policy. If one Kafka-backed topic must
+replay from `"earliest"` and another must tail from `"latest"`, deploy two View
+Server runtime instances with separate configs and consumer groups. Do not try
+to mix start positions inside one runtime.
 
 ## React Entrypoint
 
@@ -129,6 +130,21 @@ spec:
                 secretKeyRef:
                   name: view-server-kafka
                   key: usa-bootstrap
+            - name: KAFKA_LONDON_BOOTSTRAP
+              valueFrom:
+                secretKeyRef:
+                  name: view-server-kafka
+                  key: london-bootstrap
+            - name: ORDERS_GRPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: view-server-grpc
+                  key: orders-url
+            - name: STRATEGIES_GRPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: view-server-grpc
+                  key: strategies-url
           readinessProbe:
             httpGet:
               path: /health

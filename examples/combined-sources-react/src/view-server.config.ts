@@ -38,21 +38,41 @@ export const KafkaTrade = Schema.Struct({
   updatedAt: Schema.Number,
 });
 
+export const kafkaRegions = {
+  usa: "127.0.0.1:9092",
+  london: "127.0.0.1:9094",
+};
+
 export const viewServer = defineViewServerConfig({
+  kafka: kafkaRegions,
   topics: {
     orders: {
       schema: Order,
       key: "id",
-      source: grpc.leased({ routeBy: ["strategyId", "region"] }),
+      grpcSource: grpc.leased({ routeBy: ["strategyId", "region"] }),
     },
     strategies: {
       schema: Strategy,
       key: "id",
-      source: grpc.materialized(),
+      grpcSource: grpc.materialized(),
     },
     trades: {
       schema: Trade,
       key: "id",
+      kafkaSource: kafka.source({
+        topic: "view-server-example-trades",
+        regions: ["usa", "london"],
+        value: kafka.json(KafkaTrade),
+        key: kafka.stringKey(),
+        map: ({ value, region, rowKey }) => ({
+          id: rowKey,
+          symbol: value.symbol,
+          side: value.side,
+          quantity: value.quantity,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      }),
     },
   },
 });
@@ -62,31 +82,12 @@ export const { ViewServerProvider, useLiveQuery, useViewServerHealth, useViewSer
   viewServerReact;
 
 export const grpcClients = {
-  combined: grpc.connectClient({
+  orders: grpc.connectClient({
     service: combinedService,
     baseUrl: "http://127.0.0.1:4319",
   }),
-};
-
-export const kafkaRegions = {
-  local: "127.0.0.1:9092",
-};
-
-const kafkaTopic = viewServer.kafkaTopic<typeof kafkaRegions>();
-
-export const kafkaTopics = {
-  "view-server-example-trades": kafkaTopic({
-    regions: ["local"],
-    value: kafka.json(KafkaTrade),
-    key: kafka.stringKey(),
-    viewServerTopic: "trades",
-    mapping: ({ key, value, region }) => ({
-      id: key,
-      symbol: value.symbol,
-      side: value.side,
-      quantity: value.quantity,
-      region,
-      updatedAt: value.updatedAt,
-    }),
+  strategies: grpc.connectClient({
+    service: combinedService,
+    baseUrl: "http://127.0.0.1:4320",
   }),
 };

@@ -45,6 +45,8 @@ export type TopicDefinition<
 > = {
   readonly schema: S;
   readonly key: Key;
+  readonly kafkaSource?: object | undefined;
+  readonly grpcSource?: TopicSourceDefinition | undefined;
 } & (Source extends TopicSourceDefinition
   ? { readonly source: Source }
   : { readonly source?: undefined });

@@ -17,7 +17,7 @@ export const viewServer = defineViewServerConfig({
     strategies: {
       schema: Strategy,
       key: "id",
-      source: grpc.materialized(),
+      grpcSource: grpc.materialized(),
     },
   },
 });

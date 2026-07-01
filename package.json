@@ -40,7 +40,7 @@
     "examples:test": "vp run @effect-view-server/example-in-memory-react#test && vp run @effect-view-server/example-kafka-react#test && vp run @effect-view-server/example-grpc-leased-react#test && vp run @effect-view-server/example-grpc-materialized-react#test && vp run @effect-view-server/example-combined-sources-react#test && vp run @effect-view-server/example-ssr-react#test && vp run @effect-view-server/example-tcp-publisher-react#test && vp run -w examples:check:effect",
     "ready": "vp run -r build && vp run -w check:package-exports && vp run -w check:internal-seams && vp run -w test:repository-scripts && vp check && vp run -w check:effect && vp run --filter '@effect-view-server/*' --filter '!@effect-view-server/runtime' test && vp run effect-view-server#test && vp run @effect-view-server/runtime#test",
     "pre-grpc:gate": "vp run -w ready && vp run -w bench:baseline:smoke && vp run -w bench:baseline:raw-read-write && vp run -w bench:baseline:active-query-sharing && vp run -w bench:baseline:grouped-admission && vp run -w bench:baseline:grouped-order-neutral && vp run -w bench:baseline:websocket-firehose && vp run -w bench:baseline:kafka-ingest && vp run -w bench:baseline:kafka-sustained-firehose",
-    "release:publish": "vp run effect-view-server#build && node scripts/release-publish.mjs",
+    "release:publish": "vp run -t effect-view-server#build && node scripts/release-publish.mjs",
     "release:version": "vp exec changeset version",
     "release-candidate:capacity": "vp run -w examples:test && vp run -w examples:build && vp run -w pre-grpc:gate && vp run -w grpc:gate && vp run -w bench:baseline:release",
     "test:benchmark-baseline": "vp run -w test:repository-scripts",

@@ -304,14 +304,14 @@ describe("release publish policy", () => {
       atomReactPeerOptional: packageJson.peerDependenciesMeta["@effect/atom-react"].optional,
       dependency: packageJson.dependencies.scheduler,
       peerDependency: packageJson.peerDependencies.scheduler,
-      peerOptional: packageJson.peerDependenciesMeta.scheduler.optional,
+      peerOptional: packageJson.peerDependenciesMeta.scheduler,
     }).toStrictEqual({
       atomReactDependency: undefined,
       atomReactPeerDependency: "4.0.0-beta.91",
       atomReactPeerOptional: true,
       dependency: undefined,
-      peerDependency: "0.27.0",
-      peerOptional: true,
+      peerDependency: undefined,
+      peerOptional: undefined,
     });
   });
 

@@ -7,9 +7,11 @@ Schema and a string row key field. The topic schema is the source of truth for
 query typing, runtime validation, protocol encoding, and in-memory tests.
 
 ```ts
-import { defineViewServerConfig } from "effect-view-server/config";
+import { defineViewServerConfig, grpc, kafka } from "effect-view-server/config";
 import { createViewServerReact } from "effect-view-server/react";
-import { Schema } from "effect";
+import { Config, Schema } from "effect";
+import { ordersService } from "./generated/grpc";
+import { OrdersValueSchema } from "./generated/orders";
 
 export const Order = Schema.Struct({
   id: Schema.String,
@@ -29,10 +31,36 @@ export const Trade = Schema.Struct({
 });
 
 export const viewServer = defineViewServerConfig({
+  kafka: {
+    usa: Config.string("KAFKA_USA_BOOTSTRAP"),
+    london: Config.string("KAFKA_LONDON_BOOTSTRAP"),
+  },
+  grpc: {
+    clients: {
+      orders: grpc.connectClient({
+        service: ordersService,
+        baseUrl: "https://orders-grpc.example.com",
+      }),
+    },
+  },
   topics: {
     orders: {
       schema: Order,
       key: "id",
+      kafkaSource: kafka.source({
+        topic: "sourceOrdersUsa",
+        regions: ["usa"],
+        value: kafka.protobuf(OrdersValueSchema),
+        key: kafka.stringKey(),
+        map: ({ value, region, rowKey }) => ({
+          id: rowKey,
+          customerId: value.customerId,
+          status: value.status,
+          price: value.price,
+          region,
+          updatedAt: value.updatedAt,
+        }),
+      }),
     },
     trades: {
       schema: Trade,
@@ -44,6 +72,10 @@ export const viewServer = defineViewServerConfig({
 export const viewServerReact = createViewServerReact(viewServer);
 export const { ViewServerProvider, useLiveQuery, useViewServerHealthSummary } = viewServerReact;
 ```
+
+Topics without `kafkaSource` or `grpcSource` are externally/manual published
+topics, for example through TCP publish or an in-memory test client. A topic can
+only have one source owner.
 
 ## React Provider
 

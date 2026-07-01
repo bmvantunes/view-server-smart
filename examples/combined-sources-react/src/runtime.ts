@@ -1,13 +1,13 @@
 import { NodeRuntime } from "@effect/platform-node";
 import { runViewServerRuntime } from "effect-view-server/runtime";
 import { Stream } from "effect";
-import { grpcClients, kafkaRegions, kafkaTopics, viewServer } from "./view-server.config";
+import { grpcClients, viewServer } from "./view-server.config";
 
 const grpcFeed = viewServer.grpcFeed<typeof grpcClients>();
 
 const ordersByStrategyRegion = grpcFeed.leasedFeed({
   topic: "orders",
-  client: "combined",
+  client: "orders",
   method: "streamOrders",
   routeBy: ["strategyId", "region"],
   request: ({ strategyId, region }) => ({ strategyId, region }),
@@ -32,7 +32,7 @@ const ordersByStrategyRegion = grpcFeed.leasedFeed({
 
 const strategiesFeed = grpcFeed.materializedFeed({
   topic: "strategies",
-  client: "combined",
+  client: "strategies",
   method: "streamStrategies",
   request: () => ({ universe: "global" }),
   acquire: () =>
@@ -60,8 +60,6 @@ NodeRuntime.runMain(
     kafka: {
       consumerGroupId: "view-server-example-combined-sources-react",
       startFrom: "latest",
-      regions: kafkaRegions,
-      topics: kafkaTopics,
     },
     grpc: {
       clients: grpcClients,

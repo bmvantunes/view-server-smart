@@ -45,6 +45,14 @@ import * as publicConfigPackage from "effect-view-server/config";
 import * as publicConfigGrpcPackage from "effect-view-server/config/grpc";
 import * as publicConfigHealthPackage from "effect-view-server/config/health";
 import * as publicConfigKafkaPackage from "effect-view-server/config/kafka";
+import type {
+  ExactRuntimeOptions as PublicKafkaExactRuntimeOptions,
+  KafkaRuntimeSourceTopicDefinition as PublicKafkaRuntimeSourceTopicDefinition,
+  KafkaRuntimeTopicSourceDefinition as PublicKafkaRuntimeTopicSourceDefinition,
+  KafkaTopicSourceDefinition as PublicKafkaTopicSourceDefinition,
+  KafkaTopicSourceMapInput as PublicKafkaTopicSourceMapInput,
+  ValidateKafkaTopicSource as PublicValidateKafkaTopicSource,
+} from "effect-view-server/config/kafka";
 import * as publicConfigLiveProtocolPackage from "effect-view-server/config/live-protocol";
 import * as publicConfigQueryPackage from "effect-view-server/config/query";
 import * as publicConfigRuntimePackage from "effect-view-server/config/runtime";
@@ -58,6 +66,23 @@ import * as publicServerPackage from "effect-view-server/server";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packagesRoot = join(repoRoot, "packages");
+
+type PublicKafkaExportTopics = {
+  readonly orders: {
+    readonly schema: never;
+  };
+};
+type PublicKafkaExportRegions = {
+  readonly local: string;
+};
+type PublicKafkaTypeExports = readonly [
+  PublicKafkaExactRuntimeOptions<PublicKafkaExportTopics, PublicKafkaExportRegions, {}>,
+  PublicKafkaRuntimeSourceTopicDefinition<PublicKafkaExportTopics, PublicKafkaExportRegions>,
+  PublicKafkaRuntimeTopicSourceDefinition<PublicKafkaExportTopics, PublicKafkaExportRegions>,
+  PublicKafkaTopicSourceDefinition<PublicKafkaExportTopics, PublicKafkaExportRegions, "orders">,
+  PublicKafkaTopicSourceMapInput<PublicKafkaExportTopics, "orders", "local", never, undefined>,
+  PublicValidateKafkaTopicSource<PublicKafkaExportTopics, PublicKafkaExportRegions, "orders", unknown>,
+];
 
 type PackageManifest = {
   readonly name: string;
@@ -114,6 +139,7 @@ const approvedPackageExports = [
   "@effect-view-server/config",
   "@effect-view-server/config/grpc",
   "@effect-view-server/config/health",
+  "@effect-view-server/config/internal",
   "@effect-view-server/config/kafka",
   "@effect-view-server/config/live-protocol",
   "@effect-view-server/config/query",
@@ -444,6 +470,7 @@ rejectExport("effect-view-server/config/query", publicConfigQueryPackage, "GrpcT
 rejectExport("effect-view-server/config/query", publicConfigQueryPackage, "GrpcLeasedTopicSource");
 requireExport("effect-view-server/config/kafka", publicConfigKafkaPackage, "defineKafkaTopic");
 requireExport("effect-view-server/config/kafka", publicConfigKafkaPackage, "kafka");
+rejectExport("effect-view-server/config/kafka", publicConfigKafkaPackage, "makeKafkaRuntimeTopicSources");
 requireExport("effect-view-server/config/grpc", publicConfigGrpcPackage, "grpc");
 requireExport("effect-view-server/config/grpc", publicConfigGrpcPackage, "defineGrpcFeed");
 requireExport("effect-view-server/config/runtime", publicConfigRuntimePackage, "runtimeConfig");

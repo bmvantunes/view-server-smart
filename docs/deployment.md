@@ -43,6 +43,9 @@ logical deployment. Give each deployment a unique Kafka consumer group id. Kafka
 multi-replica rebalance/revoke handoff is intentionally out of scope for the
 current milestone.
 
+Kafka `startFrom` is also per runtime instance. Use separate runtime instances
+and consumer groups when different source topics need different start positions.
+
 ## Network Surface
 
 - Browser clients connect through Effect RPC WebSocket with NDJSON.

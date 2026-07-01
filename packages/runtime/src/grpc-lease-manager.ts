@@ -1046,7 +1046,11 @@ const grpcLeasedSourceTopics = <const Topics extends ViewServerRuntimeTopicDefin
 ): Set<string> => {
   const topics = new Set<string>();
   for (const [topic, definition] of Object.entries(config.topics)) {
-    const source = Reflect.get(definition, "source");
+    const grpcSource = Reflect.get(definition, "grpcSource");
+    const source =
+      typeof grpcSource === "object" && grpcSource !== null
+        ? grpcSource
+        : Reflect.get(definition, "source");
     if (
       typeof source === "object" &&
       source !== null &&

@@ -39,6 +39,7 @@ const KafkaCodecErrorTypeId = Symbol("@effect-view-server/config/KafkaCodecError
 const KafkaCodecDecodeTypeId = Symbol("@effect-view-server/config/KafkaCodecDecode");
 const KafkaTopicDefinitionTypeId = Symbol("@effect-view-server/config/KafkaTopicDefinition");
 const KafkaTopicDecodeTypeId = Symbol("@effect-view-server/config/KafkaTopicDecode");
+const KafkaRuntimeTopicSourceTypeId = Symbol("@effect-view-server/config/KafkaRuntimeTopicSource");
 const KafkaTopicSchemaTypeId = Symbol("@effect-view-server/config/KafkaTopicSchema");
 const EffectSchemaClassAnnotationKey = "~effect/Schema/Class";
 
@@ -142,6 +143,16 @@ type KafkaTopicDecodeInput<
   readonly metadata: KafkaMessageMetadata<Region>;
 };
 
+type KafkaTopicSourceDecodeInput<Region extends string> = {
+  readonly keyBytes: Uint8Array;
+  readonly valueBytes: Uint8Array;
+  readonly region: Region;
+  readonly metadata: KafkaMessageMetadata<Region>;
+  readonly rowKeyField: string;
+  readonly schema: RowSchema;
+  readonly viewServerTopic: string;
+};
+
 type KafkaTopicDecoder<
   Topics extends KafkaTopicSchemaRegistry,
   ViewTopic extends Extract<keyof Topics, string>,
@@ -152,6 +163,24 @@ type KafkaTopicDecoder<
     bivarianceHack(
       input: KafkaTopicDecodeInput<Topics, ViewTopic, Region>,
     ): Effect.Effect<KafkaDecodedTopicMessage<Topics, ViewTopic>, E>;
+  }["bivarianceHack"];
+};
+
+type KafkaTopicSourceDecoder<
+  Topics extends KafkaTopicSchemaRegistry,
+  ViewTopic extends Extract<keyof Topics, string>,
+  Region extends string,
+  E,
+> = {
+  readonly [KafkaTopicDecodeTypeId]: {
+    bivarianceHack(input: KafkaTopicSourceDecodeInput<Region>): Effect.Effect<
+      {
+        readonly row: TopicRow<Topics, ViewTopic>;
+        readonly rowKey: string;
+        readonly viewServerTopic: string;
+      },
+      E
+    >;
   }["bivarianceHack"];
 };
 
@@ -176,13 +205,15 @@ type KafkaTopicSchemaRegistry = Record<
 
 type KafkaWritableViewTopic<Topics extends KafkaTopicSchemaRegistry> = Extract<
   {
-    readonly [Topic in keyof Topics]: "source" extends keyof Topics[Topic]
-      ? Topics[Topic] extends { readonly source: infer Source }
-        ? Source extends { readonly kind: "grpc" }
+    readonly [Topic in keyof Topics]: Topics[Topic] extends { readonly kafkaSource: object }
+      ? never
+      : Topics[Topic] extends {
+            readonly grpcSource: { readonly kind: "grpc" };
+          }
+        ? never
+        : Topics[Topic] extends { readonly source: { readonly kind: "grpc" } }
           ? never
-          : Topic
-        : Topic
-      : Topic;
+          : Topic;
   }[keyof Topics],
   string
 >;
@@ -208,6 +239,18 @@ const viewTopicSourceKind = <Topics extends KafkaTopicSchemaRegistry>(
   if (!isInspectableObject(topicDefinition)) {
     return undefined;
   }
+  if (
+    Object.prototype.hasOwnProperty.call(topicDefinition, "kafkaSource") &&
+    Reflect.get(topicDefinition, "kafkaSource") !== undefined
+  ) {
+    return "kafka";
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(topicDefinition, "grpcSource") &&
+    Reflect.get(topicDefinition, "grpcSource") !== undefined
+  ) {
+    return "grpc";
+  }
   const source: unknown = Reflect.get(topicDefinition, "source");
   if (!isInspectableObject(source)) {
     return undefined;
@@ -220,8 +263,12 @@ const validateKafkaViewTopicOwnership = <Topics extends KafkaTopicSchemaRegistry
   topics: Topics,
   viewTopic: Extract<keyof Topics, string>,
 ) => {
-  if (viewTopicSourceKind(topics, viewTopic) === "grpc") {
+  const sourceKind = viewTopicSourceKind(topics, viewTopic);
+  if (sourceKind === "grpc") {
     throw new Error(`Kafka source cannot publish into gRPC-owned View Server topic: ${viewTopic}`);
+  }
+  if (sourceKind === "kafka") {
+    throw new Error(`Kafka source cannot publish into Kafka-owned View Server topic: ${viewTopic}`);
   }
 };
 
@@ -242,6 +289,11 @@ const kafkaMappingError = (message: string, cause: unknown): KafkaMappingError =
 
 const isInspectableObject = (value: unknown): value is object =>
   (typeof value === "object" && value !== null) || typeof value === "function";
+
+const isKafkaCodec = (value: unknown): value is KafkaCodec<unknown, unknown> =>
+  isInspectableObject(value) &&
+  typeof Reflect.get(value, "format") === "string" &&
+  typeof Reflect.get(value, KafkaCodecDecodeTypeId) === "function";
 
 const isSupportedJsonObjectRecordKeyAst = (ast: SchemaAST.AST): boolean => {
   if (SchemaAST.isLiteral(ast)) {
@@ -923,6 +975,77 @@ const makeKafkaCodec = <A, E, Format extends string>(
   format,
 });
 
+type KafkaTopicSourceHelperMapWithoutKey<
+  TopicRegions extends NonEmptyReadonlyArray<string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+> = (input: KafkaTopicSourceHelperMapInputWithoutKey<TopicRegions[number], ValueCodec>) => object;
+
+type KafkaTopicSourceHelperMapWithKey<
+  TopicRegions extends NonEmptyReadonlyArray<string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+> = (
+  input: KafkaTopicSourceHelperMapInputWithKey<TopicRegions[number], ValueCodec, KeyCodec>,
+) => object;
+
+type KafkaTopicSourceHelperInputWithoutKey<
+  SourceTopic extends string,
+  TopicRegions extends NonEmptyReadonlyArray<string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  Mapping extends KafkaTopicSourceHelperMapWithoutKey<TopicRegions, ValueCodec> =
+    KafkaTopicSourceHelperMapWithoutKey<TopicRegions, ValueCodec>,
+> = {
+  readonly topic: SourceTopic;
+  readonly regions: TopicRegions;
+  readonly value: SupportedKafkaCodec<ValueCodec>;
+  readonly map: Mapping;
+};
+
+type KafkaTopicSourceHelperInputWithKey<
+  SourceTopic extends string,
+  TopicRegions extends NonEmptyReadonlyArray<string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+  Mapping extends KafkaTopicSourceHelperMapWithKey<TopicRegions, ValueCodec, KeyCodec> =
+    KafkaTopicSourceHelperMapWithKey<TopicRegions, ValueCodec, KeyCodec>,
+> = {
+  readonly topic: SourceTopic;
+  readonly regions: TopicRegions;
+  readonly value: SupportedKafkaCodec<ValueCodec>;
+  readonly key: SupportedKafkaCodec<KeyCodec>;
+  readonly map: Mapping;
+};
+
+function defineKafkaTopicSource<
+  const SourceTopic extends string,
+  const TopicRegions extends NonEmptyReadonlyArray<string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+  Mapping extends (
+    input: KafkaTopicSourceHelperMapInputWithKey<TopicRegions[number], ValueCodec, KeyCodec>,
+  ) => object,
+>(
+  topic: KafkaTopicSourceHelperInputWithKey<
+    SourceTopic,
+    TopicRegions,
+    ValueCodec,
+    KeyCodec,
+    Mapping
+  >,
+): KafkaTopicSourceHelperInputWithKey<SourceTopic, TopicRegions, ValueCodec, KeyCodec, Mapping>;
+function defineKafkaTopicSource<
+  const SourceTopic extends string,
+  const TopicRegions extends NonEmptyReadonlyArray<string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  Mapping extends KafkaTopicSourceHelperMapWithoutKey<TopicRegions, ValueCodec> =
+    KafkaTopicSourceHelperMapWithoutKey<TopicRegions, ValueCodec>,
+>(
+  topic: KafkaTopicSourceHelperInputWithoutKey<SourceTopic, TopicRegions, ValueCodec, Mapping>,
+): KafkaTopicSourceHelperInputWithoutKey<SourceTopic, TopicRegions, ValueCodec, Mapping>;
+function defineKafkaTopicSource(topic: object): object {
+  return topic;
+}
+
 export const kafka = {
   bytes: (): KafkaBytesCodec =>
     makeKafkaCodec<Uint8Array, never, "bytes">("bytes", (input) => Effect.succeed(input.bytes)),
@@ -1001,6 +1124,7 @@ export const kafka = {
     name: definition.name,
     decode: definition.decode,
   }),
+  source: defineKafkaTopicSource,
 };
 
 export const decodeKafkaCodec: <A, E>(
@@ -1040,6 +1164,79 @@ export type KafkaMappingInput<
   readonly metadata: KafkaMessageMetadata<Region>;
 };
 
+export type KafkaTopicSourceMapInput<
+  Topics extends KafkaTopicSchemaRegistry,
+  ViewTopic extends Extract<keyof Topics, string>,
+  Region extends string,
+  ValueCodec,
+  KeyCodec,
+> = [KeyCodec] extends [undefined]
+  ? KafkaTopicSourceMapInputWithoutKey<
+      Topics,
+      ViewTopic,
+      Region,
+      ValueCodec & KafkaCodec<unknown, unknown>
+    >
+  : KafkaTopicSourceMapInputWithKey<
+      Topics,
+      ViewTopic,
+      Region,
+      ValueCodec & KafkaCodec<unknown, unknown>,
+      KeyCodec & KafkaCodec<unknown, unknown>
+    >;
+
+type KafkaTopicSourceMapInputWithoutKey<
+  Topics extends KafkaTopicSchemaRegistry,
+  ViewTopic extends Extract<keyof Topics, string>,
+  Region extends string,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+> = {
+  readonly key: string;
+  readonly value: KafkaCodecType<ValueCodec>;
+  readonly region: Region;
+  readonly rowKey: string;
+  readonly schema: KafkaTopicSchemaValue<Topics, ViewTopic>;
+  readonly metadata: KafkaMessageMetadata<Region>;
+};
+
+type KafkaTopicSourceMapInputWithKey<
+  Topics extends KafkaTopicSchemaRegistry,
+  ViewTopic extends Extract<keyof Topics, string>,
+  Region extends string,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+> = {
+  readonly key: KafkaCodecType<KeyCodec>;
+  readonly value: KafkaCodecType<ValueCodec>;
+  readonly region: Region;
+  readonly rowKey: string;
+  readonly schema: KafkaTopicSchemaValue<Topics, ViewTopic>;
+  readonly metadata: KafkaMessageMetadata<Region>;
+};
+
+type KafkaTopicSourceHelperMapInputWithoutKey<
+  Region extends string,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+> = {
+  readonly key: string;
+  readonly value: KafkaCodecType<ValueCodec>;
+  readonly region: Region;
+  readonly rowKey: string;
+  readonly metadata: KafkaMessageMetadata<Region>;
+};
+
+type KafkaTopicSourceHelperMapInputWithKey<
+  Region extends string,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+> = {
+  readonly key: KafkaCodecType<KeyCodec>;
+  readonly value: KafkaCodecType<ValueCodec>;
+  readonly region: Region;
+  readonly rowKey: string;
+  readonly metadata: KafkaMessageMetadata<Region>;
+};
+
 type KafkaMappingInputWithoutKey<
   Topics extends KafkaTopicSchemaRegistry,
   ViewTopic extends Extract<keyof Topics, string>,
@@ -1065,6 +1262,66 @@ type KafkaMappingInputWithKey<
   readonly region: Region;
   readonly schema: KafkaTopicSchemaValue<Topics, ViewTopic>;
   readonly metadata: KafkaMessageMetadata<Region>;
+};
+
+type KafkaTopicSourceInputWithoutKey<
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  Mapping extends (
+    input: KafkaTopicSourceMapInputWithoutKey<Topics, ViewTopic, TopicRegions[number], ValueCodec>,
+  ) => TopicRow<Topics, ViewTopic> = (
+    input: KafkaTopicSourceMapInputWithoutKey<Topics, ViewTopic, TopicRegions[number], ValueCodec>,
+  ) => TopicRow<Topics, ViewTopic>,
+  SourceTopic extends string = string,
+> = {
+  readonly topic: SourceTopic;
+  readonly regions: TopicRegions;
+  readonly value: SupportedKafkaCodec<ValueCodec>;
+  readonly map: ExactMappingReturn<
+    KafkaTopicSourceMapInputWithoutKey<Topics, ViewTopic, TopicRegions[number], ValueCodec>,
+    TopicRow<Topics, ViewTopic>,
+    Mapping
+  >;
+};
+
+type KafkaTopicSourceInputWithKey<
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  Mapping extends (
+    input: KafkaTopicSourceMapInputWithKey<
+      Topics,
+      ViewTopic,
+      TopicRegions[number],
+      ValueCodec,
+      KeyCodec
+    >,
+  ) => TopicRow<Topics, ViewTopic> = (
+    input: KafkaTopicSourceMapInputWithKey<
+      Topics,
+      ViewTopic,
+      TopicRegions[number],
+      ValueCodec,
+      KeyCodec
+    >,
+  ) => TopicRow<Topics, ViewTopic>,
+  SourceTopic extends string = string,
+> = {
+  readonly topic: SourceTopic;
+  readonly regions: TopicRegions;
+  readonly value: SupportedKafkaCodec<ValueCodec>;
+  readonly key: SupportedKafkaCodec<KeyCodec>;
+  readonly map: ExactMappingReturn<
+    KafkaTopicSourceMapInputWithKey<Topics, ViewTopic, TopicRegions[number], ValueCodec, KeyCodec>,
+    TopicRow<Topics, ViewTopic>,
+    Mapping
+  >;
 };
 
 export type KafkaDecodedTopicMessage<
@@ -1226,6 +1483,92 @@ export type KafkaTopicDefinition<
         : never
       : never);
 
+export type KafkaTopicSourceDefinition<
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string> = Extract<keyof Topics, string>,
+  ValueCodec extends KafkaCodec<unknown, unknown> = KafkaCodec<unknown, unknown>,
+  KeyCodec = undefined,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>> =
+    NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  MappingWithoutKey extends (
+    input: KafkaTopicSourceMapInputWithoutKey<Topics, ViewTopic, TopicRegions[number], ValueCodec>,
+  ) => TopicRow<Topics, ViewTopic> = (
+    input: KafkaTopicSourceMapInputWithoutKey<Topics, ViewTopic, TopicRegions[number], ValueCodec>,
+  ) => TopicRow<Topics, ViewTopic>,
+  MappingWithKey extends (
+    input: KafkaTopicSourceMapInputWithKey<
+      Topics,
+      ViewTopic,
+      TopicRegions[number],
+      ValueCodec,
+      Extract<KeyCodec, KafkaCodec<unknown, unknown>>
+    >,
+  ) => TopicRow<Topics, ViewTopic> = (
+    input: KafkaTopicSourceMapInputWithKey<
+      Topics,
+      ViewTopic,
+      TopicRegions[number],
+      ValueCodec,
+      Extract<KeyCodec, KafkaCodec<unknown, unknown>>
+    >,
+  ) => TopicRow<Topics, ViewTopic>,
+  SourceTopic extends string = string,
+> =
+  | KafkaTopicSourceInputWithoutKey<
+      Topics,
+      Regions,
+      ViewTopic,
+      ValueCodec,
+      TopicRegions,
+      MappingWithoutKey,
+      SourceTopic
+    >
+  | (KeyCodec extends KafkaCodec<unknown, unknown>
+      ? MappingWithKey extends (
+          input: KafkaTopicSourceMapInputWithKey<
+            Topics,
+            ViewTopic,
+            TopicRegions[number],
+            ValueCodec,
+            KeyCodec
+          >,
+        ) => TopicRow<Topics, ViewTopic>
+        ? KafkaTopicSourceInputWithKey<
+            Topics,
+            Regions,
+            ViewTopic,
+            ValueCodec,
+            KeyCodec,
+            TopicRegions,
+            MappingWithKey,
+            SourceTopic
+          >
+        : never
+      : never);
+
+export type KafkaRuntimeTopicSourceDefinition<
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string> = Extract<keyof Topics, string>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>> =
+    NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+> = KafkaTopicSourceDecoder<Topics, ViewTopic, TopicRegions[number], unknown> & {
+  readonly [KafkaRuntimeTopicSourceTypeId]: true;
+  readonly regions: TopicRegions;
+  readonly topic: string;
+  readonly viewServerTopic: ViewTopic;
+};
+
+export type KafkaRuntimeSourceTopicDefinition<
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>> =
+    NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+> =
+  | KafkaRuntimeTopicDefinition<Topics, Regions, TopicRegions>
+  | KafkaRuntimeTopicSourceDefinition<Topics, Regions, Extract<keyof Topics, string>, TopicRegions>;
+
 export type KafkaRuntimeTopicDefinition<
   Topics extends KafkaTopicSchemaRegistry,
   Regions extends RuntimeRegions,
@@ -1247,23 +1590,188 @@ const mapKafkaPayload = <A>(map: () => A): Effect.Effect<A, KafkaMappingError> =
     catch: (cause) => kafkaMappingError("Failed to map Kafka payload", cause),
   });
 
-export const decodeKafkaTopicMessage = Effect.fn("ViewServerConfig.kafka.topic.decodeMessage")(
-  function* <
-    Topics extends KafkaTopicSchemaRegistry,
-    Regions extends RuntimeRegions,
-    TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
-  >(
-    topic: KafkaRuntimeTopicDefinition<Topics, Regions, TopicRegions>,
-    input: {
-      readonly keyBytes: Uint8Array;
-      readonly valueBytes: Uint8Array;
-      readonly region: TopicRegions[number];
-      readonly metadata: KafkaMessageMetadata<TopicRegions[number]>;
-    },
-  ) {
-    return yield* topic[KafkaTopicDecodeTypeId](input);
+const rowKeyFromDecodedKafkaKey = (
+  key: unknown,
+  rowKeyField: string,
+): Effect.Effect<string, KafkaMappingError> => {
+  if (typeof key === "string") {
+    return Effect.succeed(key);
+  }
+  if (typeof key === "object" && key !== null) {
+    const hasConfiguredField = Object.hasOwn(key, rowKeyField);
+    const candidate = Reflect.get(key, rowKeyField);
+    if (typeof candidate === "string") {
+      return Effect.succeed(candidate);
+    }
+    if (hasConfiguredField) {
+      return Effect.fail(
+        kafkaMappingError(`Kafka key cannot derive View Server row key field: ${rowKeyField}`, key),
+      );
+    }
+    const stringValues = Object.entries(key)
+      .filter(([field]) => !field.startsWith("$"))
+      .map(([_field, value]) => value)
+      .filter((value) => typeof value === "string");
+    const [onlyStringValue] = stringValues;
+    if (stringValues.length === 1 && onlyStringValue !== undefined) {
+      return Effect.succeed(onlyStringValue);
+    }
+  }
+  return Effect.fail(
+    kafkaMappingError(`Kafka key cannot derive View Server row key field: ${rowKeyField}`, key),
+  );
+};
+
+type AnyKafkaRuntimeTopic = KafkaTopicDefinitionMarker &
+  KafkaTopicDecoder<KafkaTopicSchemaRegistry, string, string, unknown> & {
+    readonly regions: NonEmptyReadonlyArray<string>;
+    readonly viewServerTopic: string;
+  };
+
+type AnyKafkaRuntimeSourceTopic = KafkaTopicSourceDecoder<
+  KafkaTopicSchemaRegistry,
+  string,
+  string,
+  unknown
+> & {
+  readonly regions: NonEmptyReadonlyArray<string>;
+  readonly topic: string;
+  readonly viewServerTopic: string;
+};
+
+const decodeKafkaTopicMessageEffect: (
+  topic: AnyKafkaRuntimeTopic | AnyKafkaRuntimeSourceTopic,
+  input:
+    | KafkaTopicDecodeInput<KafkaTopicSchemaRegistry, string, string>
+    | KafkaTopicSourceDecodeInput<string>,
+) => Effect.Effect<
+  {
+    readonly row: object;
+    readonly viewServerTopic: string;
   },
-);
+  unknown
+> = Effect.fn("ViewServerConfig.kafka.topic.decodeMessage")(function* (
+  topic: AnyKafkaRuntimeTopic | AnyKafkaRuntimeSourceTopic,
+  input:
+    | KafkaTopicDecodeInput<KafkaTopicSchemaRegistry, string, string>
+    | KafkaTopicSourceDecodeInput<string>,
+) {
+  if (isKafkaRuntimeTopicDefinition(topic)) {
+    return yield* topic[KafkaTopicDecodeTypeId]({
+      keyBytes: input.keyBytes,
+      valueBytes: input.valueBytes,
+      region: input.region,
+      metadata: input.metadata,
+    });
+  }
+  if (!("schema" in input)) {
+    return yield* Effect.fail(
+      kafkaMappingError("Topic-owned Kafka source decode is missing topic metadata", {
+        rowKeyField: undefined,
+        schema: undefined,
+        viewServerTopic: undefined,
+      }),
+    );
+  }
+  if (
+    input.schema === undefined ||
+    input.rowKeyField === undefined ||
+    input.viewServerTopic === undefined
+  ) {
+    return yield* Effect.fail(
+      kafkaMappingError("Topic-owned Kafka source decode is missing topic metadata", {
+        rowKeyField: input.rowKeyField,
+        schema: input.schema,
+        viewServerTopic: input.viewServerTopic,
+      }),
+    );
+  }
+  const decoded = yield* topic[KafkaTopicDecodeTypeId]({
+    keyBytes: input.keyBytes,
+    valueBytes: input.valueBytes,
+    region: input.region,
+    metadata: input.metadata,
+    rowKeyField: input.rowKeyField,
+    schema: input.schema,
+    viewServerTopic: input.viewServerTopic,
+  });
+  return {
+    viewServerTopic: decoded.viewServerTopic,
+    row: decoded.row,
+  };
+});
+
+const isKafkaRuntimeTopicDefinition = (
+  topic: AnyKafkaRuntimeTopic | AnyKafkaRuntimeSourceTopic,
+): topic is AnyKafkaRuntimeTopic => !isKafkaRuntimeTopicSourceDefinition(topic);
+
+type DecodedTopicTopics<Topic> =
+  Topic extends KafkaTopicDecoder<infer Topics, infer _ViewTopic, infer _Region, infer _Error>
+    ? Topics
+    : never;
+
+type DecodedTopicViewTopic<Topic> =
+  Topic extends KafkaTopicDecoder<infer _Topics, infer ViewTopic, infer _Region, infer _Error>
+    ? ViewTopic
+    : never;
+
+type DecodedTopicRegion<Topic> = Topic extends {
+  readonly regions: NonEmptyReadonlyArray<infer Region extends string>;
+}
+  ? Region
+  : never;
+
+type DecodedSourceTopicTopics<Topic> =
+  Topic extends KafkaTopicSourceDecoder<infer Topics, infer _ViewTopic, infer _Region, infer _Error>
+    ? Topics
+    : never;
+
+type DecodedSourceTopicViewTopic<Topic> =
+  Topic extends KafkaTopicSourceDecoder<infer _Topics, infer ViewTopic, infer _Region, infer _Error>
+    ? ViewTopic
+    : never;
+
+type DecodedTopicInput<Topic> =
+  DecodedTopicViewTopic<Topic> extends Extract<keyof DecodedTopicTopics<Topic>, string>
+    ? KafkaTopicDecodeInput<
+        DecodedTopicTopics<Topic>,
+        DecodedTopicViewTopic<Topic>,
+        DecodedTopicRegion<Topic>
+      >
+    : never;
+
+type DecodedTopicMessage<Topic> =
+  DecodedTopicViewTopic<Topic> extends Extract<keyof DecodedTopicTopics<Topic>, string>
+    ? KafkaDecodedTopicMessage<DecodedTopicTopics<Topic>, DecodedTopicViewTopic<Topic>>
+    : never;
+
+type DecodedSourceTopicMessage<Topic> =
+  DecodedSourceTopicViewTopic<Topic> extends Extract<keyof DecodedSourceTopicTopics<Topic>, string>
+    ? KafkaDecodedTopicMessage<DecodedSourceTopicTopics<Topic>, DecodedSourceTopicViewTopic<Topic>>
+    : never;
+
+export function decodeKafkaTopicMessage<Topic extends AnyKafkaRuntimeSourceTopic>(
+  topic: Topic,
+  input: KafkaTopicSourceDecodeInput<DecodedTopicRegion<Topic>>,
+): Effect.Effect<DecodedSourceTopicMessage<Topic>, unknown>;
+export function decodeKafkaTopicMessage<Topic extends AnyKafkaRuntimeTopic>(
+  topic: Topic,
+  input: DecodedTopicInput<Topic>,
+): Effect.Effect<DecodedTopicMessage<Topic>, unknown>;
+export function decodeKafkaTopicMessage(
+  topic: AnyKafkaRuntimeTopic | AnyKafkaRuntimeSourceTopic,
+  input:
+    | KafkaTopicDecodeInput<KafkaTopicSchemaRegistry, string, string>
+    | KafkaTopicSourceDecodeInput<string>,
+): Effect.Effect<
+  {
+    readonly row: object;
+    readonly viewServerTopic: string;
+  },
+  unknown
+> {
+  return decodeKafkaTopicMessageEffect(topic, input);
+}
 
 type KafkaTopicDefinitionInput<
   Topics extends KafkaTopicSchemaRegistry,
@@ -1306,61 +1814,70 @@ type ValidateKafkaTopic<
   Topics extends KafkaTopicSchemaRegistry,
   Regions extends RuntimeRegions,
   Candidate,
-> = Candidate extends KafkaTopicDefinitionMarker & {
-  readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
-    Extract<keyof Regions, string>
-  >;
-  readonly value: infer ValueCodec extends KafkaCodec<unknown, unknown>;
-  readonly key: infer KeyCodec extends KafkaCodec<unknown, unknown>;
-  readonly viewServerTopic: infer ViewTopic extends KafkaWritableViewTopic<Topics>;
-}
-  ? Candidate extends {
-      readonly mapping: infer Mapping extends (
-        input: KafkaMappingInputWithKey<
-          Topics,
-          ViewTopic,
-          TopicRegions[number],
-          ValueCodec,
-          KeyCodec
-        >,
-      ) => TopicRow<Topics, ViewTopic>;
-    }
-    ? Candidate extends KafkaTopicWithKey<
-        Topics,
-        Regions,
-        ViewTopic,
-        ValueCodec,
-        KeyCodec,
-        TopicRegions,
-        Mapping
-      >
-      ? Candidate
-      : never
-    : never
+> = "topic" extends keyof Candidate
+  ? never
   : Candidate extends KafkaTopicDefinitionMarker & {
         readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
           Extract<keyof Regions, string>
         >;
         readonly value: infer ValueCodec extends KafkaCodec<unknown, unknown>;
+        readonly key: infer KeyCodec extends KafkaCodec<unknown, unknown>;
         readonly viewServerTopic: infer ViewTopic extends KafkaWritableViewTopic<Topics>;
       }
     ? Candidate extends {
         readonly mapping: infer Mapping extends (
-          input: KafkaMappingInputWithoutKey<Topics, ViewTopic, TopicRegions[number], ValueCodec>,
+          input: KafkaMappingInputWithKey<
+            Topics,
+            ViewTopic,
+            TopicRegions[number],
+            ValueCodec,
+            KeyCodec
+          >,
         ) => TopicRow<Topics, ViewTopic>;
       }
-      ? Candidate extends KafkaTopicWithoutKey<
+      ? Candidate extends KafkaTopicWithKey<
           Topics,
           Regions,
           ViewTopic,
           ValueCodec,
+          KeyCodec,
           TopicRegions,
           Mapping
         >
         ? Candidate
         : never
       : never
-    : never;
+    : "key" extends keyof Candidate
+      ? never
+      : Candidate extends KafkaTopicDefinitionMarker & {
+            readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
+              Extract<keyof Regions, string>
+            >;
+            readonly value: infer ValueCodec extends KafkaCodec<unknown, unknown>;
+            readonly viewServerTopic: infer ViewTopic extends KafkaWritableViewTopic<Topics>;
+          }
+        ? Candidate extends {
+            readonly mapping: infer Mapping extends (
+              input: KafkaMappingInputWithoutKey<
+                Topics,
+                ViewTopic,
+                TopicRegions[number],
+                ValueCodec
+              >,
+            ) => TopicRow<Topics, ViewTopic>;
+          }
+          ? Candidate extends KafkaTopicWithoutKey<
+              Topics,
+              Regions,
+              ViewTopic,
+              ValueCodec,
+              TopicRegions,
+              Mapping
+            >
+            ? Candidate
+            : never
+          : never
+        : never;
 
 type ValidateKafkaTopics<
   Topics extends KafkaTopicSchemaRegistry,
@@ -1374,6 +1891,97 @@ type ValidateKafkaTopics<
   >;
 };
 
+export type ValidateKafkaTopicSource<
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string>,
+  Candidate,
+> = Candidate extends {
+  readonly topic: string;
+  readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
+    Extract<keyof Regions, string>
+  >;
+  readonly value: infer ValueCodec extends KafkaCodec<unknown, unknown>;
+  readonly key: infer KeyCodec extends KafkaCodec<unknown, unknown>;
+}
+  ? Candidate extends {
+      readonly map: infer Mapping extends (
+        input: KafkaTopicSourceMapInputWithKey<
+          Topics,
+          ViewTopic,
+          TopicRegions[number],
+          ValueCodec,
+          KeyCodec
+        >,
+      ) => TopicRow<Topics, ViewTopic>;
+    }
+    ? Candidate extends KafkaTopicSourceInputWithKey<
+        Topics,
+        Regions,
+        ViewTopic,
+        ValueCodec,
+        KeyCodec,
+        TopicRegions,
+        Mapping
+      >
+      ? Candidate &
+          RejectExtraKeys<
+            Candidate,
+            KafkaTopicSourceInputWithKey<
+              Topics,
+              Regions,
+              ViewTopic,
+              ValueCodec,
+              KeyCodec,
+              TopicRegions,
+              Mapping
+            >
+          >
+      : never
+    : never
+  : "key" extends keyof Candidate
+    ? never
+    : Candidate extends {
+          readonly topic: string;
+          readonly regions: infer TopicRegions extends NonEmptyReadonlyArray<
+            Extract<keyof Regions, string>
+          >;
+          readonly value: infer ValueCodec extends KafkaCodec<unknown, unknown>;
+        }
+      ? Candidate extends {
+          readonly map: infer Mapping extends (
+            input: KafkaTopicSourceMapInputWithoutKey<
+              Topics,
+              ViewTopic,
+              TopicRegions[number],
+              ValueCodec
+            >,
+          ) => TopicRow<Topics, ViewTopic>;
+        }
+        ? Candidate extends KafkaTopicSourceInputWithoutKey<
+            Topics,
+            Regions,
+            ViewTopic,
+            ValueCodec,
+            TopicRegions,
+            Mapping
+          >
+          ? Candidate &
+              RejectExtraKeys<
+                Candidate,
+                KafkaTopicSourceInputWithoutKey<
+                  Topics,
+                  Regions,
+                  ViewTopic,
+                  ValueCodec,
+                  TopicRegions,
+                  Mapping
+                >
+              >
+          : never
+        : never
+      : never;
+
 export type ViewServerKafkaCommittedStartFrom = {
   readonly committedConsumerGroup: string;
   readonly fallback?: "earliest" | "latest" | "fail";
@@ -1383,39 +1991,74 @@ export type ViewServerKafkaStartFrom = "earliest" | "latest" | ViewServerKafkaCo
 
 export type RuntimeOptions<
   Topics extends KafkaTopicSchemaRegistry,
-  Regions extends RuntimeRegions,
-  KafkaTopics extends Record<string, object>,
+  ConfigRegions extends RuntimeRegions,
+  Options,
 > = {
-  readonly websocketPort: RuntimeValue<number>;
-  readonly kafka: {
-    readonly consumerGroupId: string;
-    readonly startFrom?: ViewServerKafkaStartFrom;
-    readonly regions: Regions;
-    readonly topics: ValidateKafkaTopics<Topics, Regions, KafkaTopics>;
-  };
-};
+  readonly [Key in Extract<keyof Options, "websocketPort">]: RuntimeValue<number>;
+} & (Options extends { readonly kafka: infer CandidateKafka }
+  ? {
+      readonly kafka: RuntimeKafkaOptions<Topics, ConfigRegions, CandidateKafka>;
+    }
+  : {
+      readonly kafka?: undefined;
+    });
+
+type RuntimeKafkaRegions<
+  ConfigRegions extends RuntimeRegions,
+  CandidateKafka,
+> = CandidateKafka extends {
+  readonly regions: infer Regions extends RuntimeRegions;
+}
+  ? Regions
+  : ConfigRegions;
+
+type RuntimeKafkaOptions<
+  Topics extends KafkaTopicSchemaRegistry,
+  ConfigRegions extends RuntimeRegions,
+  CandidateKafka,
+> = CandidateKafka extends {
+  readonly consumerGroupId: string;
+}
+  ? {
+      readonly consumerGroupId: string;
+      readonly startFrom?: ViewServerKafkaStartFrom;
+    } & (CandidateKafka extends { readonly regions: infer Regions extends RuntimeRegions }
+      ? { readonly regions: Regions }
+      : { readonly regions?: undefined }) &
+      (CandidateKafka extends { readonly topics: infer KafkaTopics extends Record<string, object> }
+        ? {
+            readonly topics: ValidateKafkaTopics<
+              Topics,
+              RuntimeKafkaRegions<ConfigRegions, CandidateKafka>,
+              KafkaTopics
+            >;
+          }
+        : { readonly topics?: undefined })
+  : never;
 
 export type RuntimeOptionsCandidate = {
-  readonly websocketPort: RuntimeValue<number>;
-  readonly kafka: {
+  readonly websocketPort?: RuntimeValue<number>;
+  readonly kafka?: {
     readonly consumerGroupId: string;
     readonly startFrom?: ViewServerKafkaStartFrom;
-    readonly regions: RuntimeRegions;
-    readonly topics: Record<string, object>;
+    readonly regions?: RuntimeRegions;
+    readonly topics?: Record<string, object>;
   };
 };
 
 export type ValidateRuntimeOptions<
   Topics extends KafkaTopicSchemaRegistry,
+  ConfigRegions extends RuntimeRegions,
   Options,
 > = Options extends RuntimeOptionsCandidate
-  ? RuntimeOptions<Topics, Options["kafka"]["regions"], Options["kafka"]["topics"]>
+  ? RuntimeOptions<Topics, ConfigRegions, Options>
   : never;
 
 export type RuntimeOptionsDefinition<
   Topics extends KafkaTopicSchemaRegistry,
+  ConfigRegions extends RuntimeRegions,
   Options,
-> = ValidateRuntimeOptions<Topics, Options>;
+> = ValidateRuntimeOptions<Topics, ConfigRegions, Options>;
 
 type RejectExtraRuntimeKafkaKeys<Options, Shape> = Options extends {
   readonly kafka: infer CandidateKafka;
@@ -1444,11 +2087,118 @@ type RejectExtraRuntimeKafkaStartFromKeys<Options> = Options extends {
     : unknown
   : unknown;
 
-export type ExactRuntimeOptions<Topics extends KafkaTopicSchemaRegistry, Options> = Options &
-  ValidateRuntimeOptions<Topics, Options> &
-  RejectExtraKeys<Options, ValidateRuntimeOptions<Topics, Options>> &
-  RejectExtraRuntimeKafkaKeys<Options, ValidateRuntimeOptions<Topics, Options>> &
-  RejectExtraRuntimeKafkaStartFromKeys<Options>;
+type TopicOwnedKafkaSourceTopic<Topics extends object> = Extract<
+  {
+    readonly [Topic in keyof Topics]: Topics[Topic] extends {
+      readonly kafkaSource: object;
+    }
+      ? Topic
+      : never;
+  }[keyof Topics],
+  string
+>;
+
+type TopicOwnedKafkaSourceRegion<Topics extends object> = Extract<
+  {
+    readonly [Topic in keyof Topics]: Topics[Topic] extends {
+      readonly kafkaSource: {
+        readonly regions: infer Regions extends ReadonlyArray<string>;
+      };
+    }
+      ? Regions[number]
+      : never;
+  }[keyof Topics],
+  string
+>;
+
+type RuntimeRegionsAreBroad<Regions extends RuntimeRegions> = string extends keyof Regions
+  ? true
+  : false;
+
+type RuntimeKafkaExplicitTopicRegionsConstraint<
+  ConfigRegions extends RuntimeRegions,
+  Options,
+> = Options extends {
+  readonly kafka: {
+    readonly topics: Record<string, object>;
+  };
+}
+  ? Options extends {
+      readonly kafka: {
+        readonly regions: RuntimeRegions;
+      };
+    }
+    ? unknown
+    : RuntimeRegionsAreBroad<ConfigRegions> extends true
+      ? {
+          readonly kafka: {
+            readonly regions: never;
+          };
+        }
+      : unknown
+  : unknown;
+
+type RuntimeKafkaSourceRegionConstraint<
+  Topics extends object,
+  ConfigRegions extends RuntimeRegions,
+  Options,
+> = [TopicOwnedKafkaSourceRegion<Topics>] extends [never]
+  ? unknown
+  : Options extends {
+        readonly kafka: {
+          readonly regions: infer Regions extends RuntimeRegions;
+        };
+      }
+    ? RuntimeRegionsAreBroad<Regions> extends true
+      ? {
+          readonly kafka: {
+            readonly regions: never;
+          };
+        }
+      : Exclude<TopicOwnedKafkaSourceRegion<Topics>, keyof Regions> extends never
+        ? unknown
+        : {
+            readonly kafka: {
+              readonly regions: never;
+            };
+          }
+    : RuntimeRegionsAreBroad<ConfigRegions> extends true
+      ? {
+          readonly kafka: {
+            readonly regions: never;
+          };
+        }
+      : unknown;
+
+type RuntimeKafkaSourceOwnershipConstraint<Topics extends object, Options> = [
+  TopicOwnedKafkaSourceTopic<Topics>,
+] extends [never]
+  ? unknown
+  : Options extends {
+        readonly kafka: infer CandidateKafka;
+      }
+    ? {
+        readonly kafka: CandidateKafka & {
+          readonly consumerGroupId: string;
+          readonly topics?: never;
+        };
+      }
+    : {
+        readonly kafka: never;
+      };
+
+export type ExactRuntimeOptions<
+  Topics extends KafkaTopicSchemaRegistry,
+  ConfigRegions extends RuntimeRegions,
+  Options,
+> = Options &
+  ValidateRuntimeOptions<Topics, ConfigRegions, Options> &
+  RejectExtraKeys<Options, ValidateRuntimeOptions<Topics, ConfigRegions, Options>> &
+  RejectExtraRuntimeKafkaKeys<Options, ValidateRuntimeOptions<Topics, ConfigRegions, Options>> &
+  RejectExtraRuntimeKafkaStartFromKeys<Options> &
+  RuntimeKafkaExplicitTopicRegionsConstraint<ConfigRegions, Options> &
+  RuntimeKafkaSourceOwnershipConstraint<Topics, Options> &
+  RuntimeKafkaSourceRegionConstraint<Topics, ConfigRegions, Options>;
 
 export type KafkaTopicHelper<Topics extends KafkaTopicSchemaRegistry> = <
   const Regions extends RuntimeRegions,
@@ -1583,10 +2333,239 @@ const makeKafkaTopicWithoutKey = <
     }),
 });
 
+const makeKafkaRuntimeTopicSourceWithKey = <
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  Mapping extends (
+    input: KafkaTopicSourceMapInputWithKey<
+      Topics,
+      ViewTopic,
+      TopicRegions[number],
+      ValueCodec,
+      KeyCodec
+    >,
+  ) => TopicRow<Topics, ViewTopic>,
+>(
+  viewServerTopic: ViewTopic,
+  topic: KafkaTopicSourceInputWithKey<
+    Topics,
+    Regions,
+    ViewTopic,
+    ValueCodec,
+    KeyCodec,
+    TopicRegions,
+    Mapping
+  >,
+): KafkaRuntimeTopicSourceDefinition<Topics, Regions, ViewTopic, TopicRegions> => ({
+  ...topic,
+  [KafkaRuntimeTopicSourceTypeId]: true,
+  viewServerTopic,
+  [KafkaTopicDecodeTypeId]: (input) =>
+    Effect.gen(function* () {
+      const value = yield* decodeKafkaCodec(topic.value, {
+        bytes: input.valueBytes,
+        metadata: input.metadata,
+      });
+      const key = yield* decodeKafkaCodec(topic.key, {
+        bytes: input.keyBytes,
+        metadata: input.metadata,
+      });
+      const rowKey = yield* rowKeyFromDecodedKafkaKey(key, input.rowKeyField);
+      const row = yield* mapKafkaPayload(() =>
+        topic.map({
+          key,
+          value,
+          region: input.region,
+          rowKey,
+          schema: input.schema,
+          metadata: input.metadata,
+        }),
+      );
+      return {
+        row,
+        rowKey,
+        viewServerTopic,
+      };
+    }),
+});
+
+const makeKafkaRuntimeTopicSourceWithoutKey = <
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+  Mapping extends (
+    input: KafkaTopicSourceMapInputWithoutKey<Topics, ViewTopic, TopicRegions[number], ValueCodec>,
+  ) => TopicRow<Topics, ViewTopic>,
+>(
+  viewServerTopic: ViewTopic,
+  topic: KafkaTopicSourceInputWithoutKey<
+    Topics,
+    Regions,
+    ViewTopic,
+    ValueCodec,
+    TopicRegions,
+    Mapping
+  >,
+): KafkaRuntimeTopicSourceDefinition<Topics, Regions, ViewTopic, TopicRegions> => ({
+  ...topic,
+  [KafkaRuntimeTopicSourceTypeId]: true,
+  viewServerTopic,
+  [KafkaTopicDecodeTypeId]: (input) =>
+    Effect.gen(function* () {
+      const value = yield* decodeKafkaCodec(topic.value, {
+        bytes: input.valueBytes,
+        metadata: input.metadata,
+      });
+      const key = decodeKafkaStringKey({
+        bytes: input.keyBytes,
+        metadata: input.metadata,
+      });
+      const rowKey = yield* rowKeyFromDecodedKafkaKey(key, input.rowKeyField);
+      const row = yield* mapKafkaPayload(() =>
+        topic.map({
+          key,
+          value,
+          region: input.region,
+          rowKey,
+          schema: input.schema,
+          metadata: input.metadata,
+        }),
+      );
+      return {
+        row,
+        rowKey,
+        viewServerTopic,
+      };
+    }),
+});
+
+const makeKafkaRuntimeTopicSource = <
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string>,
+  ValueCodec extends KafkaCodec<unknown, unknown>,
+  KeyCodec extends KafkaCodec<unknown, unknown>,
+  TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+>(
+  viewServerTopic: ViewTopic,
+  topic: KafkaTopicSourceDefinition<Topics, Regions, ViewTopic, ValueCodec, KeyCodec, TopicRegions>,
+): KafkaRuntimeTopicSourceDefinition<Topics, Regions, ViewTopic, TopicRegions> => {
+  if ("key" in topic) {
+    return makeKafkaRuntimeTopicSourceWithKey(viewServerTopic, topic);
+  }
+  return makeKafkaRuntimeTopicSourceWithoutKey(viewServerTopic, topic);
+};
+
+type KafkaSourceTopicRegistry<
+  Topics extends KafkaTopicSchemaRegistry,
+  _Regions extends RuntimeRegions,
+> = {
+  readonly [Topic in keyof Topics]: {
+    readonly kafkaSource?: object | undefined;
+  };
+};
+
+export const makeKafkaRuntimeTopicSources = <
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+>(
+  topics: KafkaSourceTopicRegistry<Topics, Regions>,
+): ReadonlyArray<
+  KafkaRuntimeTopicSourceDefinition<Topics, Regions, Extract<keyof Topics, string>>
+> => {
+  const runtimeTopics: Array<
+    KafkaRuntimeTopicSourceDefinition<Topics, Regions, Extract<keyof Topics, string>>
+  > = [];
+  for (const viewServerTopic in topics) {
+    const kafkaSource = topics[viewServerTopic].kafkaSource;
+    if (kafkaSource === undefined) {
+      continue;
+    }
+    if (!isKafkaTopicSourceDefinition<Topics, Regions, typeof viewServerTopic>(kafkaSource)) {
+      throw new Error(`View Server topic ${viewServerTopic} has an invalid Kafka source.`);
+    }
+    runtimeTopics.push(makeKafkaRuntimeTopicSource(viewServerTopic, kafkaSource));
+  }
+  return runtimeTopics;
+};
+
+export const isKafkaTopicSourceDefinition = <
+  Topics extends KafkaTopicSchemaRegistry,
+  Regions extends RuntimeRegions,
+  ViewTopic extends Extract<keyof Topics, string>,
+>(
+  topic: unknown,
+): topic is KafkaTopicSourceDefinition<Topics, Regions, ViewTopic> => {
+  if (!isInspectableObject(topic)) {
+    return false;
+  }
+  const ownKeys = Object.getOwnPropertyNames(topic);
+  const allowedKeys =
+    "key" in topic
+      ? ["topic", "regions", "value", "key", "map"]
+      : ["topic", "regions", "value", "map"];
+  if (!ownKeys.every((key) => allowedKeys.includes(key))) {
+    return false;
+  }
+  const sourceTopic = Reflect.get(topic, "topic");
+  const regions = Reflect.get(topic, "regions");
+  const value = Reflect.get(topic, "value");
+  const key = Reflect.get(topic, "key");
+  const hasOwnKey = Object.prototype.hasOwnProperty.call(topic, "key");
+  const map = Reflect.get(topic, "map");
+  return (
+    typeof sourceTopic === "string" &&
+    Array.isArray(regions) &&
+    regions.length > 0 &&
+    regions.every((region) => typeof region === "string") &&
+    isKafkaCodec(value) &&
+    ((key === undefined && !hasOwnKey) || isKafkaCodec(key)) &&
+    typeof map === "function"
+  );
+};
+
+export const isKafkaRuntimeTopicSourceDefinition = (
+  topic: unknown,
+): topic is KafkaRuntimeTopicSourceDefinition<KafkaTopicSchemaRegistry, RuntimeRegions, string> => {
+  if (typeof topic !== "object" || topic === null) {
+    return false;
+  }
+  return Reflect.get(topic, KafkaRuntimeTopicSourceTypeId) === true;
+};
+
 export const defineKafkaTopic = <Topics extends KafkaTopicSchemaRegistry>(
   topics: Topics,
 ): KafkaTopicHelper<Topics> => {
   function forRegions<const Regions extends RuntimeRegions>() {
+    const kafkaTopicDefinitionHasKey = <
+      const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
+      ValueCodec extends KafkaCodec<unknown, unknown>,
+      KeyCodec extends KafkaCodec<unknown, unknown>,
+      const ViewTopic extends KafkaWritableViewTopic<Topics>,
+    >(
+      topic: KafkaTopicDefinitionInput<
+        Topics,
+        Regions,
+        ViewTopic,
+        ValueCodec,
+        KeyCodec,
+        TopicRegions
+      >,
+    ): topic is KafkaTopicWithKeyInput<
+      Topics,
+      Regions,
+      ViewTopic,
+      ValueCodec,
+      KeyCodec,
+      TopicRegions
+    > => isKafkaCodec(Reflect.get(topic, "key"));
+
     function topicHelper<
       const TopicRegions extends NonEmptyReadonlyArray<Extract<keyof Regions, string>>,
       ValueCodec extends KafkaCodec<unknown, unknown>,
@@ -1645,7 +2624,7 @@ export const defineKafkaTopic = <Topics extends KafkaTopicSchemaRegistry>(
       >,
     ) {
       validateKafkaViewTopicOwnership(topics, topic.viewServerTopic);
-      if ("key" in topic) {
+      if (kafkaTopicDefinitionHasKey(topic)) {
         return makeKafkaTopicWithKey(
           topic,
           schemaForKafkaTopic<ViewTopic, Topics[ViewTopic]["schema"], Topics>(
